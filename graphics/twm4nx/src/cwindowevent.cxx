@@ -252,15 +252,12 @@ void CWindowEvent::handleMouseEvent(FAR const struct nxgl_point_s *pos,
 
                m_tapHandler->enableMovement(mousePos, false, m_tapArg);
 
-              // Generate a dropEvent
+              // Generate a dropEvent.  Then go on to the input poll
+              // below all the same: the release has to reach the widgets
+              // too, or the toolbar title that was grabbed stays
+              // "clicked" and ignores the next grab of this window.
 
-              if (m_tapHandler->dropEvent(mousePos, m_tapArg))
-                {
-                  // If the drop event was processed then skip the
-                  // input poll until AFTER the movement completes
-
-                  return;
-                }
+              m_tapHandler->dropEvent(mousePos, m_tapArg);
             }
         }
 
