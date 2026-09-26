@@ -741,6 +741,11 @@ static void win_destroy(struct desk_win_s *w)
         }
     }
 
+  if (g_desk.pointerwin == w)
+    {
+      g_desk.pointerwin = NULL;
+    }
+
   nxtk_closewindow(w->hwnd);
   sem_destroy(&w->synced);
   free(w->priv);
@@ -1016,7 +1021,15 @@ static void win_mouse(struct desk_win_s *w, int part, int x, int y,
           switch (which)
             {
               case 0:
-                desk_win_close(w);
+                if (g_apps[w->app]->canclose == NULL ||
+                    g_apps[w->app]->canclose(w))
+                  {
+                    desk_win_close(w);
+                  }
+                else
+                  {
+                    desk_win_title(w);
+                  }
                 return;
 
               case 1:
@@ -1068,6 +1081,24 @@ static void on_mouse(struct desk_event_s *ev)
 
       default:
         break;
+    }
+
+  /* Leaving an application's client area: it hears (-1, -1) */
+
+  if (g_desk.pointerwin != NULL && ev->buttons == 0 &&
+      (ev->part != PART_CLIENT || ev->win != g_desk.pointerwin))
+    {
+      w = g_desk.pointerwin;
+      g_desk.pointerwin = NULL;
+      if (!w->closing && g_apps[w->app]->mouse != NULL)
+        {
+          g_apps[w->app]->mouse(w, -1, -1, 0);
+        }
+    }
+
+  if (ev->part == PART_CLIENT)
+    {
+      g_desk.pointerwin = ev->win;
     }
 
   /* Leaving the dock, the top bar or a title bar: their hover goes */

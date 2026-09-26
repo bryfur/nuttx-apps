@@ -79,7 +79,11 @@ static void deskctl_pointer(NXHANDLE h, int x, int y, int buttons)
 
 static void deskctl_type(NXHANDLE h, FAR const char *text)
 {
-  uint8_t buf[64];
+  /* In pieces: the server's message to the client carries the bytes and
+   * must fit in NX_MXCLIMSGLEN (64) with its header
+   */
+
+  uint8_t buf[32];
   size_t n = 0;
 
   for (; *text != '\0'; text++)
