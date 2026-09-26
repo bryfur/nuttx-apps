@@ -18,7 +18,6 @@
 
 #include <nuttx/nx/nx.h>
 #include <nuttx/nx/nxtk.h>
-#include <nuttx/nx/nxterm.h>
 #include <nuttx/nx/nxcompose.h>
 
 #include "desk_font.h"
@@ -170,12 +169,11 @@ struct desk_win_s
   bool closedone;                  /* Faded out: to be closed */
   bool minimizing;                 /* Faded out: to be hidden */
   sem_t synced;                    /* The server has caught up (nx_synch) */
-
-  /* Terminal */
-
-  NXTERM nxterm;
-  int minor;
-  pid_t pid;
+  bool wakeq;                      /* desk_wake(): the app's wake is due */
+  const char *button;              /* A title bar button's symbol, or NULL */
+  bool buttonhover;
+  bool buttonpressed;
+  pid_t pid;                       /* A task whose exit closes the window, -1 */
 
   /* Application state */
 
@@ -210,6 +208,9 @@ struct desk_app_s
   void (*close)(struct desk_win_s *w);           /* Going: free w->priv's
                                                   * contents (w->priv itself
                                                   * is freed after) */
+  void (*wake)(struct desk_win_s *w);            /* After desk_wake(w) */
+  void (*focus)(struct desk_win_s *w);           /* w->active changed */
+  void (*button)(struct desk_win_s *w);          /* w->button clicked */
   bool single;                                   /* One window at most */
 };
 
@@ -317,6 +318,13 @@ void desk_win_minimize(struct desk_win_s *w);
 void desk_win_restore(struct desk_win_s *w);
 void desk_win_maximize(struct desk_win_s *w);
 void desk_win_sync(struct desk_win_s *w);
+
+/* From any thread: have w's application's wake callback called on the
+ * main thread soon (once, however many calls come before it runs).  The
+ * caller must know that w is not being destroyed.
+ */
+
+void desk_wake(struct desk_win_s *w);
 struct desk_win_s *desk_app_window(int app);
 void desk_launch(int app);
 uint32_t desk_ms(void);
