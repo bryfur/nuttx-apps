@@ -366,48 +366,20 @@ static void win_setsize(struct desk_win_s *w, int cw, int ch)
   nxtk_setsize(w->hwnd, &size);
 }
 
-static void term_redraw(struct desk_win_s *w, int x, int y, int cw,
-                        int ch)
-{
-  static struct desk_ops_s o;
-  struct boardioc_nxterm_ioctl_s io;
-  struct nxtermioc_redraw_s redraw;
-
-  ops_reset(&o);
-  ops_fill(&o, x, TITLE_H + y, cw, ch, C_TERM_BG);
-  ops_draw((NXWINDOW)w->hwnd, &o);
-
-  redraw.handle     = w->nxterm;
-  redraw.rect.pt1.x = x;
-  redraw.rect.pt1.y = y;
-  redraw.rect.pt2.x = x + cw - 1;
-  redraw.rect.pt2.y = y + ch - 1;
-  redraw.more       = false;
-  io.cmd            = NXTERMIOC_NXTERM_REDRAW;
-  io.arg            = (uintptr_t)&redraw;
-  boardctl(BOARDIOC_NXTERM_IOCTL, (uintptr_t)&io);
-}
-
 static void win_client_redraw(struct desk_win_s *w)
 {
+  const struct desk_app_s *a = g_apps[w->app];
+
   /* The library must know the new size before drawing into it */
 
   desk_win_sync(w);
-  if (w->app == APP_TERMINAL && w->nxterm != NULL)
+  if (a->resize != NULL)
     {
-      struct boardioc_nxterm_ioctl_s io;
-      struct nxtermioc_resize_s resize;
-
-      resize.handle = w->nxterm;
-      resize.size   = w->csize;
-      io.cmd        = NXTERMIOC_NXTERM_RESIZE;
-      io.arg        = (uintptr_t)&resize;
-      boardctl(BOARDIOC_NXTERM_IOCTL, (uintptr_t)&io);
-      term_redraw(w, 0, 0, w->csize.w, w->csize.h);
+      a->resize(w);
     }
-  else if (g_apps[w->app].draw != NULL)
+  else if (a->draw != NULL)
     {
-      g_apps[w->app].draw(w);
+      a->draw(w);
     }
 }
 
@@ -642,9 +614,9 @@ void desk_win_close(struct desk_win_s *w)
     }
 
   w->closing = true;
-  if (g_apps[w->app].close != NULL)
+  if (g_apps[w->app]->close != NULL)
     {
-      g_apps[w->app].close(w);
+      g_apps[w->app]->close(w);
     }
 
   if (g_desk.active == w)
@@ -772,7 +744,7 @@ struct desk_win_s *desk_app_window(int app)
 
 void desk_launch(int app)
 {
-  const struct desk_app_s *a = &g_apps[app];
+  const struct desk_app_s *a = g_apps[app];
   struct desk_win_s *w;
 
   if (app == APP_LAUNCHER)
@@ -901,10 +873,14 @@ static void win_mouse(struct desk_win_s *w, int part, int x, int y,
           g_desk.grab.y   = y;
           g_desk.grabsize = w->csize;
         }
-      else if (part == PART_CLIENT && g_apps[w->app].click != NULL)
-        {
-          g_apps[w->app].click(w, x, y - TITLE_H);
-        }
+    }
+
+  /* The rest of the client area's events are the application's */
+
+  if (part == PART_CLIENT && g_desk.resize != w &&
+      g_apps[w->app]->mouse != NULL)
+    {
+      g_apps[w->app]->mouse(w, x, y - TITLE_H, buttons);
     }
 
   if (release && w->pressed >= 0)
@@ -1012,17 +988,9 @@ static void on_kbd(struct desk_event_s *ev)
       return;
     }
 
-  if (w != NULL && w->app == APP_TERMINAL && w->nxterm != NULL)
+  if (w != NULL && !w->closing && g_apps[w->app]->key != NULL)
     {
-      struct boardioc_nxterm_ioctl_s io;
-      struct nxtermioc_kbdin_s kbd;
-
-      kbd.handle = w->nxterm;
-      kbd.buffer = ev->ch;
-      kbd.buflen = ev->nch;
-      io.cmd     = NXTERMIOC_NXTERM_KBDIN;
-      io.arg     = (uintptr_t)&kbd;
-      boardctl(BOARDIOC_NXTERM_IOCTL, (uintptr_t)&io);
+      g_apps[w->app]->key(w, ev->ch, ev->nch);
     }
 }
 
@@ -1045,15 +1013,16 @@ static void on_event(struct desk_event_s *ev)
       case EV_REDRAW:
         if (!ev->win->closing)
           {
-            if (ev->win->app == APP_TERMINAL && ev->win->nxterm != NULL)
+            const struct desk_app_s *a = g_apps[ev->win->app];
+
+            if (a->expose != NULL)
               {
-                term_redraw(ev->win, ev->pos.x, ev->pos.y, ev->size.w,
-                            ev->size.h);
+                a->expose(ev->win, ev->pos.x, ev->pos.y, ev->size.w,
+                          ev->size.h);
               }
-            else if (g_apps[ev->win->app].draw != NULL &&
-                     g_desk.resize != ev->win)
+            else if (a->draw != NULL && g_desk.resize != ev->win)
               {
-                g_apps[ev->win->app].draw(ev->win);
+                a->draw(ev->win);
               }
           }
         break;
@@ -1122,18 +1091,18 @@ static void tick(void)
           continue;
         }
 
-      /* A terminal whose shell has exited closes */
+      /* A window whose task (a shell) has exited closes */
 
-      if (w->app == APP_TERMINAL && w->pid >= 0 && kill(w->pid, 0) < 0)
+      if (w->pid >= 0 && kill(w->pid, 0) < 0)
         {
           w->pid = -1;
           desk_win_close(w);
           continue;
         }
 
-      if (g_apps[w->app].tick != NULL && !w->minimized)
+      if (g_apps[w->app]->tick != NULL && !w->minimized)
         {
-          g_apps[w->app].tick(w);
+          g_apps[w->app]->tick(w);
         }
     }
 }
@@ -1186,6 +1155,19 @@ int main(int argc, FAR char *argv[])
   pthread_create(&thread, &attr, listener, NULL);
 
   caps = nx_compositor(g_desk.hnx);
+  {
+    struct nxgl_size_s size;
+
+    if (nx_displaysize(g_desk.hnx, &size) < 0)
+      {
+        size.w = 1024;
+        size.h = 768;
+      }
+
+    g_desk.w = size.w;
+    g_desk.h = size.h;
+  }
+
   g_desk.composited = (caps & NX_CAP_COMPOSITOR) != 0;
   if (!g_desk.composited)
     {

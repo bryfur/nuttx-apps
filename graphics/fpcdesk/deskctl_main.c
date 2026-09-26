@@ -12,7 +12,8 @@
  *                                 middle, 4 right; default none)
  *   deskctl c X Y                 click there
  *   deskctl d X0 Y0 X1 Y1 [N]     drag with the left button, in N steps
- *   deskctl k TEXT                type (\n is Enter)
+ *   deskctl k TEXT                type (\n Enter, \t Tab, \e Escape,
+ *                                 \b Backspace, \xHH any byte)
  *   deskctl shot FILE             the screen as a PPM file (simulator)
  *   deskctl test                  BLEND on the GPU, checked pixel by pixel
  ****************************************************************************/
@@ -85,10 +86,45 @@ static void deskctl_type(NXHANDLE h, FAR const char *text)
     {
       uint8_t ch = (uint8_t)*text;
 
-      if (text[0] == '\\' && text[1] == 'n')
+      /* \n Enter, \t Tab, \e Escape (then e.g. [A: up), \b Backspace,
+       * \xHH a byte
+       */
+
+      if (text[0] == '\\' && text[1] != '\0')
         {
-          ch = '\n';
           text++;
+          switch (*text)
+            {
+              case 'n':
+                ch = '\n';
+                break;
+
+              case 't':
+                ch = '\t';
+                break;
+
+              case 'e':
+                ch = 0x1b;
+                break;
+
+              case 'b':
+                ch = 0x7f;
+                break;
+
+              case 'x':
+                if (text[1] != '\0' && text[2] != '\0')
+                  {
+                    char hex[3] = { text[1], text[2], '\0' };
+
+                    ch = (uint8_t)strtol(hex, NULL, 16);
+                    text += 2;
+                  }
+                break;
+
+              default:
+                ch = (uint8_t)*text;
+                break;
+            }
         }
 
       buf[n++] = ch;

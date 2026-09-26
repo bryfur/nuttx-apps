@@ -25,9 +25,8 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-#define ATLAS_W        DESK_W
-#define ATLAS_H        200
-#define NFONTS         5
+#define ATLAS_W        512             /* Its height: what the glyphs need */
+#define NFONTS         7
 
 /****************************************************************************
  * Private Types
@@ -48,7 +47,8 @@ static struct atlas_font_s g_afont[NFONTS];
 static const struct desk_font_s * const g_fonts[NFONTS] =
 {
   &g_desk_font_ui, &g_desk_font_uib, &g_desk_font_small,
-  &g_desk_font_title, &g_desk_font_big
+  &g_desk_font_title, &g_desk_font_big, &g_desk_font_mono,
+  &g_desk_font_monob
 };
 
 /****************************************************************************
@@ -508,6 +508,54 @@ static const struct nx_callback_s g_atlascb =
   atlas_redraw, NULL, NULL, NULL, NULL
 };
 
+/* Shelf packing: where each glyph goes; returns the height used */
+
+static int atlas_pack(bool record)
+{
+  int x = 0;
+  int y = 0;
+  int shelf = 0;
+  int f;
+  int i;
+
+  for (f = 0; f < NFONTS; f++)
+    {
+      const struct desk_font_s *font = g_fonts[f];
+
+      for (i = 0; i < font->nglyphs; i++)
+        {
+          const struct desk_glyph_s *g = &font->glyphs[i];
+
+          if (g->w == 0 || g->h == 0)
+            {
+              continue;
+            }
+
+          if (x + g->w > ATLAS_W)
+            {
+              x = 0;
+              y += shelf + 1;
+              shelf = 0;
+            }
+
+          if (record)
+            {
+              g_afont[f].font = font;
+              g_afont[f].pos[i].x = x;
+              g_afont[f].pos[i].y = y;
+            }
+
+          x += g->w + 1;
+          if (g->h > shelf)
+            {
+              shelf = g->h;
+            }
+        }
+    }
+
+  return y + shelf;
+}
+
 int desk_atlas_init(void)
 {
   static uint16_t pix[64 * 64];
@@ -516,9 +564,6 @@ int desk_atlas_init(void)
   struct nxgl_point_s pos;
   struct nxgl_size_s size;
   const void *src[1];
-  int x = 0;
-  int y = 0;
-  int shelf = 0;
   int f;
   int i;
 
@@ -533,7 +578,7 @@ int desk_atlas_init(void)
   pos.x  = 0;
   pos.y  = 0;
   size.w = ATLAS_W;
-  size.h = ATLAS_H;
+  size.h = atlas_pack(true);
   nx_setsize(g_desk.atlas, &size);
   nx_setposition(g_desk.atlas, &pos);
 
@@ -541,28 +586,14 @@ int desk_atlas_init(void)
     {
       const struct desk_font_s *font = g_fonts[f];
 
-      g_afont[f].font = font;
       for (i = 0; i < font->nglyphs; i++)
         {
           const struct desk_glyph_s *g = &font->glyphs[i];
           int k;
 
-          if (g->w == 0 || g->h == 0)
+          if (g->w == 0 || g->h == 0 || g->w * g->h > 64 * 64)
             {
               continue;
-            }
-
-          if (x + g->w > ATLAS_W)
-            {
-              x = 0;
-              y += shelf + 1;
-              shelf = 0;
-            }
-
-          if (y + g->h > ATLAS_H || g->w * g->h > 64 * 64)
-            {
-              fprintf(stderr, "desk: the glyph atlas is full\n");
-              return -1;
             }
 
           for (k = 0; k < g->w * g->h; k++)
@@ -570,22 +601,12 @@ int desk_atlas_init(void)
               pix[k] = font->data[g->off + k];
             }
 
-          dest.pt1.x = x;
-          dest.pt1.y = y;
-          dest.pt2.x = x + g->w - 1;
-          dest.pt2.y = y + g->h - 1;
-          origin.x   = x;
-          origin.y   = y;
+          dest.pt1   = g_afont[f].pos[i];
+          dest.pt2.x = dest.pt1.x + g->w - 1;
+          dest.pt2.y = dest.pt1.y + g->h - 1;
+          origin     = dest.pt1;
           src[0]     = pix;
           nx_bitmap(g_desk.atlas, &dest, src, &origin, g->w * 2);
-
-          g_afont[f].pos[i].x = x;
-          g_afont[f].pos[i].y = y;
-          x += g->w + 1;
-          if (g->h > shelf)
-            {
-              shelf = g->h;
-            }
         }
     }
 

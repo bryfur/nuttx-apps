@@ -179,7 +179,10 @@ void desk_wallpaper_draw(void)
     {
       if (w->glow[i].alpha > 0)
         {
-          ops_glow(&g_ops, w->glow[i].x, w->glow[i].y, w->glow[i].r,
+          /* Placed for 1024 x 768, wherever that is on this display */
+
+          ops_glow(&g_ops, w->glow[i].x * DESK_W / 1024,
+                   w->glow[i].y * DESK_H / 768, w->glow[i].r,
                    w->glow[i].shift, w->glow[i].c, w->glow[i].alpha);
         }
     }
@@ -200,8 +203,8 @@ void desk_wallpaper_preview(struct desk_ops_s *o, int style, int x, int y,
     {
       if (wp->glow[i].alpha > 0)
         {
-          int gx = x + wp->glow[i].x * w / DESK_W;
-          int gy = y + wp->glow[i].y * h / DESK_H;
+          int gx = x + wp->glow[i].x * w / 1024;
+          int gy = y + wp->glow[i].y * h / 768;
           int shift = wp->glow[i].shift > 3 ? wp->glow[i].shift - 3 : 0;
           int reach = (NX_BLEND_LUT_N - 1) << shift;
           struct nx_gpuop_s *op = ops_add(o);
@@ -267,7 +270,7 @@ void desk_topbar_draw(void)
   if (g_desk.active != NULL)
     {
       ops_text(&g_ops, &g_desk_font_ui, x + 24, ty,
-               g_apps[g_desk.active->app].name, C_WHITE, 200);
+               g_apps[g_desk.active->app]->name, C_WHITE, 200);
     }
 
   /* The clock */
@@ -334,7 +337,7 @@ static void tip_show(int app)
       return;
     }
 
-  name   = g_apps[app].name;
+  name   = g_apps[app]->name;
   w      = text_width(&g_desk_font_ui, name) + 20;
   size.w = w;
   size.h = 24;
@@ -375,7 +378,7 @@ void desk_dock_draw(void)
       int y = DOCK_PAD - (g_desk.dockhover == i ? 4 : 0);
       bool running = false;
 
-      g_apps[i].icon(&g_ops, x, y, DOCK_ICON, 255);
+      g_apps[i]->icon(&g_ops, x, y, DOCK_ICON, 255);
 
       for (w = g_desk.wins; w != NULL; w = w->next)
         {
@@ -425,7 +428,7 @@ void desk_dock_mouse(int x, int y, uint8_t buttons)
       /* A running app comes forward (or back from the dock); else starts */
 
       if (w != NULL && hover != APP_LAUNCHER &&
-          (w->minimized || w != g_desk.active || g_apps[hover].single))
+          (w->minimized || w != g_desk.active || g_apps[hover]->single))
         {
           if (g_desk.launcher != NULL)
             {
@@ -453,7 +456,7 @@ static void tile_pos(int i, int *x, int *y)
   int w = n * TILE + (n - 1) * TILE_GAP;
 
   *x = (DESK_W - w) / 2 + (i - 1) * (TILE + TILE_GAP);
-  *y = 330;
+  *y = DESK_H * 43 / 100;
 }
 
 void desk_launcher_draw(void)
@@ -475,10 +478,12 @@ void desk_launcher_draw(void)
             (uint8_t)(a * 150 / 255));
 
   strftime(buf, sizeof(buf), "%H:%M", &tm);
-  ops_text_centre(&g_ops, &g_desk_font_big, DESK_W / 2, 140, buf, C_WHITE,
+  ops_text_centre(&g_ops, &g_desk_font_big, DESK_W / 2, DESK_H * 18 / 100,
+                  buf, C_WHITE,
                   a);
   strftime(buf, sizeof(buf), "%A, %B %e", &tm);
-  ops_text_centre(&g_ops, &g_desk_font_title, DESK_W / 2, 200, buf,
+  ops_text_centre(&g_ops, &g_desk_font_title, DESK_W / 2, DESK_H * 26 / 100,
+                  buf,
                   C_WHITE, (uint8_t)(a * 200 / 255));
 
   for (i = 1; i < APP_COUNT; i++)
@@ -493,10 +498,10 @@ void desk_launcher_draw(void)
                     C_WHITE, (uint8_t)(a * 40 / 255));
         }
 
-      g_apps[i].icon(&g_ops, x + (TILE - TILE_ICON) / 2, y + 4, TILE_ICON,
+      g_apps[i]->icon(&g_ops, x + (TILE - TILE_ICON) / 2, y + 4, TILE_ICON,
                      a);
       ops_text_centre(&g_ops, &g_desk_font_ui, x + TILE / 2,
-                      y + TILE_ICON + 12, g_apps[i].name, C_WHITE, a);
+                      y + TILE_ICON + 12, g_apps[i]->name, C_WHITE, a);
     }
 
   ops_setlist(g_desk.launcher, &g_ops);

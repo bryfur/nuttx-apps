@@ -27,8 +27,12 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-#define DESK_W            1024
-#define DESK_H            768
+/* The display: its size is the NX server's (nx_displaysize()), whatever
+ * the mode.  Layout is worked out from it, never from a fixed size.
+ */
+
+#define DESK_W            (g_desk.w)
+#define DESK_H            (g_desk.h)
 
 /* RGB565 from 8-bit channels */
 
@@ -86,6 +90,8 @@ enum desk_app_e
 {
   APP_LAUNCHER = 0,
   APP_TERMINAL,
+  APP_FILES,
+  APP_EDITOR,
   APP_MONITOR,
   APP_SETTINGS,
   APP_ABOUT,
@@ -176,16 +182,35 @@ struct desk_win_s
   void *priv;
 };
 
+/* An application.  Client coordinates: (0, 0) is the top-left of the
+ * window's client area, which is at (0, TITLE_H) in the frame (draw with
+ * nx_gpuops() on (NXWINDOW)w->hwnd, frame coordinates).  Every callback
+ * runs on the desktop's main thread; any may be NULL.
+ */
+
 struct desk_app_s
 {
   const char *name;
   void (*icon)(struct desk_ops_s *o, int x, int y, int size, uint8_t alpha);
-  struct desk_win_s *(*open)(void);
-  void (*draw)(struct desk_win_s *w);           /* The client area */
-  void (*tick)(struct desk_win_s *w);           /* Once a second */
-  void (*click)(struct desk_win_s *w, int x, int y);
-  void (*close)(struct desk_win_s *w);
-  bool single;                                  /* One window at most */
+  struct desk_win_s *(*open)(void);              /* A new window, drawn */
+  void (*draw)(struct desk_win_s *w);            /* The whole client area */
+  void (*expose)(struct desk_win_s *w, int x, int y, int cw, int ch);
+                                                 /* Part of it (default: draw) */
+  void (*resize)(struct desk_win_s *w);          /* w->csize changed (default:
+                                                  * draw) */
+  void (*tick)(struct desk_win_s *w);            /* Once a second */
+  void (*mouse)(struct desk_win_s *w, int x, int y, uint8_t buttons);
+                                                 /* Every pointer event in the
+                                                  * client area (and, while a
+                                                  * button pressed there is
+                                                  * held, outside it) */
+  void (*key)(struct desk_win_s *w, const uint8_t *ch, int n);
+                                                 /* Keys, while active: bytes
+                                                  * and VT100 sequences */
+  void (*close)(struct desk_win_s *w);           /* Going: free w->priv's
+                                                  * contents (w->priv itself
+                                                  * is freed after) */
+  bool single;                                   /* One window at most */
 };
 
 /* The desktop */
@@ -193,6 +218,8 @@ struct desk_app_s
 struct desk_s
 {
   NXHANDLE hnx;
+  int w;                           /* The display's size */
+  int h;
   bool composited;
   struct desk_win_s *wins;         /* Application windows */
   struct desk_win_s *active;
@@ -233,7 +260,11 @@ struct desk_s
  ****************************************************************************/
 
 extern struct desk_s g_desk;
-extern const struct desk_app_s g_apps[APP_COUNT];
+extern const struct desk_app_s * const g_apps[APP_COUNT];
+extern const struct desk_app_s g_app_terminal;   /* desk_term.c */
+extern const struct desk_app_s g_app_files;      /* desk_files.c */
+extern const struct desk_app_s g_app_editor;     /* desk_edit.c */
+extern const struct desk_app_s g_app_monitor;    /* desk_monitor.c */
 
 /****************************************************************************
  * Public Function Prototypes
@@ -309,5 +340,11 @@ bool desk_panels_animate(void);
 /* desk_apps.c: the applications */
 
 void desk_load_sample(void);
+void icon_tile(struct desk_ops_s *o, int x, int y, int s, uint16_t top,
+               uint16_t bottom, uint8_t a);
+
+/* desk_edit.c: open a file in a new editor window (NULL: a new file) */
+
+int desk_editor_open(const char *path);
 
 #endif /* __APPS_GRAPHICS_FPCDESK_DESK_H */

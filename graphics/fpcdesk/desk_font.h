@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Anti-aliased fonts (desk_fonts.c, made by tools/mkfont.c from Roboto,
- * Apache-2.0): characters 32-126, then the DESK_CH_* extras.
+ * Apache-2.0, and IBM Plex Mono, OFL-1.1): characters 32-126, then the
+ * DESK_CH_* extras.
  ****************************************************************************/
 
 #ifndef __APPS_GRAPHICS_FPCDESK_DESK_FONT_H
@@ -47,5 +48,7 @@ extern const struct desk_font_s g_desk_font_uib;     /* Medium 13 */
 extern const struct desk_font_s g_desk_font_small;   /* Regular 11 */
 extern const struct desk_font_s g_desk_font_title;   /* Medium 20 */
 extern const struct desk_font_s g_desk_font_big;     /* Light 44 */
+extern const struct desk_font_s g_desk_font_mono;    /* IBM Plex Mono 15 */
+extern const struct desk_font_s g_desk_font_monob;   /* ... SemiBold 15 */
 
 #endif /* __APPS_GRAPHICS_FPCDESK_DESK_FONT_H */

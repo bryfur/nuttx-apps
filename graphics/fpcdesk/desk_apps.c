@@ -3,13 +3,9 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * The applications: their icons (drawn by the GPU, no bitmaps) and their
- * windows.
- *
- *   Terminal   NSH in an NxTerm window
- *   Monitor    CPU load (with its last minute), memory, uptime
- *   Settings   the wallpaper
- *   About      the machine
+ * The applications: the table of them, the icon tile they share, and the
+ * small ones (the launcher's entry, Settings, About).  The others have a
+ * file each: desk_term.c, desk_files.c, desk_edit.c, desk_monitor.c.
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -28,34 +24,26 @@
 #include "nshlib/nshlib.h"
 #include "desk.h"
 
-/****************************************************************************
- * Pre-processor Definitions
- ****************************************************************************/
-
-#define TERM_COLS     80
-#define TERM_ROWS     24
-#define TERM_MARGIN   8               /* Below the last row: the round corners */
-
-/****************************************************************************
- * Private Data
- ****************************************************************************/
-
 static struct desk_ops_s g_o;
 
 /****************************************************************************
- * Private Functions: icons
+ * Public Functions: icons
  ****************************************************************************/
 
 /* A round tile with a top-to-bottom gradient, a hairline of light at the
  * top: the base of every icon
  */
 
-static void icon_tile(struct desk_ops_s *o, int x, int y, int s,
+void icon_tile(struct desk_ops_s *o, int x, int y, int s,
                       uint16_t top, uint16_t bottom, uint8_t a)
 {
   ops_rrect_vgrad(o, x, y, s, s, LUT_R12, 12, top, bottom, a);
   ops_blend(o, x + 10, y, s - 20, 1, C_WHITE, (uint8_t)(a * 60 / 255));
 }
+
+/****************************************************************************
+ * Private Functions
+ ****************************************************************************/
 
 static void icon_apps(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
 {
@@ -75,43 +63,6 @@ static void icon_apps(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
                           DESK_CH_BULLET, C_WHITE, a);
         }
     }
-}
-
-static void icon_terminal(struct desk_ops_s *o, int x, int y, int s,
-                          uint8_t a)
-{
-  const struct desk_font_s *f = s >= 64 ? &g_desk_font_title :
-                                          &g_desk_font_uib;
-
-  icon_tile(o, x, y, s, RGB(0x46, 0x46, 0x4c), RGB(0x16, 0x16, 0x1a), a);
-  ops_blend(o, x + 6, y + s / 5, s - 12, 1, C_WHITE, (uint8_t)(a / 6));
-  ops_text(o, f, x + s / 6, y + s / 2 - text_height(f) / 2 + 2, ">_",
-           RGB(0x3d, 0xdc, 0x84), a);
-}
-
-static void icon_monitor(struct desk_ops_s *o, int x, int y, int s,
-                         uint8_t a)
-{
-  static const uint8_t bars[4] =
-  {
-    40, 70, 55, 85
-  };
-
-  int bw = s / 9;
-  int i;
-
-  icon_tile(o, x, y, s, RGB(0x22, 0xd0, 0xb0), RGB(0x08, 0x76, 0x88), a);
-  for (i = 0; i < 4; i++)
-    {
-      int h = (s * 6 / 10) * bars[i] / 100;
-      int bx = x + s / 5 + i * (bw + bw / 2 + 1);
-
-      ops_blend(o, bx, y + s * 4 / 5 - h, bw, h, C_WHITE, (uint8_t)(a * 235
-                / 255));
-    }
-
-  ops_blend(o, x + s / 6, y + s * 4 / 5, s * 2 / 3, 1, C_WHITE,
-            (uint8_t)(a * 150 / 255));
 }
 
 static void icon_settings(struct desk_ops_s *o, int x, int y, int s,
@@ -148,230 +99,6 @@ static void icon_about(struct desk_ops_s *o, int x, int y, int s,
   ops_text_centre(o, f, x + s / 2, y + s / 2 - text_height(f) / 2, "FPC",
                   C_WHITE, a);
 }
-
-/****************************************************************************
- * Private Functions: Terminal
- ****************************************************************************/
-
-static int term_task(int argc, char *argv[])
-{
-  int fd;
-
-  if (argc < 2)
-    {
-      return EXIT_FAILURE;
-    }
-
-  fd = open(argv[1], O_RDWR);
-  if (fd < 0)
-    {
-      return EXIT_FAILURE;
-    }
-
-  fflush(stdout);
-  fflush(stderr);
-  dup2(fd, 0);
-  dup2(fd, 1);
-  dup2(fd, 2);
-  if (fd > 2)
-    {
-      close(fd);
-    }
-
-  printf("FPC - NuttX shell\n\n");
-  return nsh_consolemain(0, NULL);
-}
-
-static struct desk_win_s *term_open(void)
-{
-  static bool nshinit;
-  static int minor;
-  struct boardioc_nxterm_create_s create;
-  const struct nx_font_s *fs;
-  struct desk_win_s *w;
-  NXHANDLE hfont;
-  char path[24];
-  char *argv[2];
-  int cw = 8;
-  int ch = 13;
-
-  hfont = nxf_getfonthandle(NXFONT_DEFAULT);
-  if (hfont != NULL && (fs = nxf_getfontset(hfont)) != NULL)
-    {
-      cw = fs->mxwidth;
-      ch = fs->mxheight + CONFIG_NXTERM_LINESEPARATION;
-    }
-
-  w = desk_win_open(APP_TERMINAL, "Terminal", TERM_COLS * cw + 12,
-                    TERM_ROWS * ch + TERM_MARGIN);
-  if (w == NULL)
-    {
-      return NULL;
-    }
-
-  ops_reset(&g_o);
-  ops_fill(&g_o, 0, TITLE_H, w->csize.w, w->csize.h, C_TERM_BG);
-  ops_draw((NXWINDOW)w->hwnd, &g_o);
-  desk_win_sync(w);
-
-  if (!nshinit)
-    {
-      nsh_initialize();
-      nshinit = true;
-    }
-
-  memset(&create, 0, sizeof(create));
-  create.hwnd           = w->hwnd;
-  create.wndo.wcolor[0] = C_TERM_BG;
-  create.wndo.fcolor[0] = C_TERM_FG;
-  create.wndo.wsize     = w->csize;
-  create.wndo.fontid    = NXFONT_DEFAULT;
-  create.type           = BOARDIOC_XTERM_FRAMED;
-  create.minor          = minor;
-  if (boardctl(BOARDIOC_NXTERM, (uintptr_t)&create) < 0)
-    {
-      fprintf(stderr, "desk: no terminal: %d\n", errno);
-      return w;
-    }
-
-  w->nxterm = create.nxterm;
-  w->minor  = minor++;
-
-  snprintf(path, sizeof(path), "/dev/nxterm%d", w->minor);
-  argv[0] = path;
-  argv[1] = NULL;
-  w->pid  = task_create("Terminal", CONFIG_FPCDESK_TERM_PRIORITY,
-                        CONFIG_FPCDESK_TERM_STACKSIZE, term_task, argv);
-  return w;
-}
-
-static void term_close(struct desk_win_s *w)
-{
-  char path[24];
-
-  if (w->pid >= 0)
-    {
-      task_delete(w->pid);
-      w->pid = -1;
-    }
-
-  if (w->nxterm != NULL)
-    {
-      snprintf(path, sizeof(path), "/dev/nxterm%d", w->minor);
-      unlink(path);
-      w->nxterm = NULL;
-    }
-}
-
-/****************************************************************************
- * Private Functions: Monitor
- ****************************************************************************/
-
-static int win_count(void)
-{
-  struct desk_win_s *t;
-  int n = 0;
-
-  for (t = g_desk.wins; t != NULL; t = t->next)
-    {
-      n += !t->closing;
-    }
-
-  return n;
-}
-
-/* A card: a slightly lighter round rectangle with a caption */
-
-static void card(int x, int y, int w, int h, const char *caption)
-{
-  ops_rrect(&g_o, x, y, w, h, LUT_R12, 12, C_CARD, 255);
-  ops_text(&g_o, &g_desk_font_small, x + 14, y + 10, caption, C_TEXT_DIM,
-           255);
-}
-
-static void monitor_draw(struct desk_win_s *w)
-{
-  char buf[40];
-  NXWINDOW hwnd = (NXWINDOW)w->hwnd;
-  int cw = w->csize.w;
-  int y = TITLE_H;
-  int gx;
-  int gw;
-  int i;
-  unsigned pct;
-
-  ops_reset(&g_o);
-  ops_fill(&g_o, 0, y, cw, w->csize.h, C_WINDOW_BG);
-
-  /* Processor: the figure, and the last minute as bars */
-
-  card(12, y + 12, cw - 24, 150, "PROCESSOR");
-  snprintf(buf, sizeof(buf), "%d%%", g_desk.cpuload);
-  ops_text(&g_o, &g_desk_font_big, 26, y + 26, buf, C_TEXT, 255);
-  ops_text(&g_o, &g_desk_font_ui, 30, y + 88, "2 x Cortex-M33", C_TEXT_DIM,
-           255);
-  ops_draw(hwnd, &g_o);
-
-  gx = 170;
-  gw = cw - 24 - gx + 12 - 14;
-  ops_blend(&g_o, gx, y + 40, gw, 108, C_BLACK, 70);
-  for (i = 1; i < 4; i++)
-    {
-      ops_blend(&g_o, gx, y + 40 + i * 27, gw, 1, C_WHITE, 18);
-    }
-
-  for (i = 0; i < 60; i++)
-    {
-      int v = g_desk.cpuhist[i];
-      int h = v * 104 / 100;
-      int bx = gx + 2 + i * (gw - 4) / 60;
-      int bw = (gw - 4) / 60 - 1;
-
-      if (h > 0)
-        {
-          ops_vgrad(&g_o, bx, y + 146 - h, bw < 1 ? 1 : bw, h,
-                    RGB(0x30, 0xe0, 0xc0), RGB(0x0a, 0x84, 0xff), 255);
-        }
-    }
-
-  ops_draw(hwnd, &g_o);
-
-  /* Memory: a meter */
-
-  card(12, y + 174, cw - 24, 74, "MEMORY");
-  pct = g_desk.memtotal ? g_desk.memused * 100 / g_desk.memtotal : 0;
-  snprintf(buf, sizeof(buf), "%u KB of %u KB", g_desk.memused,
-           g_desk.memtotal);
-  ops_text(&g_o, &g_desk_font_ui, 26, y + 198, buf, C_TEXT, 255);
-  ops_rrect(&g_o, 26, y + 222, cw - 52, 12, LUT_R6, 6, RGB(0x44, 0x44, 0x4a),
-            255);
-  ops_rrect(&g_o, 26, y + 222, 12 + (cw - 64) * pct / 100, 12, LUT_R6, 6,
-            C_ACCENT, 255);
-
-  /* System */
-
-  card(12, y + 260, cw - 24, 56, "SYSTEM");
-  snprintf(buf, sizeof(buf), "Up %lu min  " DESK_CH_MIDDOT
-           "  %d windows", (unsigned long)(desk_ms() / 60000), win_count());
-  ops_text(&g_o, &g_desk_font_ui, 26, y + 284, buf, C_TEXT, 255);
-  ops_draw(hwnd, &g_o);
-}
-
-static struct desk_win_s *monitor_open(void)
-{
-  struct desk_win_s *w = desk_win_open(APP_MONITOR, "Monitor", 440, 330);
-
-  if (w != NULL)
-    {
-      monitor_draw(w);
-    }
-
-  return w;
-}
-
-/****************************************************************************
- * Private Functions: Settings
- ****************************************************************************/
 
 static const char * const g_wallnames[3] =
 {
@@ -414,8 +141,18 @@ static void settings_draw(struct desk_win_s *w)
     }
 }
 
-static void settings_click(struct desk_win_s *w, int x, int y)
+static void settings_mouse(struct desk_win_s *w, int x, int y,
+                           uint8_t buttons)
 {
+  static uint8_t last;
+  bool press = (buttons & NX_MOUSE_LEFTBUTTON) && !(last & NX_MOUSE_LEFTBUTTON);
+
+  last = buttons;
+  if (!press)
+    {
+      return;
+    }
+
   int i;
 
   for (i = 0; i < 3; i++)
@@ -443,10 +180,6 @@ static struct desk_win_s *settings_open(void)
 
   return w;
 }
-
-/****************************************************************************
- * Private Functions: About
- ****************************************************************************/
 
 static void about_draw(struct desk_win_s *w)
 {
@@ -502,18 +235,40 @@ static struct desk_win_s *about_open(void)
  * Public Data
  ****************************************************************************/
 
-const struct desk_app_s g_apps[APP_COUNT] =
+static const struct desk_app_s g_app_launcher =
 {
-  { "Applications", icon_apps,     NULL,          NULL,          NULL,
-    NULL,           NULL,          false },
-  { "Terminal",     icon_terminal, term_open,     NULL,          NULL,
-    NULL,           term_close,    false },
-  { "Monitor",      icon_monitor,  monitor_open,  monitor_draw,  monitor_draw,
-    NULL,           NULL,          true },
-  { "Settings",     icon_settings, settings_open, settings_draw, NULL,
-    settings_click, NULL,          true },
-  { "About",        icon_about,    about_open,    about_draw,    NULL,
-    NULL,           NULL,          true },
+  .name = "Applications",
+  .icon = icon_apps,
+};
+
+static const struct desk_app_s g_app_settings =
+{
+  .name   = "Settings",
+  .icon   = icon_settings,
+  .open   = settings_open,
+  .draw   = settings_draw,
+  .mouse  = settings_mouse,
+  .single = true,
+};
+
+static const struct desk_app_s g_app_about =
+{
+  .name   = "About",
+  .icon   = icon_about,
+  .open   = about_open,
+  .draw   = about_draw,
+  .single = true,
+};
+
+const struct desk_app_s * const g_apps[APP_COUNT] =
+{
+  [APP_LAUNCHER] = &g_app_launcher,
+  [APP_TERMINAL] = &g_app_terminal,
+  [APP_FILES]    = &g_app_files,
+  [APP_EDITOR]   = &g_app_editor,
+  [APP_MONITOR]  = &g_app_monitor,
+  [APP_SETTINGS] = &g_app_settings,
+  [APP_ABOUT]    = &g_app_about,
 };
 
 /****************************************************************************
