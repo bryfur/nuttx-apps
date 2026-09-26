@@ -111,9 +111,12 @@ CWindowEvent::CWindowEvent(FAR CTwm4Nx *twm4nx, FAR void *client,
   m_tapArg                = (uintptr_t)0;        // No callback argument
 
   // Open a message queue to send raw NX events.  This cannot fail!
+  // Non-blocking: these events are sent from the NX listener thread, and
+  // the main thread may be waiting for that thread (a synchronization
+  // with the NX server); a full queue would deadlock the two.
 
   FAR const char *mqname  = twm4nx->getEventQueueName();
-  m_eventq = mq_open(mqname, O_WRONLY);
+  m_eventq = mq_open(mqname, O_WRONLY | O_NONBLOCK);
   if (m_eventq == (mqd_t)-1)
     {
       twmerr("ERROR: Failed open message queue '%s': %d\n",

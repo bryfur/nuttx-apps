@@ -34,6 +34,15 @@ config TWM4NX_STACKSIZE
 	int "Twm4Nx stack size"
 	default DEFAULT_TASK_STACKSIZE
 
+config TWM4NX_EVENTQ_MSGS
+	int "Twm4Nx event queue depth"
+	default 256
+	---help---
+		Messages the window manager's event queue holds.  The NX callbacks
+		(the listener thread) post to it without waiting, since the main
+		thread may itself be waiting for the listener; when it is full,
+		events are lost (a drag floods it with mouse and redraw events).
+
 config TWM4NX_REVMAJOR
 	string "Twm4Nx major version number"
 	default "0"

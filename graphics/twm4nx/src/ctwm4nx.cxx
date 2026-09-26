@@ -134,7 +134,7 @@ bool CTwm4Nx::initialize(void)
   //  constructors
 
   struct mq_attr attr;
-  attr.mq_maxmsg  = 32;    // REVISIT:  Should be configurable
+  attr.mq_maxmsg  = CONFIG_TWM4NX_EVENTQ_MSGS;
   attr.mq_msgsize = MAX_EVENT_MSGSIZE;
   attr.mq_flags   = 0;
   attr.mq_curmsgs = 0;
