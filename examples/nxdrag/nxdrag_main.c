@@ -6,9 +6,15 @@
  * Window drag benchmark: open a RAM-backed framed window on the running NX
  * server (as twm4nx's windows are), put it on top, then move it N steps of
  * (dx, dy), each followed by nxtk_synch() so that the step is timed until
- * the server has finished it.
+ * the server has finished it.  Or scroll its content as a terminal does:
+ * move it all up a text line, then fill the line uncovered.
  *
  *   nxdrag [steps [dx [dy [w [h]]]]]     defaults: 60 8 4 500 350
+ *   nxdrag scroll [steps [line]]         defaults: 60 16
+ *   nxdrag text [screens]                defaults: 10
+ *
+ * text fills the window with 8 x 16 two-colour glyph bitmaps, one
+ * nxtk_bitmapwindow() per character cell, as NxTerm draws text.
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -16,6 +22,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #include <nuttx/nx/nx.h>
@@ -86,8 +93,11 @@ static uint32_t now_us(void)
 
 int main(int argc, FAR char *argv[])
 {
-  int steps = argc > 1 ? atoi(argv[1]) : 60;
-  int dx    = argc > 2 ? atoi(argv[2]) : 8;
+  bool scroll = argc > 1 && strcmp(argv[1], "scroll") == 0;
+  bool text = argc > 1 && strcmp(argv[1], "text") == 0;
+  int mode = scroll || text;
+  int steps = argc > 1 + mode ? atoi(argv[1 + mode]) : text ? 10 : 60;
+  int dx    = argc > 2 + mode ? atoi(argv[2 + mode]) : scroll ? 16 : 8;
   int dy    = argc > 3 ? atoi(argv[3]) : 4;
   struct nxgl_size_s size =
   {
@@ -149,12 +159,92 @@ int main(int argc, FAR char *argv[])
 
   drag_synch(hnx, hwnd);
 
+  if (text)
+    {
+      static uint16_t glyph[16][8];
+      FAR const void *src[CONFIG_NX_NPLANES];
+      struct nxgl_point_s origin;
+      int cols = size.w / 8;
+      int rows = size.h / 16;
+      int n = 0;
+      int r;
+      int c;
+
+      src[0] = glyph;
+      t0 = now_us();
+      for (i = 0; i < steps; i++)
+        {
+          for (r = 0; r < rows; r++)
+            {
+              for (c = 0; c < cols; c++, n++)
+                {
+                  int gy;
+                  int gx;
+
+                  /* A different two-colour "character" each cell */
+
+                  for (gy = 0; gy < 16; gy++)
+                    {
+                      for (gx = 0; gx < 8; gx++)
+                        {
+                          glyph[gy][gx] = ((n * 2654435761u >> (gy + gx)) & 1)
+                                          ? 0xffff : 0x0010;
+                        }
+                    }
+
+                  rect.pt1.x = c * 8;
+                  rect.pt1.y = r * 16;
+                  rect.pt2.x = rect.pt1.x + 7;
+                  rect.pt2.y = rect.pt1.y + 15;
+                  origin     = rect.pt1;
+                  nxtk_bitmapwindow(hwnd, &rect, src, &origin, 16);
+                }
+            }
+
+          if (drag_synch(hnx, hwnd) < 0)
+            {
+              break;
+            }
+        }
+
+      us = now_us() - t0;
+      printf("nxdrag: %d screens of %dx%d glyphs: %lu ms, %lu us per glyph\n",
+             i, cols, rows, (unsigned long)(us / 1000),
+             (unsigned long)(us / (n ? n : 1)));
+      nxtk_closewindow(hwnd);
+      nx_disconnect(hnx);
+      return EXIT_SUCCESS;
+    }
+
   t0 = now_us();
   for (i = 0; i < steps; i++)
     {
-      pos.x += dx;
-      pos.y += dy;
-      nxtk_setposition(hwnd, &pos);
+      if (scroll)
+        {
+          /* Up one line (dx is the line height here), then a new line */
+
+          struct nxgl_point_s up =
+          {
+            0, -dx
+          };
+
+          rect.pt1.x = 0;
+          rect.pt1.y = dx;
+          rect.pt2.x = size.w - 1;
+          rect.pt2.y = size.h - 1;
+          nxtk_movewindow(hwnd, &rect, &up);
+
+          rect.pt1.y = size.h - dx;
+          color[0]   = (i & 1) ? 0x001f : 0xffe0;
+          nxtk_fillwindow(hwnd, &rect, color);
+        }
+      else
+        {
+          pos.x += dx;
+          pos.y += dy;
+          nxtk_setposition(hwnd, &pos);
+        }
+
       if (drag_synch(hnx, hwnd) < 0)
         {
           printf("nxdrag: synch failed\n");
@@ -163,9 +253,10 @@ int main(int argc, FAR char *argv[])
     }
 
   us = now_us() - t0;
-  printf("nxdrag: %d steps of (%d,%d), %dx%d window: %lu ms, "
-         "%lu us per step\n", i, dx, dy, size.w, size.h,
-         (unsigned long)(us / 1000), (unsigned long)(us / (i ? i : 1)));
+  printf("nxdrag: %d %s (%d,%d), %dx%d window: %lu ms, %lu us each\n",
+         i, scroll ? "scrolls of" : "steps of", scroll ? 0 : dx,
+         scroll ? dx : dy, size.w, size.h, (unsigned long)(us / 1000),
+         (unsigned long)(us / (i ? i : 1)));
 
   nxtk_closewindow(hwnd);
   nx_disconnect(hnx);
