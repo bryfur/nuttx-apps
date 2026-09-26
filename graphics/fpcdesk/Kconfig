@@ -41,6 +41,14 @@ config FPCDESK_LISTENER_STACKSIZE
 	int "NX event listener stack size"
 	default 4096
 
+config FPCDESK_PREFS
+	string "Settings file"
+	default ""
+	---help---
+		Where the desktop keeps the settings it remembers across boots
+		(the display mode, the wallpaper).  Empty: .fpcdesk in the home
+		directory ($HOME, else CONFIG_LIBC_HOMEDIR).
+
 config FPCDESK_DESKCTL
 	bool "deskctl: scripted input and screenshots"
 	default y

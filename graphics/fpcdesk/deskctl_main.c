@@ -16,18 +16,26 @@
  *                                 \b Backspace, \xHH any byte)
  *   deskctl shot FILE             the screen as a PPM file (simulator)
  *   deskctl test                  BLEND on the GPU, checked pixel by pixel
+ *   deskctl stats [clear|N]       GPU commands and pixels since the last
+ *                                 clear, with the GPU time they take (the
+ *                                 costs in docs/desktop.md); N: per N steps
+ *   deskctl mode [N]              the display mode (N: change it)
+ *   deskctl redraw                composite all of the display again (a
+ *                                 check: the result must not change)
  ****************************************************************************/
 
 #include <nuttx/config.h>
 
 #include <errno.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 #include <nuttx/nx/nx.h>
+#include <nuttx/nx/nxcompose.h>
 
 /* The GPU's cursor and the simulator's screenshot are kernel functions of
  * the board (a flat build)
@@ -36,6 +44,16 @@
 #ifdef CONFIG_FPC_GPU
 void fpc_gpu_cursor_pos(int x, int y, bool visible);
 void fpc_gpu_flush(void);
+
+/* As fpc_gpu.h has them */
+
+struct fpc_gpu_stats_s
+{
+  uint32_t cmds[16];
+  uint64_t pixels[16];
+};
+
+void fpc_gpu_stats(struct fpc_gpu_stats_s *st, bool clear);
 #endif
 #ifdef CONFIG_ARCH_SIM
 int fpc_simgpu_screenshot(FAR const char *path);
@@ -141,11 +159,84 @@ static void deskctl_type(NXHANDLE h, FAR const char *text)
     }
 }
 
+#ifdef CONFIG_FPC_GPU
+/* GPU time per pixel, ns, from docs/desktop.md (500 x 350: FILL 1.70 ms,
+ * COPY 3.34 ms, BLEND of a colour 3.5 ms, of an image 4.75 ms); PUT and
+ * EXPAND are link-bound (about 25 MB/s, and 1/16 of that data)
+ */
+
+static const struct
+{
+  uint8_t op;
+  const char *name;
+  uint32_t pspx;                 /* ps per pixel */
+} g_costs[] =
+{
+  { 0x01, "FILL",   9714 },
+  { 0x03, "COPY",   19086 },
+  { 0x09, "BLEND",  20000 },
+  { 0x0f, "BLENDi", 27143 },
+  { 0x02, "PUT",    80000 },
+  { 0x07, "EXPAND", 5000 },
+  { 0x08, "READ",   0 },
+  { 0x0c, "FLIP",   0 },
+  { 0x0b, "MODE",   0 },
+};
+
+static void deskctl_stats(FAR const char *arg)
+{
+  struct fpc_gpu_stats_s st;
+  int per = arg != NULL ? atoi(arg) : 0;
+  uint64_t total = 0;
+  uint64_t px = 0;
+  uint32_t cmds = 0;
+  size_t i;
+
+  if (arg != NULL && strcmp(arg, "clear") == 0)
+    {
+      fpc_gpu_stats(NULL, true);
+      return;
+    }
+
+  fpc_gpu_flush();
+  fpc_gpu_stats(&st, false);
+  if (per < 1)
+    {
+      per = 1;
+    }
+
+  printf("op        cmds     pixels  GPU ms%s\n",
+         per > 1 ? "   (per step)" : "");
+  for (i = 0; i < sizeof(g_costs) / sizeof(g_costs[0]); i++)
+    {
+      uint32_t n = st.cmds[g_costs[i].op];
+      uint64_t p = st.pixels[g_costs[i].op];
+      uint64_t us = p * g_costs[i].pspx / 1000000 / per;
+
+      if (n == 0)
+        {
+          continue;
+        }
+
+      printf("%-7s %6lu %10lu %4lu.%02lu\n", g_costs[i].name,
+             (unsigned long)(n / per), (unsigned long)(p / per),
+             (unsigned long)(us / 1000), (unsigned long)(us % 1000 / 10));
+      total += us;
+      px    += p;
+      cmds  += n;
+    }
+
+  printf("total   %6lu %10lu %4lu.%02lu\n", (unsigned long)(cmds / per),
+         (unsigned long)(px / per), (unsigned long)(total / 1000),
+         (unsigned long)(total % 1000 / 10));
+}
+#endif
+
 static void deskctl_usage(void)
 {
   fprintf(stderr,
           "usage: deskctl m X Y [BUTTONS] | c X Y | d X0 Y0 X1 Y1 [N] |\n"
-          "               k TEXT | shot FILE\n");
+          "               k TEXT | shot FILE | stats [clear|N] | mode [N]\n");
 }
 
 /****************************************************************************
@@ -167,6 +258,12 @@ int main(int argc, FAR char *argv[])
   if (strcmp(argv[1], "test") == 0)
     {
       return desk_gputest() ? EXIT_FAILURE : EXIT_SUCCESS;
+    }
+
+  if (strcmp(argv[1], "stats") == 0)
+    {
+      deskctl_stats(argc >= 3 ? argv[2] : NULL);
+      return EXIT_SUCCESS;
     }
 #endif
 
@@ -234,6 +331,42 @@ int main(int argc, FAR char *argv[])
 
       usleep(30000);
       deskctl_pointer(h, x1, y1, 0);
+    }
+  else if (strcmp(argv[1], "mode") == 0)
+    {
+      struct nxgl_size_s size;
+      int mode;
+      int i;
+
+      if (argc >= 3)
+        {
+          mode = nx_setdisplaymode(h, atoi(argv[2]));
+          if (mode < 0)
+            {
+              fprintf(stderr, "deskctl: mode %s: %d\n", argv[2], mode);
+              ret = EXIT_FAILURE;
+            }
+        }
+
+      for (i = 0; nx_getdisplaymode(h, i, &size) >= 0; i++)
+        {
+          printf("%c %d  %d x %d\n",
+                 nx_getdisplaymode(h, -1, NULL) == i ? '*' : ' ', i,
+                 size.w, size.h);
+        }
+    }
+  else if (strcmp(argv[1], "redraw") == 0)
+    {
+      /* A new background colour damages all of the display (the
+       * wallpaper hides it); then back to black
+       */
+
+      nxgl_mxpixel_t c = 0x0841;
+
+      nx_setbgcolor(h, &c);
+      usleep(50000);
+      c = 0;
+      nx_setbgcolor(h, &c);
     }
   else if (strcmp(argv[1], "k") == 0 && argc >= 3)
     {

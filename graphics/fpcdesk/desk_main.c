@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <syslog.h>
 #include <time.h>
 #include <unistd.h>
 #include <sys/boardctl.h>
@@ -241,6 +242,12 @@ static void cb_event(NXWINDOW hwnd, enum nx_event_e event, void *arg1,
       ev.win  = arg1;
       q_push(&ev);
     }
+  else if (event == NXEVENT_DISPLAYMODE)
+    {
+      memset(&ev, 0, sizeof(ev));
+      ev.type = EV_MODE;
+      q_push(&ev);
+    }
 }
 
 static const struct nx_callback_s g_clientcb =
@@ -261,20 +268,49 @@ static void cb_part_mouse(NXWINDOW hwnd, const struct nxgl_point_s *pos,
   cb_mouse((uint8_t)(uintptr_t)arg, NULL, pos, buttons);
 }
 
+static void cb_part_event(NXWINDOW hwnd, enum nx_event_e event,
+                          void *arg1, void *arg2)
+{
+  if (event == NXEVENT_DISPLAYMODE)
+    {
+      cb_event(hwnd, event, NULL, arg2);
+    }
+}
+
 const struct nx_callback_s g_desk_partcb =
 {
-  cb_redraw, cb_client_pos, cb_part_mouse, cb_kbdin, NULL
+  cb_redraw, cb_client_pos, cb_part_mouse, cb_kbdin, cb_part_event
 };
+
+/* NX's messages.  An error is said (on the syslog: the desktop has no
+ * console) and survived, unless the server has gone or it goes on.
+ */
 
 static void *listener(void *arg)
 {
+  int errors = 0;
+
   for (; ; )
     {
-      if (nx_eventhandler(g_desk.hnx) < 0 && errno != EINTR)
+      if (nx_eventhandler(g_desk.hnx) == 0)
         {
-          fprintf(stderr, "desk: lost the NX server: %d\n", errno);
+          errors = 0;
+          continue;
+        }
+
+      if (errno == EINTR)
+        {
+          continue;
+        }
+
+      syslog(LOG_ERR, "desk: NX: %d\n", errno);
+      if (errno == EHOSTDOWN || ++errors >= 10)
+        {
+          syslog(LOG_ERR, "desk: lost the NX server, exiting\n");
           exit(EXIT_FAILURE);
         }
+
+      usleep(10000);
     }
 
   return NULL;
@@ -704,6 +740,17 @@ void desk_win_restore(struct desk_win_s *w)
   desk_win_activate(w);
 }
 
+/* A maximised window: all of the display between the top bar and the
+ * dock
+ */
+
+static void win_setmax(struct desk_win_s *w)
+{
+  win_setpos(w, 0, TOPBAR_H);
+  win_setsize(w, DESK_W, DESK_H - TOPBAR_H - TITLE_H - DOCK_H -
+              2 * DOCK_MARGIN);
+}
+
 void desk_win_maximize(struct desk_win_s *w)
 {
   if (!w->maximized)
@@ -712,9 +759,7 @@ void desk_win_maximize(struct desk_win_s *w)
       w->restore.pt2.x = w->csize.w;
       w->restore.pt2.y = w->csize.h;
       w->maximized     = true;
-      win_setpos(w, 0, TOPBAR_H);
-      win_setsize(w, DESK_W, DESK_H - TOPBAR_H - TITLE_H - DOCK_H -
-                  2 * DOCK_MARGIN);
+      win_setmax(w);
     }
   else
     {
@@ -767,6 +812,79 @@ void desk_launch(int app)
   if (a->open != NULL && (w = a->open()) != NULL)
     {
       win_show(w);
+    }
+}
+
+/* The display has a new size: the panels follow, maximised windows fill
+ * it again, the others shrink to fit and stay on it
+ */
+
+static void on_mode(void)
+{
+  struct nxgl_size_s size;
+  struct desk_win_s *w;
+  int cw;
+  int ch;
+
+  if (nx_displaysize(g_desk.hnx, &size) < 0 ||
+      (size.w == g_desk.w && size.h == g_desk.h))
+    {
+      return;
+    }
+
+  g_desk.w = size.w;
+  g_desk.h = size.h;
+  desk_panels_relayout();
+
+  for (w = g_desk.wins; w != NULL; w = w->next)
+    {
+      if (w->closing)
+        {
+          continue;
+        }
+
+      if (w->maximized)
+        {
+          win_setmax(w);
+        }
+      else
+        {
+          cw = w->csize.w > DESK_W - 40 ? DESK_W - 40 : w->csize.w;
+          ch = w->csize.h + TITLE_H > WORK_H ? WORK_H - TITLE_H :
+                                               w->csize.h;
+          if (cw != w->csize.w || ch != w->csize.h)
+            {
+              win_setsize(w, cw, ch);
+            }
+          else
+            {
+              cw = -1;
+            }
+
+          win_setpos(w,
+                     w->pos.x + w->size.w > DESK_W ?
+                     DESK_W - w->size.w : w->pos.x,
+                     w->pos.y + w->size.h > WORK_Y + WORK_H ?
+                     WORK_Y + WORK_H - w->size.h : w->pos.y);
+          if (cw < 0)
+            {
+              continue;
+            }
+        }
+
+      desk_win_title(w);
+      win_client_redraw(w);
+    }
+
+  /* Applications that show the mode (Settings) */
+
+  for (w = g_desk.wins; w != NULL; w = w->next)
+    {
+      if (!w->closing && w->app == APP_SETTINGS &&
+          g_apps[w->app]->draw != NULL)
+        {
+          g_apps[w->app]->draw(w);
+        }
     }
 }
 
@@ -1010,6 +1128,10 @@ static void on_event(struct desk_event_s *ev)
         win_destroy(ev->win);
         break;
 
+      case EV_MODE:
+        on_mode();
+        break;
+
       case EV_REDRAW:
         if (!ev->win->closing)
           {
@@ -1155,6 +1277,17 @@ int main(int argc, FAR char *argv[])
   pthread_create(&thread, &attr, listener, NULL);
 
   caps = nx_compositor(g_desk.hnx);
+
+  /* The display mode saved last time (the listener will see the event of
+   * the change; the panels are made at the new size)
+   */
+
+  ret = desk_prefs_load();
+  if (ret >= 0 && ret != nx_getdisplaymode(g_desk.hnx, -1, NULL))
+    {
+      nx_setdisplaymode(g_desk.hnx, ret);
+    }
+
   {
     struct nxgl_size_s size;
 
@@ -1171,8 +1304,8 @@ int main(int argc, FAR char *argv[])
   g_desk.composited = (caps & NX_CAP_COMPOSITOR) != 0;
   if (!g_desk.composited)
     {
-      fprintf(stderr, "desk: the display is not composited (a GPU without "
-                      "BLEND): the desktop will look plain\n");
+      fprintf(stderr, "desk: the display is not composited (not a v5 GPU: "
+                      "see the boot log): the desktop will look plain\n");
     }
 
   desk_luts_init();

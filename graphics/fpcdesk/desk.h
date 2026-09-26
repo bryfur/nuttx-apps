@@ -106,7 +106,8 @@ enum desk_evtype_e
   EV_KBD,
   EV_POSITION,
   EV_BLOCKED,
-  EV_REDRAW
+  EV_REDRAW,
+  EV_MODE                          /* The display mode has changed */
 };
 
 enum desk_part_e
@@ -336,10 +337,13 @@ void desk_wallpaper_preview(struct desk_ops_s *o, int style, int x, int y,
                             int w, int h);
 void desk_panels_tick(void);
 bool desk_panels_animate(void);
+void desk_panels_relayout(void);           /* The display's size changed */
 
 /* desk_apps.c: the applications */
 
 void desk_load_sample(void);
+int  desk_prefs_load(void);                 /* The saved display mode, or -1 */
+void desk_prefs_save(void);
 void icon_tile(struct desk_ops_s *o, int x, int y, int s, uint16_t top,
                uint16_t bottom, uint8_t a);
 

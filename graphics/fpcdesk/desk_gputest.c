@@ -24,8 +24,9 @@
 
 #define TW       64                  /* Test rectangle */
 #define TH       16
-#define TY       3900                /* Off-screen: destination lines */
-#define SY       3940                /* ... source lines */
+#define TY       1980                /* Off-screen, the last lines of the
+                                      * 2048-line space: destination */
+#define SY       2010                /* ... source lines */
 #define SLOT     6
 
 /****************************************************************************
