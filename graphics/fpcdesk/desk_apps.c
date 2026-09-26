@@ -18,6 +18,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/boardctl.h>
+#include <sys/stat.h>
 
 #include <nuttx/nx/nxfonts.h>
 
@@ -107,10 +108,19 @@ static const char * const g_wallnames[3] =
 
 #define SWATCH_W   132
 #define SWATCH_H   88
+#define RES_Y      212             /* The resolutions: title, then buttons */
+#define RES_BY     (RES_Y + 34)
+#define RES_W      100
+#define RES_H      30
+#define RES_GAP    8
+#define RES_MAX    4
 
 static void settings_draw(struct desk_win_s *w)
 {
   NXWINDOW hwnd = (NXWINDOW)w->hwnd;
+  struct nxgl_size_s size;
+  char label[24];
+  int cur;
   int y = TITLE_H;
   int i;
 
@@ -139,6 +149,33 @@ static void settings_draw(struct desk_win_s *w)
                       C_TEXT_DIM, 255);
       ops_draw(hwnd, &g_o);
     }
+
+  /* The display modes, the current one lit */
+
+  ops_text(&g_o, &g_desk_font_title, 20, y + RES_Y, "Resolution", C_TEXT,
+           255);
+  cur = nx_getdisplaymode(g_desk.hnx, -1, NULL);
+  for (i = 0; i < RES_MAX && nx_getdisplaymode(g_desk.hnx, i, &size) >= 0;
+       i++)
+    {
+      int x = 20 + i * (RES_W + RES_GAP);
+
+      snprintf(label, sizeof(label), "%d x %d", size.w, size.h);
+      ops_rrect(&g_o, x, y + RES_BY, RES_W, RES_H, LUT_R6, 6,
+                i == cur ? C_ACCENT : C_CARD, 255);
+      ops_text_centre(&g_o, i == cur ? &g_desk_font_uib : &g_desk_font_ui,
+                      x + RES_W / 2, y + RES_BY +
+                      (RES_H - text_height(&g_desk_font_ui)) / 2, label,
+                      i == cur ? C_WHITE : C_TEXT, 255);
+    }
+
+  if (i == 0)
+    {
+      ops_text(&g_o, &g_desk_font_ui, 20, y + RES_BY,
+               "This display has one mode", C_TEXT_DIM, 255);
+    }
+
+  ops_draw(hwnd, &g_o);
 }
 
 static void settings_mouse(struct desk_win_s *w, int x, int y,
@@ -146,14 +183,13 @@ static void settings_mouse(struct desk_win_s *w, int x, int y,
 {
   static uint8_t last;
   bool press = (buttons & NX_MOUSE_LEFTBUTTON) && !(last & NX_MOUSE_LEFTBUTTON);
+  int i;
 
   last = buttons;
   if (!press)
     {
       return;
     }
-
-  int i;
 
   for (i = 0; i < 3; i++)
     {
@@ -165,13 +201,30 @@ static void settings_mouse(struct desk_win_s *w, int x, int y,
           g_desk.wallstyle = i;
           desk_wallpaper_draw();
           settings_draw(w);
+          desk_prefs_save();
+        }
+    }
+
+  /* A resolution: the desktop lays itself out again when the server says
+   * the mode has changed (EV_MODE), Settings with it
+   */
+
+  for (i = 0; i < RES_MAX; i++)
+    {
+      int bx = 20 + i * (RES_W + RES_GAP);
+
+      if (x >= bx && x < bx + RES_W && y >= RES_BY && y < RES_BY + RES_H &&
+          nx_getdisplaymode(g_desk.hnx, -1, NULL) != i &&
+          nx_setdisplaymode(g_desk.hnx, i) >= 0)
+        {
+          desk_prefs_save();
         }
     }
 }
 
 static struct desk_win_s *settings_open(void)
 {
-  struct desk_win_s *w = desk_win_open(APP_SETTINGS, "Settings", 468, 230);
+  struct desk_win_s *w = desk_win_open(APP_SETTINGS, "Settings", 468, 300);
 
   if (w != NULL)
     {
@@ -183,16 +236,20 @@ static struct desk_win_s *settings_open(void)
 
 static void about_draw(struct desk_win_s *w)
 {
+  static char display[40];
   static const char * const rows[][2] =
   {
     { "Processor", "RP2350, 2 x Cortex-M33" },
     { "Memory",    "520 KB SRAM, 8 MB PSRAM" },
-    { "Graphics",  "Tang Nano 20K, 1024 x 768" },
-    { "Display",   "Composited: GPU protocol v4" },
+    { "Graphics",  "Tang Nano 20K, GPU protocol v5" },
+    { "Display",   display },
     { "System",    "NuttX, NX" },
   };
 
   NXWINDOW hwnd = (NXWINDOW)w->hwnd;
+
+  snprintf(display, sizeof(display), "%d x %d, %s", DESK_W, DESK_H,
+           g_desk.composited ? "composited" : "not composited");
   int cw = w->csize.w;
   int y = TITLE_H;
   int i;
@@ -274,6 +331,90 @@ const struct desk_app_s * const g_apps[APP_COUNT] =
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
+
+/* The settings kept across boots: the display mode and the wallpaper, in
+ * CONFIG_FPCDESK_PREFS, or .fpcdesk in the home directory
+ */
+
+static const char *prefs_path(char *buf, size_t len)
+{
+  const char *home;
+
+  if (CONFIG_FPCDESK_PREFS[0] != '\0')
+    {
+      return CONFIG_FPCDESK_PREFS;
+    }
+
+  home = getenv("HOME");
+  if (home == NULL)
+    {
+      home = CONFIG_LIBC_HOMEDIR;
+    }
+
+  snprintf(buf, len, "%s%s.fpcdesk", home,
+           home[strlen(home) - 1] == '/' ? "" : "/");
+  return buf;
+}
+
+int desk_prefs_load(void)
+{
+  char path[64];
+  char line[48];
+  int mode = -1;
+  int n;
+  FILE *f;
+
+  f = fopen(prefs_path(path, sizeof(path)), "r");
+  if (f == NULL)
+    {
+      return -1;
+    }
+
+  while (fgets(line, sizeof(line), f) != NULL)
+    {
+      if (sscanf(line, "mode %d", &n) == 1)
+        {
+          mode = n;
+        }
+      else if (sscanf(line, "wallpaper %d", &n) == 1 && n >= 0 && n < 3)
+        {
+          g_desk.wallstyle = n;
+        }
+    }
+
+  fclose(f);
+  return mode;
+}
+
+void desk_prefs_save(void)
+{
+  char path[64];
+  const char *p = prefs_path(path, sizeof(path));
+  char dir[64];
+  char *slash;
+  FILE *f;
+
+  /* The directory may not exist yet (a new SD card) */
+
+  snprintf(dir, sizeof(dir), "%s", p);
+  slash = strrchr(dir, '/');
+  if (slash != NULL && slash != dir)
+    {
+      *slash = '\0';
+      mkdir(dir, 0777);
+    }
+
+  f = fopen(p, "w");
+  if (f == NULL)
+    {
+      fprintf(stderr, "desk: cannot save %s: %d\n", p, errno);
+      return;
+    }
+
+  fprintf(f, "mode %d\nwallpaper %d\n",
+          nx_getdisplaymode(g_desk.hnx, -1, NULL), g_desk.wallstyle);
+  fclose(f);
+}
 
 /* The load, once a second: /proc/cpuload, /proc/meminfo (all heaps) */
 

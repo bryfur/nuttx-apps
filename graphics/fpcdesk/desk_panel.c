@@ -624,6 +624,40 @@ int desk_panels_init(void)
   return 0;
 }
 
+/* The display has a new size (a display mode): the wallpaper first (its
+ * surface is the largest), then the top bar, the dock and the launcher
+ */
+
+void desk_panels_relayout(void)
+{
+  struct nxgl_point_s pos;
+  struct nxgl_size_s size;
+
+  size.w = DESK_W;
+  size.h = DESK_H;
+  nx_setsize(g_desk.wallpaper, &size);
+  desk_wallpaper_draw();
+
+  size.h = TOPBAR_H;
+  nx_setsize(g_desk.topbar, &size);
+  desk_topbar_draw();
+
+  g_desk.dockx = (DESK_W - g_desk.dockw) / 2;
+  pos.x = g_desk.dockx;
+  pos.y = DESK_H - DOCK_H - DOCK_MARGIN;
+  nx_setposition(g_desk.dock, &pos);
+  g_desk.dockhover = -1;
+  desk_dock_draw();
+  nx_setvisibility(g_desk.tip, true);
+
+  if (g_desk.launcher != NULL)
+    {
+      size.h = DESK_H;
+      nx_setsize(g_desk.launcher, &size);
+      desk_launcher_draw();
+    }
+}
+
 void desk_panels_tick(void)
 {
   desk_topbar_draw();
