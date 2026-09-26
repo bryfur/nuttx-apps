@@ -34,6 +34,16 @@ config TWM4NX_NXTERM
 		in which you can interact with NSH.
 
 if TWM4NX_NXTERM
+
+config TWM4NX_NXTERM_STACKSIZE
+	int "NxTerm task stack size"
+	default 8192
+	---help---
+		Stack of the task that runs NSH in each NxTerm window.  NSH runs
+		builtin commands and loads ELF programs on this stack, so it needs
+		at least what the console NSH has; an overflow corrupts the heap
+		block below it (the NxTerm driver's own state, among others).
+
 endif # TWM4NX_NXTERM
 
 config TWM4NX_CLOCK
