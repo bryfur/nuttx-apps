@@ -178,7 +178,7 @@ static int term_task(int argc, char *argv[])
       close(fd);
     }
 
-  printf("FPC  " DESK_CH_MIDDOT "  NuttX shell\n\n");
+  printf("FPC - NuttX shell\n\n");
   return nsh_consolemain(0, NULL);
 }
 

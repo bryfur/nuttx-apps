@@ -99,7 +99,8 @@ enum desk_evtype_e
   EV_MOUSE = 1,
   EV_KBD,
   EV_POSITION,
-  EV_BLOCKED
+  EV_BLOCKED,
+  EV_REDRAW
 };
 
 enum desk_part_e

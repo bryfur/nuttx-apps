@@ -153,6 +153,22 @@ static void cb_redraw(NXWINDOW hwnd, const struct nxgl_rect_s *rect,
   /* Every window keeps its pixels: nothing to redraw */
 }
 
+/* A client area that has grown: the new territory needs drawing */
+
+static void cb_client_redraw(NXWINDOW hwnd, const struct nxgl_rect_s *rect,
+                             bool more, void *arg)
+{
+  struct desk_event_s ev;
+
+  memset(&ev, 0, sizeof(ev));
+  ev.type  = EV_REDRAW;
+  ev.win   = arg;
+  ev.pos   = rect->pt1;
+  ev.size.w = rect->pt2.x - rect->pt1.x + 1;
+  ev.size.h = rect->pt2.y - rect->pt1.y + 1;
+  q_push(&ev);
+}
+
 static void cb_mouse(uint8_t part, struct desk_win_s *w,
                      const struct nxgl_point_s *pos, uint8_t buttons)
 {
@@ -229,7 +245,7 @@ static void cb_event(NXWINDOW hwnd, enum nx_event_e event, void *arg1,
 
 static const struct nx_callback_s g_clientcb =
 {
-  cb_redraw, cb_client_pos, cb_client_mouse, cb_kbdin, cb_event
+  cb_client_redraw, cb_client_pos, cb_client_mouse, cb_kbdin, cb_event
 };
 
 static const struct nx_callback_s g_titlecb =
@@ -278,6 +294,7 @@ static void win_effects(struct desk_win_s *w, uint8_t opacity)
   fx.opacity  = opacity;
   fx.shadow   = (w->active ? 170 : 100) * opacity / 255;
   fx.shadowdy = w->active ? 8 : 4;
+  fx.border   = (uint8_t)(34 * opacity / 255);
   nx_seteffects((NXWINDOW)w->hwnd, &fx);
 }
 
@@ -327,10 +344,14 @@ static void win_setpos(struct desk_win_s *w, int x, int y)
       x = 60 - w->size.w;
     }
 
+  /* The frame itself (nxtk_setposition() works from what the library last
+   * heard of the window, which may not be the latest)
+   */
+
   pos.x  = x;
   pos.y  = y;
   w->pos = pos;
-  nxtk_setposition(w->hwnd, &pos);
+  nx_setposition((NXWINDOW)w->hwnd, &pos);
 }
 
 static void win_setsize(struct desk_win_s *w, int cw, int ch)
@@ -345,8 +366,33 @@ static void win_setsize(struct desk_win_s *w, int cw, int ch)
   nxtk_setsize(w->hwnd, &size);
 }
 
+static void term_redraw(struct desk_win_s *w, int x, int y, int cw,
+                        int ch)
+{
+  static struct desk_ops_s o;
+  struct boardioc_nxterm_ioctl_s io;
+  struct nxtermioc_redraw_s redraw;
+
+  ops_reset(&o);
+  ops_fill(&o, x, TITLE_H + y, cw, ch, C_TERM_BG);
+  ops_draw((NXWINDOW)w->hwnd, &o);
+
+  redraw.handle     = w->nxterm;
+  redraw.rect.pt1.x = x;
+  redraw.rect.pt1.y = y;
+  redraw.rect.pt2.x = x + cw - 1;
+  redraw.rect.pt2.y = y + ch - 1;
+  redraw.more       = false;
+  io.cmd            = NXTERMIOC_NXTERM_REDRAW;
+  io.arg            = (uintptr_t)&redraw;
+  boardctl(BOARDIOC_NXTERM_IOCTL, (uintptr_t)&io);
+}
+
 static void win_client_redraw(struct desk_win_s *w)
 {
+  /* The library must know the new size before drawing into it */
+
+  desk_win_sync(w);
   if (w->app == APP_TERMINAL && w->nxterm != NULL)
     {
       struct boardioc_nxterm_ioctl_s io;
@@ -357,6 +403,7 @@ static void win_client_redraw(struct desk_win_s *w)
       io.cmd        = NXTERMIOC_NXTERM_RESIZE;
       io.arg        = (uintptr_t)&resize;
       boardctl(BOARDIOC_NXTERM_IOCTL, (uintptr_t)&io);
+      term_redraw(w, 0, 0, w->csize.w, w->csize.h);
     }
   else if (g_apps[w->app].draw != NULL)
     {
@@ -975,6 +1022,22 @@ static void on_event(struct desk_event_s *ev)
 
       case EV_BLOCKED:
         win_destroy(ev->win);
+        break;
+
+      case EV_REDRAW:
+        if (!ev->win->closing)
+          {
+            if (ev->win->app == APP_TERMINAL && ev->win->nxterm != NULL)
+              {
+                term_redraw(ev->win, ev->pos.x, ev->pos.y, ev->size.w,
+                            ev->size.h);
+              }
+            else if (g_apps[ev->win->app].draw != NULL &&
+                     g_desk.resize != ev->win)
+              {
+                g_apps[ev->win->app].draw(ev->win);
+              }
+          }
         break;
 
       default:
