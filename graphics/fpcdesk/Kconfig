@@ -1,0 +1,54 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+menuconfig GRAPHICS_FPCDESK
+	bool "FPC desktop (a composited desktop shell for NX)"
+	default n
+	depends on NX && NX_RAMBACKED && NXTERM
+	select NX_COMPOSITOR if NX_ACCEL
+	---help---
+		A modern desktop for the FPC: a top bar with the clock, a dock,
+		windows with title bars, traffic-light buttons, round corners
+		and soft shadows, all drawn and composited by the GPU through
+		the NX server (CONFIG_NX_COMPOSITOR).  Terminals run NSH in
+		NxTerm windows.
+
+if GRAPHICS_FPCDESK
+
+config FPCDESK_PROGNAME
+	string "Program name"
+	default "desk"
+
+config FPCDESK_PRIORITY
+	int "Priority"
+	default 100
+
+config FPCDESK_STACKSIZE
+	int "Stack size"
+	default 8192
+
+config FPCDESK_TERM_STACKSIZE
+	int "Terminal (NSH) stack size"
+	default 8192
+
+config FPCDESK_TERM_PRIORITY
+	int "Terminal (NSH) priority"
+	default 100
+
+config FPCDESK_LISTENER_STACKSIZE
+	int "NX event listener stack size"
+	default 4096
+
+config FPCDESK_DESKCTL
+	bool "deskctl: scripted input and screenshots"
+	default y
+	---help---
+		deskctl m X Y [BUTTONS]  move the pointer (and press buttons)
+		deskctl c X Y            click
+		deskctl k TEXT           type
+		deskctl shot FILE        screenshot (simulator)
+		For testing the desktop without a mouse and keyboard.
+
+endif

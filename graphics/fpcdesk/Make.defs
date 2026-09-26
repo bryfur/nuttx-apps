@@ -1,0 +1,10 @@
+############################################################################
+# apps/graphics/fpcdesk/Make.defs
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+############################################################################
+
+ifneq ($(CONFIG_GRAPHICS_FPCDESK),)
+CONFIGURED_APPS += $(APPDIR)/graphics/fpcdesk
+endif

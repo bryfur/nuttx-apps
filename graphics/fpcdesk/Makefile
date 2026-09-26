@@ -1,0 +1,25 @@
+############################################################################
+# apps/graphics/fpcdesk/Makefile
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+############################################################################
+
+include $(APPDIR)/Make.defs
+
+PROGNAME  = $(CONFIG_FPCDESK_PROGNAME)
+PRIORITY  = $(CONFIG_FPCDESK_PRIORITY)
+STACKSIZE = $(CONFIG_FPCDESK_STACKSIZE)
+MODULE    = $(CONFIG_GRAPHICS_FPCDESK)
+
+MAINSRC   = desk_main.c
+CSRCS     = desk_draw.c desk_panel.c desk_apps.c desk_fonts.c
+
+ifeq ($(CONFIG_FPCDESK_DESKCTL),y)
+PROGNAME  += deskctl
+PRIORITY  += 100
+STACKSIZE += 4096
+MAINSRC   += deskctl_main.c
+endif
+
+include $(APPDIR)/Application.mk

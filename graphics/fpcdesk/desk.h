@@ -1,0 +1,309 @@
+/****************************************************************************
+ * apps/graphics/fpcdesk/desk.h
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * The FPC desktop: a shell for the NX server's compositor.
+ ****************************************************************************/
+
+#ifndef __APPS_GRAPHICS_FPCDESK_DESK_H
+#define __APPS_GRAPHICS_FPCDESK_DESK_H
+
+#include <nuttx/config.h>
+
+#include <stdbool.h>
+#include <stdint.h>
+#include <sys/types.h>
+#include <semaphore.h>
+
+#include <nuttx/nx/nx.h>
+#include <nuttx/nx/nxtk.h>
+#include <nuttx/nx/nxterm.h>
+#include <nuttx/nx/nxcompose.h>
+
+#include "desk_font.h"
+
+/****************************************************************************
+ * Pre-processor Definitions
+ ****************************************************************************/
+
+#define DESK_W            1024
+#define DESK_H            768
+
+/* RGB565 from 8-bit channels */
+
+#define RGB(r, g, b)      ((uint16_t)((((r) >> 3) << 11) | (((g) >> 2) << 5) | \
+                                      ((b) >> 3)))
+
+/* The look */
+
+#define TOPBAR_H          28
+#define TITLE_H           34
+#define DOCK_ICON         48
+#define DOCK_PAD          10
+#define DOCK_H            (DOCK_ICON + 2 * DOCK_PAD)
+#define DOCK_MARGIN       8
+#define WORK_Y            (TOPBAR_H + 6)                 /* Where windows may go */
+#define WORK_H            (DESK_H - WORK_Y - DOCK_H - 2 * DOCK_MARGIN)
+
+#define C_TITLE_ACTIVE    RGB(0x38, 0x38, 0x3c)
+#define C_TITLE_INACTIVE  RGB(0x28, 0x28, 0x2c)
+#define C_TITLE_HILITE    RGB(0x48, 0x48, 0x4d)
+#define C_TITLE_TEXT      RGB(0xec, 0xec, 0xee)
+#define C_TITLE_DIM       RGB(0x8e, 0x8e, 0x93)
+#define C_WINDOW_BG       RGB(0x20, 0x20, 0x24)
+#define C_CARD            RGB(0x30, 0x30, 0x34)
+#define C_TEXT            RGB(0xe8, 0xe8, 0xea)
+#define C_TEXT_DIM        RGB(0x98, 0x98, 0x9e)
+#define C_ACCENT          RGB(0x0a, 0x84, 0xff)
+#define C_CLOSE           RGB(0xff, 0x5f, 0x57)
+#define C_MINIMIZE        RGB(0xfe, 0xbc, 0x2e)
+#define C_MAXIMIZE        RGB(0x28, 0xc8, 0x40)
+#define C_LIGHT_OFF       RGB(0x48, 0x48, 0x4c)
+#define C_TERM_BG         RGB(0x18, 0x18, 0x1c)
+#define C_TERM_FG         RGB(0xd8, 0xd8, 0xd8)
+#define C_WHITE           RGB(0xff, 0xff, 0xff)
+#define C_BLACK           RGB(0x00, 0x00, 0x00)
+
+/* Client shape tables (nx_setlut()): round corners of these radii */
+
+#define LUT_R12           (NX_LUT_CLIENT0 + 0)
+#define LUT_R6            (NX_LUT_CLIENT0 + 1)
+#define LUT_GLOW          (NX_LUT_CLIENT0 + 2)   /* A wide Gaussian around a point */
+#define LUT_R3            (NX_LUT_CLIENT0 + 3)
+#define LUT_R20           (NX_LUT_CLIENT0 + 4)
+
+/* Traffic lights: three discs of radius 6 in the title bar */
+
+#define LIGHT_R           6
+#define LIGHT_X0          14
+#define LIGHT_DX          20
+#define LIGHT_Y           (TITLE_H / 2)
+
+/* Applications */
+
+enum desk_app_e
+{
+  APP_LAUNCHER = 0,
+  APP_TERMINAL,
+  APP_MONITOR,
+  APP_SETTINGS,
+  APP_ABOUT,
+  APP_COUNT
+};
+
+/* Events from the NX listener thread to the desktop's */
+
+enum desk_evtype_e
+{
+  EV_MOUSE = 1,
+  EV_KBD,
+  EV_POSITION,
+  EV_BLOCKED
+};
+
+enum desk_part_e
+{
+  PART_CLIENT = 0,                 /* Client area of a framed window */
+  PART_TITLE,                      /* Its title bar (the toolbar) */
+  PART_TOPBAR,
+  PART_DOCK,
+  PART_LAUNCHER,
+  PART_WALLPAPER,
+  PART_TIP
+};
+
+/****************************************************************************
+ * Public Types
+ ****************************************************************************/
+
+struct desk_win_s;
+
+struct desk_event_s
+{
+  uint8_t type;                    /* EV_* */
+  uint8_t part;                    /* PART_* */
+  uint8_t buttons;
+  uint8_t nch;
+  struct desk_win_s *win;          /* PART_CLIENT, PART_TITLE */
+  struct nxgl_point_s pos;         /* Mouse: in the part */
+  struct nxgl_size_s size;         /* Position: size of the part */
+  struct nxgl_point_s wpos;        /* Position: where the window is */
+  uint8_t ch[8];                   /* Keys */
+};
+
+/* A list of GPU operations being built */
+
+struct desk_ops_s
+{
+  int n;
+  struct nx_gpuop_s op[NX_GPUOPS_MAX];
+};
+
+/* An application window */
+
+struct desk_win_s
+{
+  struct desk_win_s *next;
+  int app;                         /* enum desk_app_e */
+  NXTKWINDOW hwnd;
+  char title[40];
+  struct nxgl_point_s pos;         /* The frame's top-left */
+  struct nxgl_size_s size;         /* Frame size */
+  struct nxgl_size_s csize;        /* Client area size */
+  struct nxgl_rect_s restore;      /* Before maximising */
+  bool active;
+  bool minimized;
+  bool maximized;
+  bool closing;
+  int hover;                       /* Traffic light under the pointer, -1 */
+  int pressed;                     /* Traffic light pressed, -1 */
+  uint8_t fade;                    /* Opening: opacity steps to go */
+  sem_t synced;                    /* The server has caught up (nx_synch) */
+
+  /* Terminal */
+
+  NXTERM nxterm;
+  int minor;
+  pid_t pid;
+
+  /* Application state */
+
+  void *priv;
+};
+
+struct desk_app_s
+{
+  const char *name;
+  void (*icon)(struct desk_ops_s *o, int x, int y, int size, uint8_t alpha);
+  struct desk_win_s *(*open)(void);
+  void (*draw)(struct desk_win_s *w);           /* The client area */
+  void (*tick)(struct desk_win_s *w);           /* Once a second */
+  void (*click)(struct desk_win_s *w, int x, int y);
+  void (*close)(struct desk_win_s *w);
+  bool single;                                  /* One window at most */
+};
+
+/* The desktop */
+
+struct desk_s
+{
+  NXHANDLE hnx;
+  bool composited;
+  struct desk_win_s *wins;         /* Application windows */
+  struct desk_win_s *active;
+  NXWINDOW atlas;                  /* Hidden: the glyph atlas */
+  NXWINDOW wallpaper;
+  NXWINDOW topbar;
+  NXWINDOW dock;
+  NXWINDOW tip;
+  NXWINDOW launcher;               /* NULL when closed */
+  int wallstyle;                   /* Settings: which wallpaper */
+  int dockx;                       /* The dock's left edge */
+  int dockw;
+  int dockhover;                   /* App under the pointer, -1 */
+  int launcherfade;                /* Launcher opening: steps to go */
+  int topbarhover;                 /* 1: over "Activities" */
+
+  /* Dragging */
+
+  struct desk_win_s *drag;
+  struct desk_win_s *resize;
+  struct nxgl_point_s grab;        /* Pointer within the frame at the press */
+  struct nxgl_point_s grabpos;     /* Frame position at the press */
+  struct nxgl_size_s grabsize;
+  uint8_t buttons;                 /* Last buttons seen, any part */
+  struct desk_win_s *clickwin;     /* Double click detection */
+  uint32_t clickms;
+
+  /* Load */
+
+  uint8_t cpuhist[60];             /* CPU load history, percent */
+  int cpuload;
+  unsigned int memused;            /* KB */
+  unsigned int memtotal;
+};
+
+/****************************************************************************
+ * Public Data
+ ****************************************************************************/
+
+extern struct desk_s g_desk;
+extern const struct desk_app_s g_apps[APP_COUNT];
+
+/****************************************************************************
+ * Public Function Prototypes
+ ****************************************************************************/
+
+/* desk_draw.c: building operations */
+
+void ops_reset(struct desk_ops_s *o);
+struct nx_gpuop_s *ops_add(struct desk_ops_s *o);
+void ops_fill(struct desk_ops_s *o, int x, int y, int w, int h, uint16_t c);
+void ops_blend(struct desk_ops_s *o, int x, int y, int w, int h, uint16_t c,
+               uint8_t alpha);
+void ops_rrect(struct desk_ops_s *o, int x, int y, int w, int h, int slot,
+               int r, uint16_t c, uint8_t alpha);
+void ops_disc(struct desk_ops_s *o, int cx, int cy, int slot, int r,
+              uint16_t c, uint8_t alpha);
+void ops_vgrad(struct desk_ops_s *o, int x, int y, int w, int h,
+               uint16_t c0, uint16_t c1, uint8_t alpha);
+void ops_hgrad(struct desk_ops_s *o, int x, int y, int w, int h,
+               uint16_t c0, uint16_t c1, uint8_t alpha);
+void ops_rrect_vgrad(struct desk_ops_s *o, int x, int y, int w, int h,
+                     int slot, int r, uint16_t c0, uint16_t c1,
+                     uint8_t alpha);
+void ops_glow(struct desk_ops_s *o, int cx, int cy, int r, int shift,
+              uint16_t c, uint8_t alpha);
+int  ops_text(struct desk_ops_s *o, const struct desk_font_s *f, int x,
+              int y, const char *s, uint16_t c, uint8_t alpha);
+int  text_width(const struct desk_font_s *f, const char *s);
+int  text_height(const struct desk_font_s *f);
+void ops_text_centre(struct desk_ops_s *o, const struct desk_font_s *f,
+                     int cx, int y, const char *s, uint16_t c,
+                     uint8_t alpha);
+uint16_t colour_mix(uint16_t a, uint16_t b, int t256);
+
+int  desk_atlas_init(void);
+void desk_luts_init(void);
+
+/* Send operations: into a window's pixels, or as a layer's display list */
+
+void ops_draw(NXWINDOW hwnd, struct desk_ops_s *o);
+void ops_setlist(NXWINDOW hwnd, struct desk_ops_s *o);
+
+/* desk_main.c: windows */
+
+struct desk_win_s *desk_win_open(int app, const char *title, int w, int h);
+void desk_win_close(struct desk_win_s *w);
+void desk_win_activate(struct desk_win_s *w);
+void desk_win_title(struct desk_win_s *w);
+void desk_win_minimize(struct desk_win_s *w);
+void desk_win_restore(struct desk_win_s *w);
+void desk_win_maximize(struct desk_win_s *w);
+void desk_win_sync(struct desk_win_s *w);
+struct desk_win_s *desk_app_window(int app);
+void desk_launch(int app);
+uint32_t desk_ms(void);
+
+/* desk_panel.c: the top bar, the dock, the launcher, the wallpaper */
+
+int  desk_panels_init(void);
+void desk_topbar_draw(void);
+void desk_dock_draw(void);
+void desk_dock_mouse(int x, int y, uint8_t buttons);
+void desk_topbar_mouse(int x, int y, uint8_t buttons);
+void desk_launcher_toggle(void);
+void desk_launcher_draw(void);
+void desk_launcher_mouse(int x, int y, uint8_t buttons);
+void desk_wallpaper_draw(void);
+void desk_wallpaper_preview(struct desk_ops_s *o, int style, int x, int y,
+                            int w, int h);
+void desk_panels_tick(void);
+bool desk_panels_animate(void);
+
+/* desk_apps.c: the applications */
+
+void desk_load_sample(void);
+
+#endif /* __APPS_GRAPHICS_FPCDESK_DESK_H */
