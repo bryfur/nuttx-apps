@@ -12,7 +12,7 @@
  *     the compositor replays over what is below them: translucent);
  *   - application windows: framed windows (nxtk) whose toolbar is the
  *     title bar, with round corners and a soft shadow, the active one's
- *     deeper; terminals are NxTerm running NSH.
+ *     deeper.
  *
  * NX calls its callbacks on the listener thread; they only queue events.
  * Everything else happens on the main thread: the events, a tick once a
@@ -49,6 +49,10 @@
 #define RESIZE_GRIP       16
 #define MIN_W             240
 #define MIN_H             120
+#define BUTTON_W          28                 /* A title bar button */
+#define BUTTON_H          22
+#define BUTTON_X(w)       ((w)->size.w - 10 - BUTTON_W)
+#define BUTTON_Y          ((TITLE_H - BUTTON_H) / 2)
 
 /****************************************************************************
  * Private Data
@@ -62,6 +66,7 @@ static struct
   sem_t count;
   int head;
   int n;
+  bool wake;                       /* desk_wake(): some window's is due */
   struct desk_event_s ev[QUEUE_LEN];
 } g_q;
 
@@ -136,11 +141,49 @@ static bool q_pop(struct desk_event_s *ev, int timeout_ms)
     }
 
   pthread_mutex_lock(&g_q.lock);
+  if (g_q.n == 0)
+    {
+      pthread_mutex_unlock(&g_q.lock);      /* desk_wake()'s post */
+      return false;
+    }
+
   *ev = g_q.ev[g_q.head];
   g_q.head = (g_q.head + 1) % QUEUE_LEN;
   g_q.n--;
   pthread_mutex_unlock(&g_q.lock);
   return true;
+}
+
+/* The windows desk_wake() was called for: their wake callbacks */
+
+static void q_wakes(void)
+{
+  struct desk_win_s *w;
+
+  pthread_mutex_lock(&g_q.lock);
+  if (!g_q.wake)
+    {
+      pthread_mutex_unlock(&g_q.lock);
+      return;
+    }
+
+  g_q.wake = false;
+  pthread_mutex_unlock(&g_q.lock);
+
+  for (w = g_desk.wins; w != NULL; w = w->next)
+    {
+      bool due;
+
+      pthread_mutex_lock(&g_q.lock);
+      due      = w->wakeq;
+      w->wakeq = false;
+      pthread_mutex_unlock(&g_q.lock);
+
+      if (due && !w->closing && g_apps[w->app]->wake != NULL)
+        {
+          g_apps[w->app]->wake(w);
+        }
+    }
 }
 
 /****************************************************************************
@@ -448,7 +491,43 @@ void desk_win_title(struct desk_win_s *w)
   ops_text_centre(&o, &g_desk_font_uib, width / 2,
                   (TITLE_H - text_height(&g_desk_font_uib)) / 2, w->title,
                   w->active ? C_TITLE_TEXT : C_TITLE_DIM, 255);
+
+  /* The application's button, at the right */
+
+  if (w->button != NULL)
+    {
+      int bx = BUTTON_X(w);
+
+      if (w->buttonhover || w->buttonpressed)
+        {
+          ops_rrect(&o, bx, BUTTON_Y, BUTTON_W, BUTTON_H, LUT_R6, 6,
+                    C_WHITE, w->buttonpressed ? 50 : 26);
+        }
+
+      ops_text_centre(&o, &g_desk_font_title, bx + BUTTON_W / 2,
+                      BUTTON_Y + (BUTTON_H -
+                                  text_height(&g_desk_font_title)) / 2,
+                      w->button, w->active ? C_TITLE_TEXT : C_TITLE_DIM,
+                      255);
+    }
+
   ops_draw((NXWINDOW)w->hwnd, &o);
+}
+
+void desk_wake(struct desk_win_s *w)
+{
+  bool post;
+
+  pthread_mutex_lock(&g_q.lock);
+  w->wakeq = true;
+  post     = !g_q.wake;
+  g_q.wake = true;
+  pthread_mutex_unlock(&g_q.lock);
+
+  if (post)
+    {
+      sem_post(&g_q.count);
+    }
 }
 
 struct desk_win_s *desk_win_open(int app, const char *title, int cw, int ch)
@@ -575,6 +654,10 @@ void desk_win_activate(struct desk_win_s *w)
         {
           desk_win_title(old);
           win_effects(old, 255);
+          if (g_apps[old->app]->focus != NULL)
+            {
+              g_apps[old->app]->focus(old);
+            }
         }
     }
 
@@ -583,6 +666,10 @@ void desk_win_activate(struct desk_win_s *w)
       w->active = true;
       desk_win_title(w);
       win_effects(w, w->fade > 0 ? 255 / (w->fade + 1) : 255);
+      if (g_apps[w->app]->focus != NULL)
+        {
+          g_apps[w->app]->focus(w);
+        }
     }
 
   desk_topbar_draw();
@@ -786,6 +873,7 @@ static void win_mouse(struct desk_win_s *w, int part, int x, int y,
                  (g_desk.buttons & NX_MOUSE_LEFTBUTTON) == 0;
   bool release = (buttons & NX_MOUSE_LEFTBUTTON) == 0 &&
                  (g_desk.buttons & NX_MOUSE_LEFTBUTTON) != 0;
+  bool button;
   int light;
 
   /* Dragging the window, or its size */
@@ -834,6 +922,41 @@ static void win_mouse(struct desk_win_s *w, int part, int x, int y,
     {
       w->hover = light;
       desk_win_title(w);
+    }
+
+  /* The application's button: pressed, then released over it */
+
+  button = w->button != NULL && part == PART_TITLE &&
+           x >= BUTTON_X(w) && x < BUTTON_X(w) + BUTTON_W &&
+           y >= BUTTON_Y && y < BUTTON_Y + BUTTON_H;
+  if (button != w->buttonhover)
+    {
+      w->buttonhover = button;
+      desk_win_title(w);
+    }
+
+  if (w->buttonpressed && (press || release))
+    {
+      w->buttonpressed = false;
+      desk_win_title(w);
+      if (release && button && g_apps[w->app]->button != NULL)
+        {
+          g_apps[w->app]->button(w);
+        }
+
+      return;
+    }
+
+  if (press && button)
+    {
+      if (w != g_desk.active)
+        {
+          desk_win_activate(w);
+        }
+
+      w->buttonpressed = true;
+      desk_win_title(w);
+      return;
     }
 
   if (press)
@@ -965,9 +1088,11 @@ static void on_mouse(struct desk_event_s *ev)
 
       for (t = g_desk.wins; t != NULL; t = t->next)
         {
-          if (t->hover >= 0 && !t->closing)
+          if ((t->hover >= 0 || t->buttonhover) && !t->closing &&
+              !t->buttonpressed)
             {
-              t->hover = -1;
+              t->hover       = -1;
+              t->buttonhover = false;
               desk_win_title(t);
             }
         }
@@ -1205,6 +1330,8 @@ int main(int argc, FAR char *argv[])
               on_event(&ev);
             }
         }
+
+      q_wakes();
 
       anim = animate();
 

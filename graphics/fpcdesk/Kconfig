@@ -6,14 +6,15 @@
 menuconfig GRAPHICS_FPCDESK
 	bool "FPC desktop (a composited desktop shell for NX)"
 	default n
-	depends on NX && NX_RAMBACKED && NXTERM
+	depends on NX && NX_RAMBACKED
 	select NX_COMPOSITOR if NX_ACCEL
+	select PSEUDOTERM
 	---help---
 		A modern desktop for the FPC: a top bar with the clock, a dock,
 		windows with title bars, traffic-light buttons, round corners
 		and soft shadows, all drawn and composited by the GPU through
-		the NX server (CONFIG_NX_COMPOSITOR).  Terminals run NSH in
-		NxTerm windows.
+		the NX server (CONFIG_NX_COMPOSITOR).  The terminal runs NSH
+		on pseudo-terminals, in tabs.
 
 if GRAPHICS_FPCDESK
 
@@ -36,6 +37,14 @@ config FPCDESK_TERM_STACKSIZE
 config FPCDESK_TERM_PRIORITY
 	int "Terminal (NSH) priority"
 	default 100
+
+config FPCDESK_TERM_SCROLLBACK
+	int "Terminal scrollback (lines a tab)"
+	default 500
+	---help---
+		The most lines a terminal tab keeps after they scroll off the
+		top.  They are allocated as they come, trimmed of trailing
+		blanks.
 
 config FPCDESK_LISTENER_STACKSIZE
 	int "NX event listener stack size"
