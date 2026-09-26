@@ -2684,8 +2684,6 @@ static void mon_resize(struct desk_win_s *w)
 
 static void mon_expose(struct desk_win_s *w, int x, int y, int cw, int ch)
 {
-  struct mon_s *m = w->priv;
-
   if (g_desk.resize == w)
     {
       g_hwnd = (NXWINDOW)w->hwnd;
@@ -2693,8 +2691,10 @@ static void mon_expose(struct desk_win_s *w, int x, int y, int cw, int ch)
       d_fill(x, y + TITLE_H, cw, ch, C_WINDOW_BG);
       flush();
     }
-  else if (m->drawnw != w->csize.w || m->drawnh != w->csize.h)
+  else
     {
+      /* Its pixels are gone (moved to memory, say): all of it again */
+
       mon_draw(w);
     }
 }

@@ -298,9 +298,23 @@ static const struct nx_callback_s g_clientcb =
   cb_client_redraw, cb_client_pos, cb_client_mouse, cb_kbdin, cb_event
 };
 
+/* The title bar has lost its pixels: the desktop draws it again */
+
+static void cb_title_redraw(NXWINDOW hwnd, const struct nxgl_rect_s *rect,
+                            bool more, void *arg)
+{
+  struct desk_event_s ev;
+
+  memset(&ev, 0, sizeof(ev));
+  ev.type = EV_REDRAW;
+  ev.part = PART_TITLE;
+  ev.win  = arg;
+  q_push(&ev);
+}
+
 static const struct nx_callback_s g_titlecb =
 {
-  cb_redraw, cb_client_pos, cb_title_mouse, cb_kbdin, NULL
+  cb_title_redraw, cb_client_pos, cb_title_mouse, cb_kbdin, NULL
 };
 
 /* The desktop's own windows: the part is the callback argument */
@@ -1289,7 +1303,11 @@ static void on_event(struct desk_event_s *ev)
         break;
 
       case EV_REDRAW:
-        if (!ev->win->closing)
+        if (!ev->win->closing && ev->part == PART_TITLE)
+          {
+            desk_win_title(ev->win);
+          }
+        else if (!ev->win->closing)
           {
             const struct desk_app_s *a = g_apps[ev->win->app];
 
