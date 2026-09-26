@@ -203,7 +203,8 @@ struct desk_app_s
                                                  /* Every pointer event in the
                                                   * client area (and, while a
                                                   * button pressed there is
-                                                  * held, outside it) */
+                                                  * held, outside it); leaving
+                                                  * it: (-1, -1), no buttons */
   void (*key)(struct desk_win_s *w, const uint8_t *ch, int n);
                                                  /* Keys, while active: bytes
                                                   * and VT100 sequences */
@@ -211,6 +212,10 @@ struct desk_app_s
                                                   * contents (w->priv itself
                                                   * is freed after) */
   bool single;                                   /* One window at most */
+  bool (*canclose)(struct desk_win_s *w);        /* The close button: false
+                                                  * keeps the window (to ask
+                                                  * first; the app then calls
+                                                  * desk_win_close()) */
 };
 
 /* The desktop */
@@ -245,6 +250,7 @@ struct desk_s
   struct nxgl_size_s grabsize;
   uint8_t buttons;                 /* Last buttons seen, any part */
   struct desk_win_s *clickwin;     /* Double click detection */
+  struct desk_win_s *pointerwin;   /* Client area under the pointer */
   uint32_t clickms;
 
   /* Load */
@@ -346,5 +352,10 @@ void icon_tile(struct desk_ops_s *o, int x, int y, int s, uint16_t top,
 /* desk_edit.c: open a file in a new editor window (NULL: a new file) */
 
 int desk_editor_open(const char *path);
+
+/* desk_ui.c: the clipboard, shared by the applications (a copy is kept) */
+
+void desk_clip_set(const char *s, size_t n);
+const char *desk_clip_get(size_t *n);
 
 #endif /* __APPS_GRAPHICS_FPCDESK_DESK_H */
