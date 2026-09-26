@@ -41,6 +41,20 @@ config FPCDESK_LISTENER_STACKSIZE
 	int "NX event listener stack size"
 	default 4096
 
+config FPCDESK_SYSMON_DISK
+	string "System Monitor: disk mount point"
+	default ""
+	---help---
+		A mount point whose use the System Monitor shows (statfs()),
+		e.g. /mnt/sd0.  Empty for none.  A disk that is not mounted is
+		shown as such.
+
+config FPCDESK_SYSMON_DISKNAME
+	string "System Monitor: disk name"
+	default "Disk"
+	---help---
+		The name the System Monitor gives the disk, e.g. microSD.
+
 config FPCDESK_DESKCTL
 	bool "deskctl: scripted input and screenshots"
 	default y
