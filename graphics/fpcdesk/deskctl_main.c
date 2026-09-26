@@ -14,6 +14,7 @@
  *   deskctl d X0 Y0 X1 Y1 [N]     drag with the left button, in N steps
  *   deskctl k TEXT                type (\n is Enter)
  *   deskctl shot FILE             the screen as a PPM file (simulator)
+ *   deskctl test                  BLEND on the GPU, checked pixel by pixel
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -38,6 +39,7 @@ void fpc_gpu_flush(void);
 #ifdef CONFIG_ARCH_SIM
 int fpc_simgpu_screenshot(FAR const char *path);
 #endif
+int desk_gputest(void);
 
 /****************************************************************************
  * Private Functions
@@ -124,6 +126,13 @@ int main(int argc, FAR char *argv[])
       deskctl_usage();
       return EXIT_FAILURE;
     }
+
+#ifdef CONFIG_FPC_GPU
+  if (strcmp(argv[1], "test") == 0)
+    {
+      return desk_gputest() ? EXIT_FAILURE : EXIT_SUCCESS;
+    }
+#endif
 
   if (strcmp(argv[1], "shot") == 0)
     {

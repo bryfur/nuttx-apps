@@ -13,7 +13,7 @@ STACKSIZE = $(CONFIG_FPCDESK_STACKSIZE)
 MODULE    = $(CONFIG_GRAPHICS_FPCDESK)
 
 MAINSRC   = desk_main.c
-CSRCS     = desk_draw.c desk_panel.c desk_apps.c desk_fonts.c
+CSRCS     = desk_gputest.c desk_draw.c desk_panel.c desk_apps.c desk_fonts.c
 
 ifeq ($(CONFIG_FPCDESK_DESKCTL),y)
 PROGNAME  += deskctl
