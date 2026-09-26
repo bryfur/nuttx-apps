@@ -625,7 +625,7 @@ static struct desk_win_s *win_next_active(struct desk_win_s *not)
 
   for (w = g_desk.wins; w != NULL; w = w->next)
     {
-      if (w != not && !w->minimized && !w->closing)
+      if (w != not && !w->minimized && !w->minimizing && !w->closing)
         {
           return w;
         }
@@ -663,9 +663,10 @@ void desk_win_close(struct desk_win_s *w)
       g_desk.resize = NULL;
     }
 
-  /* Nothing more from the server for it, then it goes (EV_BLOCKED) */
+  /* It fades out, then goes (animate()) */
 
-  nxtk_block(w->hwnd, w);
+  w->fade    = 0;
+  w->fadeout = FADE_STEPS;
 }
 
 static void win_destroy(struct desk_win_s *w)
@@ -691,8 +692,16 @@ static void win_destroy(struct desk_win_s *w)
 
 void desk_win_minimize(struct desk_win_s *w)
 {
-  w->minimized = true;
-  nxtk_setvisibility(w->hwnd, true);
+  if (w->minimized || w->minimizing)
+    {
+      return;
+    }
+
+  /* It fades out, then hides (animate()) */
+
+  w->minimizing = true;
+  w->fade       = 0;
+  w->fadeout    = FADE_STEPS;
   if (g_desk.active == w)
     {
       w->active = false;
@@ -705,9 +714,18 @@ void desk_win_minimize(struct desk_win_s *w)
 
 void desk_win_restore(struct desk_win_s *w)
 {
+  if (w->minimizing)
+    {
+      w->minimizing = false;
+      w->fadeout    = 0;
+      w->fade       = FADE_STEPS;
+    }
+
   if (w->minimized)
     {
       w->minimized = false;
+      w->fade      = FADE_STEPS;
+      win_effects(w, 0);
       nxtk_setvisibility(w->hwnd, false);
     }
 
@@ -1059,6 +1077,29 @@ static bool animate(void)
           w->fade--;
           win_effects(w, 255 - w->fade * 255 / (FADE_STEPS + 1));
           more |= w->fade > 0;
+        }
+      else if (w->fadeout > 0)
+        {
+          w->fadeout--;
+          win_effects(w, w->fadeout * 255 / (FADE_STEPS + 1));
+          more = true;
+          if (w->fadeout == 0 && w->closing && !w->closedone)
+            {
+              /* Nothing more from the server for it, then it goes
+               * (EV_BLOCKED)
+               */
+
+              w->closedone = true;
+              nxtk_block(w->hwnd, w);
+            }
+          else if (w->fadeout == 0 && w->minimizing)
+            {
+              w->minimizing = false;
+              w->minimized  = true;
+              nxtk_setvisibility(w->hwnd, true);
+              win_effects(w, 255);
+              desk_dock_draw();
+            }
         }
     }
 

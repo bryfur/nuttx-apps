@@ -160,6 +160,9 @@ struct desk_win_s
   int hover;                       /* Traffic light under the pointer, -1 */
   int pressed;                     /* Traffic light pressed, -1 */
   uint8_t fade;                    /* Opening: opacity steps to go */
+  uint8_t fadeout;                 /* Closing or minimising: steps to go */
+  bool closedone;                  /* Faded out: to be closed */
+  bool minimizing;                 /* Faded out: to be hidden */
   sem_t synced;                    /* The server has caught up (nx_synch) */
 
   /* Terminal */
