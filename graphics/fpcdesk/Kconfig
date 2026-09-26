@@ -64,6 +64,15 @@ config FPCDESK_SYSMON_DISKNAME
 	---help---
 		The name the System Monitor gives the disk, e.g. microSD.
 
+config FPCDESK_WALLPAPER
+	bool "Wallpaper"
+	default n
+	---help---
+		A wallpaper drawn by the GPU (gradients and soft glows, three
+		to choose from in Settings).  It is a surface the size of the
+		display: a quarter of the GPU's memory at 1280 x 800.  Without
+		it the background is black.
+
 config FPCDESK_PREFS
 	string "Settings file"
 	default ""

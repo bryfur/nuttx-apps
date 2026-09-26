@@ -173,6 +173,11 @@ void desk_wallpaper_draw(void)
   const struct wallpaper_s *w = &g_walls[g_desk.wallstyle % 3];
   int i;
 
+  if (g_desk.wallpaper == NULL)
+    {
+      return;
+    }
+
   ops_reset(&g_ops);
   ops_vgrad(&g_ops, 0, 0, DESK_W, DESK_H, w->top, w->bottom, 255);
   for (i = 0; i < 5; i++)
@@ -584,6 +589,7 @@ int desk_panels_init(void)
 {
   int n = dock_count();
 
+#ifdef CONFIG_FPCDESK_WALLPAPER
   /* The wallpaper, at the bottom */
 
   g_desk.wallpaper = panel_open(PART_WALLPAPER, NXBE_WINDOW_RAMBACKED, 0, 0,
@@ -596,6 +602,15 @@ int desk_panels_init(void)
   panel_effects(g_desk.wallpaper, NX_LAYER_DESKTOP, 0, 0, 0, 0);
   desk_wallpaper_draw();
   nx_setvisibility(g_desk.wallpaper, false);
+#else
+  /* No wallpaper: the server's background, black */
+
+  {
+    nxgl_mxpixel_t black = C_BLACK;
+
+    nx_setbgcolor(g_desk.hnx, &black);
+  }
+#endif
 
   /* The top bar */
 
@@ -635,8 +650,11 @@ void desk_panels_relayout(void)
 
   size.w = DESK_W;
   size.h = DESK_H;
-  nx_setsize(g_desk.wallpaper, &size);
-  desk_wallpaper_draw();
+  if (g_desk.wallpaper != NULL)
+    {
+      nx_setsize(g_desk.wallpaper, &size);
+      desk_wallpaper_draw();
+    }
 
   size.h = TOPBAR_H;
   nx_setsize(g_desk.topbar, &size);

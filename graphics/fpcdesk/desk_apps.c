@@ -101,14 +101,22 @@ static void icon_about(struct desk_ops_s *o, int x, int y, int s,
                   C_WHITE, a);
 }
 
+#ifdef CONFIG_FPCDESK_WALLPAPER
 static const char * const g_wallnames[3] =
 {
   "Aurora", "Sunset", "Graphite"
 };
+#endif
 
 #define SWATCH_W   132
 #define SWATCH_H   88
-#define RES_Y      212             /* The resolutions: title, then buttons */
+#ifdef CONFIG_FPCDESK_WALLPAPER
+#  define RES_Y    212             /* The resolutions: title, then buttons */
+#  define SET_H    300             /* The window's height */
+#else
+#  define RES_Y    16
+#  define SET_H    104
+#endif
 #define RES_BY     (RES_Y + 34)
 #define RES_W      100
 #define RES_H      30
@@ -126,6 +134,7 @@ static void settings_draw(struct desk_win_s *w)
 
   ops_reset(&g_o);
   ops_fill(&g_o, 0, y, w->csize.w, w->csize.h, C_WINDOW_BG);
+#ifdef CONFIG_FPCDESK_WALLPAPER
   ops_text(&g_o, &g_desk_font_title, 20, y + 16, "Wallpaper", C_TEXT, 255);
   ops_text(&g_o, &g_desk_font_ui, 20, y + 44,
            "Drawn by the GPU: a gradient and soft glows", C_TEXT_DIM, 255);
@@ -149,6 +158,7 @@ static void settings_draw(struct desk_win_s *w)
                       C_TEXT_DIM, 255);
       ops_draw(hwnd, &g_o);
     }
+#endif
 
   /* The display modes, the current one lit */
 
@@ -191,6 +201,7 @@ static void settings_mouse(struct desk_win_s *w, int x, int y,
       return;
     }
 
+#ifdef CONFIG_FPCDESK_WALLPAPER
   for (i = 0; i < 3; i++)
     {
       int sx = 20 + i * (SWATCH_W + 16);
@@ -204,6 +215,7 @@ static void settings_mouse(struct desk_win_s *w, int x, int y,
           desk_prefs_save();
         }
     }
+#endif
 
   /* A resolution: the desktop lays itself out again when the server says
    * the mode has changed (EV_MODE), Settings with it
@@ -224,7 +236,7 @@ static void settings_mouse(struct desk_win_s *w, int x, int y,
 
 static struct desk_win_s *settings_open(void)
 {
-  struct desk_win_s *w = desk_win_open(APP_SETTINGS, "Settings", 468, 300);
+  struct desk_win_s *w = desk_win_open(APP_SETTINGS, "Settings", 468, SET_H);
 
   if (w != NULL)
     {
