@@ -381,8 +381,14 @@ static void win_effects(struct desk_win_s *w, uint8_t opacity)
 {
   struct nx_effects_s fx;
 
+  /* A window other than the active one may give up its pixels while it
+   * is not seen (minimised, or covered): every application draws all of
+   * its window again when asked (expose), and the title bar is drawn
+   * again on request (cb_title_redraw())
+   */
+
   memset(&fx, 0, sizeof(fx));
-  fx.flags    = NX_FX_ROUND;
+  fx.flags    = NX_FX_ROUND | (w->active ? 0 : NX_FX_PARK);
   fx.layer    = NX_LAYER_NORMAL;
   fx.opacity  = opacity;
   fx.shadow   = (w->active ? 170 : 100) * opacity / 255;

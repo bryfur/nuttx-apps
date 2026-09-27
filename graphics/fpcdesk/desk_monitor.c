@@ -16,6 +16,8 @@
  *   /proc/<pid>/heap      AllocSize (CONFIG_MM_BACKTRACE >= 0)
  *   /proc/meminfo         one line per heap
  *   /proc/cpuload         all CPUs' load, if no IDLE thread is found
+ *   /proc/gpu             the GPU's memory, link, frames and (a v6 GPU)
+ *                         how busy it and its SDRAM are
  *
  * and statfs() of a disk (CONFIG_FPCDESK_SYSMON_DISK).  NuttX counts load
  * against the ticks of all CPUs together, so a thread that keeps one of
@@ -101,6 +103,9 @@
 #define COL_GAP          14
 #define BAR_H            6              /* Bars: LUT_R3 pills */
 #define HEAP_ROW         30
+#define GPU_H            94             /* The GPU card, across the window */
+#define GPU_BAR_H        10
+#define GPU_BUFSIZE      2048           /* /proc/gpu */
 #define NOLIMIT          10000          /* Text of any width */
 
 /* Colours: the desktop's, and a few of its own */
@@ -172,6 +177,16 @@ enum
   F_HEADER,
   F_THUMB,
   F_FOOTER,
+  F_GPU_NOTE,
+  F_GPU_MEMTEXT,
+  F_GPU_MEMBAR,
+  F_GPU_MEMKEY,
+  F_GPU_LINK,
+  F_GPU_LINKNOTE,
+  F_GPU_WAIT,
+  F_GPU_BUSY,
+  F_GPU_SDBAR,
+  F_GPU_SDKEY,
   NFIELDS
 };
 
@@ -210,6 +225,35 @@ struct mon_heap_s
   uint32_t maxfree;                     /* Largest free block */
 };
 
+/* The GPU (/proc/gpu): its memory in pixels by what holds it, the link,
+ * frames, and with a v6 GPU how busy it and its SDRAM are (0.1 %)
+ */
+
+#define MON_GPU_MEMS     6              /* Buffers, windows, images, parked,
+                                         * other, free */
+#define MON_GPU_SDRAM    5              /* Scanout, blitter, DMA, CPU, codec */
+
+struct mon_gpu_s
+{
+  bool     have;                        /* /proc/gpu was read */
+  bool     hw;                          /* The GPU's own counters, clocked */
+  uint8_t  version;
+  uint32_t space;
+  uint32_t mem[MON_GPU_MEMS];
+  uint32_t parkedpx;                    /* What the parked windows had */
+  uint16_t nparked;
+  uint16_t nlost;                       /* Parked, to be drawn again */
+  uint16_t nmem;                        /* Windows in memory */
+  uint16_t largew;
+  uint16_t largeh;
+  uint16_t fps;                         /* 0.1 /s */
+  uint32_t link;                        /* Bytes/s */
+  uint16_t wire;                        /* Of the wire, 0.01 % */
+  uint16_t wait;                        /* READY wait, 0.1 % */
+  uint16_t busy;                        /* The blitter, 0.1 % */
+  uint16_t sdram[MON_GPU_SDRAM];        /* 0.1 % each */
+};
+
 struct mon_snap_s
 {
   uint32_t uptime;                      /* Seconds */
@@ -228,6 +272,7 @@ struct mon_snap_s
   uint16_t nkthreads;
   uint16_t nrunning;
   bool     haveheap;                    /* /proc/<pid>/heap exists */
+  struct mon_gpu_s gpu;
   int      nprocs;
   struct mon_proc_s procs[MON_MAXPROCS];
 };
@@ -335,6 +380,7 @@ struct mon_s
   struct mon_rect_s cpucard;            /* w = 0: not shown */
   struct mon_rect_s memcard;
   struct mon_rect_s syscard;
+  struct mon_rect_s gpucard;            /* Across the window, below */
   struct mon_rect_s proccard;
   struct mon_rect_s footer;
   struct mon_rect_s chipkill;
@@ -744,6 +790,141 @@ static void mon_readloads(struct mon_s *m)
     }
 }
 
+/* /proc/gpu: the numbers after a line's label, as sscanf() takes them */
+
+static int gpu_scan(const char *buf, const char *key, const char *fmt,
+                    void *a, void *b, void *c)
+{
+  const char *v = mon_field(buf, key);
+
+  return v != NULL ? sscanf(v, fmt, a, b, c) : 0;
+}
+
+static void mon_readgpu(struct mon_gpu_s *g)
+{
+  static char buf[GPU_BUFSIZE];
+  unsigned long n[3];
+  unsigned int d[3];
+  unsigned int e[10];
+  const char *v;
+  ssize_t total = 0;
+  ssize_t r;
+  int fd;
+  int i;
+
+  memset(g, 0, sizeof(*g));
+  fd = open("/proc/gpu", O_RDONLY);
+  if (fd < 0)
+    {
+      return;
+    }
+
+  while (total < GPU_BUFSIZE - 1 &&
+         (r = read(fd, buf + total, GPU_BUFSIZE - 1 - total)) > 0)
+    {
+      total += r;
+    }
+
+  close(fd);
+  buf[total] = '\0';
+  g->have = true;
+
+  if (gpu_scan(buf, "Protocol:", "%lu", &n[0], NULL, NULL) == 1)
+    {
+      g->version = (uint8_t)n[0];
+    }
+
+  gpu_scan(buf, "Space:", "%*u x %*u = %lu", &n[0], NULL, NULL);
+  g->space = n[0];
+  if (gpu_scan(buf, "Display:", "%lu", &n[0], NULL, NULL) == 1)
+    {
+      g->mem[0] = n[0];
+    }
+
+  if (gpu_scan(buf, "Buffers:", "%*u %lu", &n[0], NULL, NULL) == 1)
+    {
+      g->mem[0] += n[0];
+    }
+
+  if (gpu_scan(buf, "Windows:", "%*u %lu", &n[0], NULL, NULL) == 1)
+    {
+      g->mem[1] = n[0];
+    }
+
+  if (gpu_scan(buf, "Images:", "%*u %lu", &n[0], NULL, NULL) == 1)
+    {
+      g->mem[2] = n[0];
+    }
+
+  if (gpu_scan(buf, "Parked:", "%lu %lu px in %lu", &n[0], &n[1],
+               &n[2]) == 3)
+    {
+      g->nparked  = n[0];
+      g->parkedpx = n[1];
+      g->mem[3]   = n[2];
+    }
+
+  if (gpu_scan(buf, "Released:", "%lu", &n[0], NULL, NULL) == 1)
+    {
+      g->nlost = n[0];
+    }
+
+  if (gpu_scan(buf, "Other:", "%*u %lu", &n[0], NULL, NULL) == 1)
+    {
+      g->mem[4] = n[0];
+    }
+
+  if (gpu_scan(buf, "Free:", "%lu px largest %u x %u", &n[0], &d[0],
+               &d[1]) == 3)
+    {
+      g->mem[5]  = n[0];
+      g->largew  = d[0];
+      g->largeh  = d[1];
+    }
+
+  if (gpu_scan(buf, "In memory:", "%lu", &n[0], NULL, NULL) == 1)
+    {
+      g->nmem = n[0];
+    }
+
+  if (gpu_scan(buf, "Frames:", "%u.%u", &d[0], &d[1], NULL) == 2)
+    {
+      g->fps = d[0] * 10 + d[1];
+    }
+
+  if (gpu_scan(buf, "Link:", "%lu bytes/s %u.%u", &n[0], &d[0],
+               &d[1]) == 3)
+    {
+      g->link = n[0];
+      g->wire = d[0] * 100 + d[1];
+    }
+
+  if (gpu_scan(buf, "READY wait:", "%u.%u", &d[0], &d[1], NULL) == 2)
+    {
+      g->wait = d[0] * 10 + d[1];
+    }
+
+  /* A v6 GPU with a clock: how busy it is, the SDRAM's time by client */
+
+  v = mon_field(buf, "GPU:");
+  if (v != NULL && sscanf(v, "%*u kHz busy %u.%u", &d[0], &d[1]) == 2)
+    {
+      g->hw   = true;
+      g->busy = d[0] * 10 + d[1];
+      v = mon_field(buf, "SDRAM:");
+      if (v != NULL &&
+          sscanf(v, "%*u.%*u %% scanout %u.%u blitter %u.%u DMA %u.%u "
+                 "CPU %u.%u codec %u.%u", &e[0], &e[1], &e[2], &e[3],
+                 &e[4], &e[5], &e[6], &e[7], &e[8], &e[9]) == 10)
+        {
+          for (i = 0; i < MON_GPU_SDRAM; i++)
+            {
+              g->sdram[i] = e[2 * i] * 10 + e[2 * i + 1];
+            }
+        }
+    }
+}
+
 static void mon_sample(struct mon_s *m)
 {
   struct mon_snap_s *s = &m->snap;
@@ -798,6 +979,7 @@ static void mon_sample(struct mon_s *m)
   mon_readloads(m);
   mon_readmem(m);
   mon_readdisk(m);
+  mon_readgpu(&s->gpu);
 
   /* The graphs' history */
 
@@ -1426,6 +1608,7 @@ static void mon_layout(struct desk_win_s *w, struct mon_s *m)
   memset(&m->cpucard, 0, sizeof(m->cpucard));
   memset(&m->memcard, 0, sizeof(m->memcard));
   memset(&m->syscard, 0, sizeof(m->syscard));
+  memset(&m->gpucard, 0, sizeof(m->gpucard));
 
   /* The cards: three across, or two, or only the CPU's; none if the
    * window is too low for them and some rows
@@ -1459,6 +1642,17 @@ static void mon_layout(struct desk_win_s *w, struct mon_s *m)
         }
 
       y += CARD_H + PAD;
+
+      /* The GPU across the window below them, if there is room for it and
+       * some rows
+       */
+
+      if (s->gpu.have && cw >= 420 &&
+          ch >= CARD_H + GPU_H + 3 * PAD + FOOTER_H + 160)
+        {
+          rect_set(&m->gpucard, PAD, y, avail, GPU_H);
+          y += GPU_H + PAD;
+        }
     }
 
   rect_set(&m->footer, 0, top + ch - FOOTER_H, cw, FOOTER_H);
@@ -2060,6 +2254,316 @@ static void draw_system(struct mon_s *m)
 }
 
 /****************************************************************************
+ * Private Functions: the GPU card
+ ****************************************************************************/
+
+/* A bar made of parts (a stacked bar): the pill-shaped track, then each
+ * part in its colour, left to right, the round ends shared by the first
+ * and last (the shape's parameters are the whole bar's)
+ */
+
+static void d_stackbar(int x, int y, int w, int h, int n,
+                       const uint32_t *val, const uint16_t *colour,
+                       uint64_t total)
+{
+  uint64_t acc = 0;
+  int px = 0;
+  int i;
+
+  d_rrect(x, y, w, h, LUT_R3, 3, C_TRACK);
+  for (i = 0; i < n && total > 0; i++)
+    {
+      int end;
+
+      acc += val[i];
+      end  = (int)((uint64_t)w * acc / total);
+      end  = end > w ? w : end;
+      if (val[i] > 0 && end <= px)
+        {
+          end = px + 1;                 /* Something: a sliver */
+        }
+
+      if (end > px)
+        {
+          need(1);
+          d_rrect_part(x, y, w, h, LUT_R3, 3, colour[i], x + px, end - px);
+          px = end;
+        }
+    }
+}
+
+/* A key for a stacked bar: a dot of each part's colour and its label,
+ * as many as fit maxw, redrawn only when they change
+ */
+
+static void field_key(struct mon_s *m, int id, int x, int y, int maxw,
+                      int n, const char * const *label,
+                      const uint16_t *colour, uint16_t bg)
+{
+  uint32_t hash = 2166136261u;
+  int cx = x;
+  int i;
+
+  for (i = 0; i < n; i++)
+    {
+      hash = hash_bytes(hash, label[i], strlen(label[i]));
+      hash = hash_bytes(hash, &colour[i], sizeof(colour[i]));
+    }
+
+  if (!field_changed(m, id, hash ^ (uint32_t)maxw))
+    {
+      return;
+    }
+
+  field_clear(m, id, bg);
+  for (i = 0; i < n; i++)
+    {
+      int tw = text_width(&g_desk_font_small, label[i]);
+
+      if (cx + 10 + tw > x + maxw)
+        {
+          break;
+        }
+
+      need(2);
+      ops_disc(&g_o, cx + 3, y + 7, LUT_R3, 3, colour[i], 255);
+      d_text(&g_desk_font_small, cx + 10, y, label[i], C_TEXT_DIM);
+      cx += 10 + tw + 12;
+    }
+
+  field_set(m, id, x - 1, y, cx - x + 2, text_height(&g_desk_font_small));
+}
+
+/* Pixels of the GPU's memory as bytes */
+
+static void fmt_px(char *buf, size_t size, uint32_t px)
+{
+  fmt_bytes(buf, size, (uint64_t)px * 2);
+}
+
+/* The GPU: its memory (what holds it, what is free, the largest free
+ * rectangle), the link (bytes a second, of the wire, the time the CPU
+ * waited for the GPU), and with a v6 GPU how busy its blitter is and
+ * whose the SDRAM's time is; frames a second above
+ */
+
+static void draw_gpu(struct mon_s *m)
+{
+  static const uint16_t memcol[MON_GPU_MEMS] =
+  {
+    C_ACCENT, C_VIOLET, RGB(0x22, 0xd0, 0xb0), C_AMBER, C_FAINT, C_TRACK
+  };
+
+  static const uint16_t sdcol[MON_GPU_SDRAM] =
+  {
+    C_ACCENT, C_VIOLET, C_GREEN, C_AMBER, RGB(0x22, 0xd0, 0xb0)
+  };
+
+  static const char * const sdname[MON_GPU_SDRAM] =
+  {
+    "scanout", "blitter", "DMA", "CPU", "codec"
+  };
+
+  const struct mon_gpu_s *g = &m->snap.gpu;
+  const struct mon_rect_s *c = &m->gpucard;
+  const char *key[MON_GPU_MEMS];
+  char keybuf[MON_GPU_MEMS][64];
+  uint16_t kc[MON_GPU_MEMS];
+  char buf[64];
+  char b1[16];
+  char b2[16];
+  uint32_t v[MON_GPU_SDRAM];
+  int x0 = c->x + INSET;
+  int iw = c->w - 2 * INSET;
+  int colw[3];
+  int colx[3];
+  int lw;
+  int nk = 0;
+  int i;
+
+  if (c->w == 0)
+    {
+      return;
+    }
+
+  /* Three columns: the memory, the link, the GPU's time */
+
+  colw[0] = (iw - 40) * 50 / 100;
+  colw[1] = (iw - 40) * 20 / 100;
+  colw[2] = iw - 40 - colw[0] - colw[1];
+  colx[0] = x0;
+  colx[1] = colx[0] + colw[0] + 20;
+  colx[2] = colx[1] + colw[1] + 20;
+
+  if (m->force)
+    {
+      d_text(&g_desk_font_uib, colx[0], c->y + 30, "Memory", C_TEXT);
+      d_text(&g_desk_font_uib, colx[1], c->y + 30, "Link", C_TEXT);
+      d_text(&g_desk_font_uib, colx[2], c->y + 30, "GPU busy", C_TEXT);
+    }
+
+  snprintf(buf, sizeof(buf), "protocol v%u, %u.%u frames/s", g->version,
+           g->fps / 10, g->fps % 10);
+  field_text(m, F_GPU_NOTE, &g_desk_font_small, x0 + iw, c->y + 10, true,
+             iw / 2, buf, C_TEXT_DIM, C_CARD);
+
+  /* The memory: what is free and the largest free rectangle, a bar of
+   * what holds the rest, its key
+   */
+
+  lw = colw[0] - text_width(&g_desk_font_uib, "Memory") - 12;
+  fmt_px(b1, sizeof(b1), g->mem[5]);
+  snprintf(buf, sizeof(buf), "%s free, largest %u x %u", b1, g->largew,
+           g->largeh);
+  if (text_width(&g_desk_font_small, buf) > lw)
+    {
+      snprintf(buf, sizeof(buf), "%s free", b1);
+    }
+
+  field_text(m, F_GPU_MEMTEXT, &g_desk_font_small, colx[0] + colw[0],
+             c->y + 32, true, lw, buf, C_TEXT_DIM, C_CARD);
+
+  if (field_changed(m, F_GPU_MEMBAR,
+                    hash_bytes(2166136261u, g->mem, sizeof(g->mem)) ^
+                    (uint32_t)colw[0]))
+    {
+      field_clear(m, F_GPU_MEMBAR, C_CARD);
+      d_stackbar(colx[0], c->y + 54, colw[0], GPU_BAR_H, MON_GPU_MEMS - 1,
+                 g->mem, memcol, g->space);
+      field_set(m, F_GPU_MEMBAR, colx[0], c->y + 54, colw[0], GPU_BAR_H);
+    }
+
+  fmt_px(b1, sizeof(b1), g->mem[0]);
+  snprintf(keybuf[nk], sizeof(keybuf[nk]), "Display %s", b1);
+  kc[nk++] = memcol[0];
+  fmt_px(b1, sizeof(b1), g->mem[1]);
+  snprintf(keybuf[nk], sizeof(keybuf[nk]), "Windows %s", b1);
+  kc[nk++] = memcol[1];
+  if (g->nparked + g->nlost > 0)
+    {
+      /* What the parked windows had, in what they take, if it fits */
+
+      fmt_px(b1, sizeof(b1), g->parkedpx);
+      fmt_px(b2, sizeof(b2), g->mem[3]);
+      snprintf(keybuf[nk], sizeof(keybuf[nk]), "%u parked: %s in %s",
+               g->nparked + g->nlost, b1, b2);
+      if (text_width(&g_desk_font_small, keybuf[0]) +
+          text_width(&g_desk_font_small, keybuf[1]) +
+          text_width(&g_desk_font_small, keybuf[nk]) + 3 * 22 > colw[0])
+        {
+          snprintf(keybuf[nk], sizeof(keybuf[nk]), "%u parked: %s",
+                   g->nparked + g->nlost, b2);
+        }
+
+      kc[nk++] = memcol[3];
+    }
+
+  if (g->mem[2] > 0)
+    {
+      fmt_px(b1, sizeof(b1), g->mem[2]);
+      snprintf(keybuf[nk], sizeof(keybuf[nk]), "Images %s", b1);
+      kc[nk++] = memcol[2];
+    }
+
+  if (g->nmem > 0)
+    {
+      snprintf(keybuf[nk], sizeof(keybuf[nk]), "%u in PSRAM", g->nmem);
+      kc[nk++] = C_RED;
+    }
+
+  for (i = 0; i < nk; i++)
+    {
+      key[i] = keybuf[i];
+    }
+
+  field_key(m, F_GPU_MEMKEY, colx[0], c->y + 70, colw[0], nk, key, kc,
+            C_CARD);
+
+  /* The link: bytes a second, of the wire; the time the CPU waited for
+   * room in the GPU (it was saturated)
+   */
+
+  if (g->link >= 1024 * 1024)
+    {
+      snprintf(buf, sizeof(buf), "%lu.%lu MB/s",
+               (unsigned long)(g->link / (1024 * 1024)),
+               (unsigned long)(g->link % (1024 * 1024) * 10 /
+                               (1024 * 1024)));
+    }
+  else
+    {
+      snprintf(buf, sizeof(buf), "%lu KB/s",
+               (unsigned long)((g->link + 512) / 1024));
+    }
+
+  field_text(m, F_GPU_LINK, &g_desk_font_uib, colx[1] + colw[1], c->y + 30,
+             true, colw[1] - text_width(&g_desk_font_uib, "Link") - 8, buf,
+             C_TEXT, C_CARD);
+  snprintf(buf, sizeof(buf), "%u.%02u %% of the wire", g->wire / 100,
+           g->wire % 100);
+  field_text(m, F_GPU_LINKNOTE, &g_desk_font_small, colx[1], c->y + 52,
+             false, colw[1], buf, C_TEXT_DIM, C_CARD);
+  snprintf(buf, sizeof(buf), "waiting for the GPU %u.%u %%", g->wait / 10,
+           g->wait % 10);
+  field_text(m, F_GPU_WAIT, &g_desk_font_small, colx[1], c->y + 70, false,
+             colw[1], buf, C_TEXT_DIM, C_CARD);
+
+  /* The GPU's time (a v6 GPU with a clock): its blitter's share, the
+   * SDRAM's by client; without, what there is not
+   */
+
+  if (g->hw)
+    {
+      snprintf(buf, sizeof(buf), "%u.%u %%", g->busy / 10, g->busy % 10);
+    }
+  else
+    {
+      strlcpy(buf, "-", sizeof(buf));
+    }
+
+  field_text(m, F_GPU_BUSY, &g_desk_font_uib, colx[2] + colw[2], c->y + 30,
+             true, colw[2] - text_width(&g_desk_font_uib, "GPU busy") - 8,
+             buf, C_TEXT, C_CARD);
+
+  for (i = 0; i < MON_GPU_SDRAM; i++)
+    {
+      v[i] = g->hw ? g->sdram[i] : 0;
+    }
+
+  if (field_changed(m, F_GPU_SDBAR,
+                    hash_bytes(2166136261u, v, sizeof(v)) ^
+                    (uint32_t)colw[2] ^ (g->hw ? 0x8000 : 0)))
+    {
+      field_clear(m, F_GPU_SDBAR, C_CARD);
+      d_stackbar(colx[2], c->y + 54, colw[2], GPU_BAR_H, MON_GPU_SDRAM, v,
+                 sdcol, 1000);
+      field_set(m, F_GPU_SDBAR, colx[2], c->y + 54, colw[2], GPU_BAR_H);
+    }
+
+  if (g->hw)
+    {
+      for (i = 0; i < MON_GPU_SDRAM; i++)
+        {
+          snprintf(keybuf[i], sizeof(keybuf[i]), "%s %u%%", sdname[i],
+                   (g->sdram[i] + 5) / 10);
+          key[i] = keybuf[i];
+        }
+
+      field_key(m, F_GPU_SDKEY, colx[2], c->y + 70, colw[2], MON_GPU_SDRAM,
+                key, sdcol, C_CARD);
+    }
+  else
+    {
+      key[0] = g->version >= 6 ? "SDRAM: the GPU has no clock" :
+                                 "SDRAM: a v6 GPU tells";
+      field_key(m, F_GPU_SDKEY, colx[2], c->y + 70, colw[2], 1, key,
+                &memcol[4], C_CARD);
+    }
+
+  flush();
+}
+
+/****************************************************************************
  * Private Functions: the table
  ****************************************************************************/
 
@@ -2599,6 +3103,7 @@ static void mon_paint(struct desk_win_s *w)
   draw_cpu(m);
   draw_memory(m);
   draw_system(m);
+  draw_gpu(m);
   if (m->proccard.w > 0 && m->proccard.h >= 80)
     {
       draw_controls(m);
@@ -2636,6 +3141,7 @@ static void mon_draw(struct desk_win_s *w)
   card_bg(&m->cpucard, "CPU");
   card_bg(&m->memcard, "MEMORY");
   card_bg(&m->syscard, "SYSTEM");
+  card_bg(&m->gpucard, "GPU");
   card_bg(&m->proccard, "PROCESSES");
   flush();
 
