@@ -136,9 +136,6 @@ enum desk_app_e
   APP_EDITOR,
   APP_VIEWER,
   APP_PAINT,
-#ifdef CONFIG_FPCDESK_MUSIC
-  APP_MUSIC,
-#endif
   APP_MONITOR,
   APP_CALC,
   APP_TETRIS,
@@ -150,6 +147,11 @@ enum desk_app_e
   APP_SETTINGS,
   APP_ABOUT,
   APP_LOG,
+#ifdef CONFIG_FPCDESK_MUSIC
+  APP_MUSIC,                       /* (Last: the icons' places in their
+                                    * window, and so their dither, stay
+                                    * as they were) */
+#endif
   APP_COUNT
 };
 

@@ -343,7 +343,11 @@ static void *snd_player(void *arg)
 
       clock_gettime(CLOCK_REALTIME, &ts);
       ts.tv_sec += SND_IDLE_S;
-      if (sem_timedwait(&g_snd.count, &ts) < 0)
+      if (fd < 0)
+        {
+          sem_wait(&g_snd.count);             /* No channel: just wait */
+        }
+      else if (sem_timedwait(&g_snd.count, &ts) < 0)
         {
           if (errno == ETIMEDOUT && fd >= 0)
             {
