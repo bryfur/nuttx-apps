@@ -6,7 +6,8 @@
  * The desktop's own windows:
  *
  *   - the wallpaper: a window in the desktop layer whose pixels are drawn
- *     once, by the GPU (a gradient and large soft glows);
+ *     once, by the GPU (a gradient and large soft glows); or an image
+ *     (desk_wallimg.c): a layer that blends it from BC1 blocks;
  *   - the top bar: a layer window over a dark translucent backdrop (the
  *     compositor blends it over whatever is below, windows included):
  *     "Activities", the active application, the clock, the load;
@@ -168,11 +169,60 @@ static const struct wallpaper_s g_walls[3] =
   },
 };
 
+#ifdef CONFIG_FPCDESK_WALLPAPER
+/* The window the drawn wallpapers are drawn into, the display's size */
+
+static void wall_pixels_open(void)
+{
+  if (g_desk.wallpaper == NULL)
+    {
+      g_desk.wallpaper = panel_open(PART_WALLPAPER, NXBE_WINDOW_RAMBACKED,
+                                    0, 0, DESK_W, DESK_H);
+      if (g_desk.wallpaper != NULL)
+        {
+          panel_effects(g_desk.wallpaper, NX_LAYER_DESKTOP, 0, 0, 0, 0);
+          nx_setvisibility(g_desk.wallpaper, false);
+        }
+    }
+}
+
+static void wall_pixels_close(void)
+{
+  if (g_desk.wallpaper != NULL)
+    {
+      nx_closewindow(g_desk.wallpaper);
+      g_desk.wallpaper = NULL;
+    }
+}
+#endif
+
+/* The wallpaper chosen (g_desk.wallstyle): one of the drawn ones into its
+ * window, or the image (the drawn one's window goes: the image takes a
+ * quarter of its memory); if there is no image, the first drawn one
+ */
+
 void desk_wallpaper_draw(void)
 {
-  const struct wallpaper_s *w = &g_walls[g_desk.wallstyle % 3];
+  const struct wallpaper_s *w;
   int i;
 
+#ifdef CONFIG_FPCDESK_WALLPAPER
+  if (g_desk.wallstyle == WALL_IMAGE)
+    {
+      wall_pixels_close();
+      if (desk_wallimg_show() >= 0)
+        {
+          return;
+        }
+
+      g_desk.wallstyle = 0;
+    }
+
+  desk_wallimg_hide();
+  wall_pixels_open();
+#endif
+
+  w = &g_walls[g_desk.wallstyle % 3];
   if (g_desk.wallpaper == NULL)
     {
       return;
@@ -202,6 +252,25 @@ void desk_wallpaper_preview(struct desk_ops_s *o, int style, int x, int y,
 {
   const struct wallpaper_s *wp = &g_walls[style % 3];
   int i;
+
+#ifdef CONFIG_FPCDESK_WALLPAPER
+  if (style == WALL_IMAGE)
+    {
+      /* The image: its centre, if it is shown; else a plain swatch */
+
+      if (!desk_wallimg_preview(o, x, y, w, h))
+        {
+          ops_rrect_vgrad(o, x, y, w, h, LUT_R6, 6, RGB(0x3a, 0x3e, 0x4a),
+                          RGB(0x24, 0x26, 0x2c), 255);
+          ops_text_centre(o, &g_desk_font_small, x + w / 2,
+                          y + h / 2 - text_height(&g_desk_font_small) / 2,
+                          desk_wallimg_available() ? "wallpaper.bmp" :
+                          "no .bmp at home", C_TEXT_DIM, 255);
+        }
+
+      return;
+    }
+#endif
 
   ops_vgrad(o, x, y, w, h, wp->top, wp->bottom, 255);
   for (i = 0; i < 5; i++)
@@ -590,18 +659,9 @@ int desk_panels_init(void)
   int n = dock_count();
 
 #ifdef CONFIG_FPCDESK_WALLPAPER
-  /* The wallpaper, at the bottom */
+  /* The wallpaper, at the bottom: drawn, or the image */
 
-  g_desk.wallpaper = panel_open(PART_WALLPAPER, NXBE_WINDOW_RAMBACKED, 0, 0,
-                                DESK_W, DESK_H);
-  if (g_desk.wallpaper == NULL)
-    {
-      return -1;
-    }
-
-  panel_effects(g_desk.wallpaper, NX_LAYER_DESKTOP, 0, 0, 0, 0);
   desk_wallpaper_draw();
-  nx_setvisibility(g_desk.wallpaper, false);
 #else
   /* No wallpaper: the server's background, black */
 
@@ -653,8 +713,11 @@ void desk_panels_relayout(void)
   if (g_desk.wallpaper != NULL)
     {
       nx_setsize(g_desk.wallpaper, &size);
-      desk_wallpaper_draw();
     }
+
+#ifdef CONFIG_FPCDESK_WALLPAPER
+  desk_wallpaper_draw();                   /* The image: encoded again */
+#endif
 
   size.h = TOPBAR_H;
   nx_setsize(g_desk.topbar, &size);
@@ -678,6 +741,9 @@ void desk_panels_relayout(void)
 
 void desk_panels_tick(void)
 {
+#ifdef CONFIG_FPCDESK_WALLPAPER
+  desk_wallimg_tick();
+#endif
   desk_topbar_draw();
   if (g_desk.launcher != NULL)
     {

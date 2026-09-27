@@ -353,6 +353,17 @@ void desk_panels_tick(void);
 bool desk_panels_animate(void);
 void desk_panels_relayout(void);           /* The display's size changed */
 
+/* desk_wallimg.c: the wallpaper from an image file (BC1, a v6 GPU) */
+
+#define WALL_IMAGE        3                /* g_desk.wallstyle: the image */
+
+bool desk_wallimg_available(void);
+int  desk_wallimg_show(void);
+void desk_wallimg_hide(void);
+void desk_wallimg_tick(void);
+bool desk_wallimg_preview(struct desk_ops_s *o, int x, int y, int w, int h);
+extern const struct nx_callback_s g_desk_partcb;
+
 /* desk_apps.c: the applications */
 
 void desk_load_sample(void);

@@ -102,18 +102,22 @@ static void icon_about(struct desk_ops_s *o, int x, int y, int s,
 }
 
 #ifdef CONFIG_FPCDESK_WALLPAPER
-static const char * const g_wallnames[3] =
+static const char * const g_wallnames[4] =
 {
-  "Aurora", "Sunset", "Graphite"
+  "Aurora", "Sunset", "Graphite", "Image"
 };
 #endif
 
-#define SWATCH_W   132
-#define SWATCH_H   88
+#define NWALLS     4               /* The drawn ones, then the image */
+#define SWATCH_W   120
+#define SWATCH_H   80
+#define SWATCH_GAP 14
 #ifdef CONFIG_FPCDESK_WALLPAPER
+#  define SET_W    (40 + NWALLS * SWATCH_W + (NWALLS - 1) * SWATCH_GAP)
 #  define RES_Y    212             /* The resolutions: title, then buttons */
 #  define SET_H    300             /* The window's height */
 #else
+#  define SET_W    468
 #  define RES_Y    16
 #  define SET_H    104
 #endif
@@ -137,12 +141,13 @@ static void settings_draw(struct desk_win_s *w)
 #ifdef CONFIG_FPCDESK_WALLPAPER
   ops_text(&g_o, &g_desk_font_title, 20, y + 16, "Wallpaper", C_TEXT, 255);
   ops_text(&g_o, &g_desk_font_ui, 20, y + 44,
-           "Drawn by the GPU: a gradient and soft glows", C_TEXT_DIM, 255);
+           "Drawn by the GPU, or an image from your home folder",
+           C_TEXT_DIM, 255);
   ops_draw(hwnd, &g_o);
 
-  for (i = 0; i < 3; i++)
+  for (i = 0; i < NWALLS; i++)
     {
-      int x = 20 + i * (SWATCH_W + 16);
+      int x = 20 + i * (SWATCH_W + SWATCH_GAP);
       int sy = y + 78;
 
       if (g_desk.wallstyle == i)
@@ -202,13 +207,17 @@ static void settings_mouse(struct desk_win_s *w, int x, int y,
     }
 
 #ifdef CONFIG_FPCDESK_WALLPAPER
-  for (i = 0; i < 3; i++)
+  for (i = 0; i < NWALLS; i++)
     {
-      int sx = 20 + i * (SWATCH_W + 16);
+      int sx = 20 + i * (SWATCH_W + SWATCH_GAP);
 
       if (x >= sx && x < sx + SWATCH_W && y >= 78 && y < 78 + SWATCH_H + 26 &&
           g_desk.wallstyle != i)
         {
+          /* The image may not be there (or the GPU cannot show it): the
+           * first drawn one then
+           */
+
           g_desk.wallstyle = i;
           desk_wallpaper_draw();
           settings_draw(w);
@@ -236,7 +245,8 @@ static void settings_mouse(struct desk_win_s *w, int x, int y,
 
 static struct desk_win_s *settings_open(void)
 {
-  struct desk_win_s *w = desk_win_open(APP_SETTINGS, "Settings", 468, SET_H);
+  struct desk_win_s *w = desk_win_open(APP_SETTINGS, "Settings", SET_W,
+                                       SET_H);
 
   if (w != NULL)
     {
@@ -249,11 +259,12 @@ static struct desk_win_s *settings_open(void)
 static void about_draw(struct desk_win_s *w)
 {
   static char display[40];
+  static char graphics[40];
   static const char * const rows[][2] =
   {
     { "Processor", "RP2350, 2 x Cortex-M33" },
     { "Memory",    "520 KB SRAM, 8 MB PSRAM" },
-    { "Graphics",  "Tang Nano 20K, GPU protocol v5" },
+    { "Graphics",  graphics },
     { "Display",   display },
     { "System",    "NuttX, NX" },
   };
@@ -262,6 +273,8 @@ static void about_draw(struct desk_win_s *w)
 
   snprintf(display, sizeof(display), "%d x %d, %s", DESK_W, DESK_H,
            g_desk.composited ? "composited" : "not composited");
+  snprintf(graphics, sizeof(graphics), "Tang Nano 20K, GPU protocol v%d",
+           (nx_compositor(g_desk.hnx) & NX_CAP_BC1) != 0 ? 6 : 5);
   int cw = w->csize.w;
   int y = TITLE_H;
   int i;
@@ -388,7 +401,7 @@ int desk_prefs_load(void)
         {
           mode = n;
         }
-      else if (sscanf(line, "wallpaper %d", &n) == 1 && n >= 0 && n < 3)
+      else if (sscanf(line, "wallpaper %d", &n) == 1 && n >= 0 && n <= 3)
         {
           g_desk.wallstyle = n;
         }
