@@ -790,7 +790,14 @@ static void log_update(struct desk_win_s *w, struct log_s *l, int oldrows)
 {
   g_hwnd = (NXWINDOW)w->hwnd;
   ops_reset(g_op);
-  if (l->follow)
+  if (oldrows == 0 && l->nrow > 0)
+    {
+      /* The first lines: "Nothing logged yet" goes with the rest */
+
+      l->top = l->follow ? max_top(l) : 0;
+      list_draw(l);
+    }
+  else if (l->follow)
     {
       scroll_to(l, max_top(l), oldrows);
     }
