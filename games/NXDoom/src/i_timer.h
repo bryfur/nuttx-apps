@@ -65,6 +65,15 @@ int i_get_time_ms(void);
 void i_init_timer(void);
 
 /****************************************************************************
+ * Name: i_skip_time
+ *
+ * Description:
+ *  Leave ms out of the game's clock (it was held).
+ ****************************************************************************/
+
+void i_skip_time(int ms);
+
+/****************************************************************************
  * Name: i_wait_vbl
  *
  * Description:

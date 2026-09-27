@@ -60,6 +60,7 @@
  ****************************************************************************/
 
 struct desk_s g_desk;
+struct desk_prefs_s g_prefs;
 
 static struct
 {
@@ -235,7 +236,9 @@ static void cb_kbd(uint8_t nch, const uint8_t *ch)
   ev.type = EV_KBD;
   while (nch > 0)
     {
-      ev.nch = nch > sizeof(ev.ch) ? sizeof(ev.ch) : nch;
+      /* Whole key events in each (nxkeys.h) */
+
+      ev.nch = nx_key_split(ch, nch, sizeof(ev.ch));
       memcpy(ev.ch, ch, ev.nch);
       q_push(&ev);
       ch  += ev.nch;
@@ -377,9 +380,23 @@ static void *listener(void *arg)
  * Private Functions: windows
  ****************************************************************************/
 
+/* A window's effects: its shadow as the theme has it, scaled by the
+ * setting, its edge
+ */
+
 static void win_effects(struct desk_win_s *w, uint8_t opacity)
 {
+  static const uint8_t scale[4] =
+  {
+    0, 60, 100, 150                          /* SHADOW_*, percent */
+  };
+
   struct nx_effects_s fx;
+  int shadow;
+
+  shadow = (w->active ? g_theme.shadow_active : g_theme.shadow_inactive) *
+           scale[g_prefs.shadow & 3] / 100;
+  shadow = shadow > 255 ? 255 : shadow;
 
   /* A window other than the active one may give up its pixels while it
    * is not seen (minimised, or covered): every application draws all of
@@ -388,12 +405,14 @@ static void win_effects(struct desk_win_s *w, uint8_t opacity)
    */
 
   memset(&fx, 0, sizeof(fx));
-  fx.flags    = NX_FX_ROUND | (w->active ? 0 : NX_FX_PARK);
+  fx.flags    = NX_FX_ROUND | (g_theme.darkedge ? NX_FX_DARKEDGE : 0) |
+                (w->active || g_apps[w->app]->nopark ? 0 : NX_FX_PARK);
   fx.layer    = NX_LAYER_NORMAL;
   fx.opacity  = opacity;
-  fx.shadow   = (w->active ? 170 : 100) * opacity / 255;
+  fx.shadow   = (uint8_t)(shadow * opacity / 255);
   fx.shadowdy = w->active ? 8 : 4;
-  fx.border   = (uint8_t)(34 * opacity / 255);
+  fx.border   = g_prefs.border ? (uint8_t)(g_theme.border * opacity / 255) :
+                                 0;
   nx_seteffects((NXWINDOW)w->hwnd, &fx);
 }
 
@@ -486,6 +505,32 @@ static void win_client_redraw(struct desk_win_s *w)
  * Public Functions: windows
  ****************************************************************************/
 
+/* deskctl freeze: another task sets it (a flat build) */
+
+static volatile time_t g_frozen;
+
+time_t desk_time(void)
+{
+  time_t t = g_frozen;
+
+  return t != 0 ? t : time(NULL);
+}
+
+bool desk_frozen(void)
+{
+  return g_frozen != 0;
+}
+
+void desk_freeze(time_t t)
+{
+  g_frozen = t;
+}
+
+uint32_t desk_seed(void)
+{
+  return g_frozen != 0 ? 0x2545f491u : desk_ms();
+}
+
 uint32_t desk_ms(void)
 {
   struct timespec ts;
@@ -522,8 +567,9 @@ void desk_win_title(struct desk_win_s *w)
   ops_reset(&o);
   ops_fill(&o, 0, 0, width, TITLE_H,
            w->active ? C_TITLE_ACTIVE : C_TITLE_INACTIVE);
-  ops_blend(&o, 0, 0, width, 1, C_WHITE, w->active ? 40 : 20);
-  ops_blend(&o, 0, TITLE_H - 1, width, 1, C_BLACK, 120);
+  ops_blend(&o, 0, 0, width, 1, C_WHITE,
+            THEMED(w->active ? 40 : 20, 120));
+  ops_blend(&o, 0, TITLE_H - 1, width, 1, C_SHADE, THEMED(120, 36));
 
   for (i = 0; i < 3; i++)
     {
@@ -557,7 +603,8 @@ void desk_win_title(struct desk_win_s *w)
       if (w->buttonhover || w->buttonpressed)
         {
           ops_rrect(&o, bx, BUTTON_Y, BUTTON_W, BUTTON_H, LUT_R6, 6,
-                    C_WHITE, w->buttonpressed ? 50 : 26);
+                    C_HILITE, THEMED(w->buttonpressed ? 50 : 26,
+                                     w->buttonpressed ? 30 : 16));
         }
 
       ops_text_centre(&o, &g_desk_font_title, bx + BUTTON_W / 2,
@@ -622,9 +669,9 @@ struct desk_win_s *desk_win_open(int app, const char *title, int cw, int ch)
       return NULL;
     }
 
-  if (cw > DESK_W - 40)
+  if (cw > WORK_W - 40)
     {
-      cw = DESK_W - 40;
+      cw = WORK_W - 40;
     }
 
   if (ch + TITLE_H > WORK_H)
@@ -636,11 +683,16 @@ struct desk_win_s *desk_win_open(int app, const char *title, int cw, int ch)
 
   /* Cascade from the top left of the work area */
 
-  x = 90 + 32 * (g_cascade % 8) + 110 * (g_cascade / 8 % 3);
+  x = WORK_X + 90 + 32 * (g_cascade % 8) + 110 * (g_cascade / 8 % 3);
   y = WORK_Y + 18 + 28 * (g_cascade % 8);
-  if (x + w->size.w > DESK_W - 20)
+  if (x + w->size.w > WORK_X + WORK_W - 20)
     {
-      x = DESK_W - 20 - w->size.w;
+      x = WORK_X + WORK_W - 20 - w->size.w;
+    }
+
+  if (x < WORK_X)
+    {
+      x = WORK_X;
     }
 
   if (y + w->size.h > WORK_Y + WORK_H)
@@ -687,6 +739,26 @@ static void win_show(struct desk_win_s *w)
   desk_win_activate(w);
 }
 
+/* g_desk.wins is in stacking order, the top first: a window raised goes
+ * to its head
+ */
+
+static void win_to_top(struct desk_win_s *w)
+{
+  struct desk_win_s **pp;
+
+  for (pp = &g_desk.wins; *pp != NULL; pp = &(*pp)->next)
+    {
+      if (*pp == w)
+        {
+          *pp         = w->next;
+          w->next     = g_desk.wins;
+          g_desk.wins = w;
+          break;
+        }
+    }
+}
+
 void desk_win_activate(struct desk_win_s *w)
 {
   struct desk_win_s *old = g_desk.active;
@@ -694,6 +766,7 @@ void desk_win_activate(struct desk_win_s *w)
   if (w != NULL && !w->minimized)
     {
       nxtk_raise(w->hwnd);
+      win_to_top(w);
     }
 
   if (old == w)
@@ -732,7 +805,9 @@ void desk_win_activate(struct desk_win_s *w)
   desk_dock_draw();
 }
 
-/* The next window to be active: the top one not minimised */
+/* The next window to be active: the top one not minimised (the list is
+ * in stacking order)
+ */
 
 static struct desk_win_s *win_next_active(struct desk_win_s *not)
 {
@@ -858,9 +933,8 @@ void desk_win_restore(struct desk_win_s *w)
 
 static void win_setmax(struct desk_win_s *w)
 {
-  win_setpos(w, 0, TOPBAR_H);
-  win_setsize(w, DESK_W, DESK_H - TOPBAR_H - TITLE_H - DOCK_H -
-              2 * DOCK_MARGIN);
+  win_setpos(w, WORK_X, TOPBAR_H);
+  win_setsize(w, WORK_W, WORK_Y + WORK_H - TOPBAR_H - TITLE_H);
 }
 
 void desk_win_maximize(struct desk_win_s *w)
@@ -931,21 +1005,13 @@ void desk_launch(int app)
  * it again, the others shrink to fit and stay on it
  */
 
-static void on_mode(void)
+void desk_relayout(void)
 {
-  struct nxgl_size_s size;
   struct desk_win_s *w;
   int cw;
   int ch;
 
-  if (nx_displaysize(g_desk.hnx, &size) < 0 ||
-      (size.w == g_desk.w && size.h == g_desk.h))
-    {
-      return;
-    }
-
-  g_desk.w = size.w;
-  g_desk.h = size.h;
+  desk_layout();
   desk_panels_relayout();
 
   for (w = g_desk.wins; w != NULL; w = w->next)
@@ -961,7 +1027,7 @@ static void on_mode(void)
         }
       else
         {
-          cw = w->csize.w > DESK_W - 40 ? DESK_W - 40 : w->csize.w;
+          cw = w->csize.w > WORK_W - 40 ? WORK_W - 40 : w->csize.w;
           ch = w->csize.h + TITLE_H > WORK_H ? WORK_H - TITLE_H :
                                                w->csize.h;
           if (cw != w->csize.w || ch != w->csize.h)
@@ -974,8 +1040,9 @@ static void on_mode(void)
             }
 
           win_setpos(w,
-                     w->pos.x + w->size.w > DESK_W ?
-                     DESK_W - w->size.w : w->pos.x,
+                     w->pos.x + w->size.w > WORK_X + WORK_W ?
+                     WORK_X + WORK_W - w->size.w :
+                     w->pos.x < WORK_X ? WORK_X : w->pos.x,
                      w->pos.y + w->size.h > WORK_Y + WORK_H ?
                      WORK_Y + WORK_H - w->size.h : w->pos.y);
           if (cw < 0)
@@ -988,14 +1055,105 @@ static void on_mode(void)
       win_client_redraw(w);
     }
 
-  /* Applications that show the mode (Settings) */
+  /* Applications that show the mode (Settings, About) */
 
   for (w = g_desk.wins; w != NULL; w = w->next)
     {
-      if (!w->closing && w->app == APP_SETTINGS &&
+      if (!w->closing &&
+          (w->app == APP_SETTINGS || w->app == APP_ABOUT) &&
           g_apps[w->app]->draw != NULL)
         {
           g_apps[w->app]->draw(w);
+        }
+    }
+}
+
+static void on_mode(void)
+{
+  struct nxgl_size_s size;
+
+  if (nx_displaysize(g_desk.hnx, &size) < 0 ||
+      (size.w == g_desk.w && size.h == g_desk.h))
+    {
+      return;
+    }
+
+  g_desk.w = size.w;
+  g_desk.h = size.h;
+  desk_relayout();
+}
+
+/* A new theme, accent, or window effects: the panels, every title bar,
+ * every window's effects and every window's contents
+ */
+
+void desk_theme_changed(void)
+{
+  struct desk_win_s *w;
+  nxgl_mxpixel_t bg = g_theme.desktop;
+
+  nx_setbgcolor(g_desk.hnx, &bg);
+  desk_panels_relayout();
+
+  for (w = g_desk.wins; w != NULL; w = w->next)
+    {
+      const struct desk_app_s *a = g_apps[w->app];
+
+      if (w->closing)
+        {
+          continue;
+        }
+
+      desk_win_title(w);
+      if (w->fade == 0 && w->fadeout == 0 && !w->minimized)
+        {
+          win_effects(w, 255);
+        }
+
+      if (a->theme != NULL)
+        {
+          a->theme(w);
+        }
+      else if (a->expose != NULL)
+        {
+          a->expose(w, 0, 0, w->csize.w, w->csize.h);
+        }
+      else if (a->draw != NULL)
+        {
+          a->draw(w);
+        }
+    }
+}
+
+void desk_localtime(struct tm *tm)
+{
+  time_t now = desk_time() + (time_t)g_prefs.tzoff * 60;
+
+  gmtime_r(&now, tm);
+}
+
+/* Quit an application: all of its windows close (asking first where they
+ * would)
+ */
+
+void desk_app_quit(int app)
+{
+  struct desk_win_s *w;
+  struct desk_win_s *next;
+
+  for (w = g_desk.wins; w != NULL; w = next)
+    {
+      next = w->next;
+      if (w->app == app && !w->closing)
+        {
+          if (g_apps[app]->canclose == NULL || g_apps[app]->canclose(w))
+            {
+              desk_win_close(w);
+            }
+          else
+            {
+              desk_win_restore(w);
+            }
         }
     }
 }
@@ -1188,6 +1346,21 @@ static void on_mouse(struct desk_event_s *ev)
 {
   struct desk_win_s *w = ev->win;
 
+  /* A press anywhere but on it closes a menu */
+
+  if (g_desk.menu != NULL && ev->part != PART_MENU &&
+      (ev->buttons & ~g_desk.buttons) != 0)
+    {
+      desk_menu_close();
+      if (ev->part != PART_DOCK && ev->part != PART_LAUNCHER)
+        {
+          g_desk.buttons = ev->buttons;         /* Only that */
+          return;
+        }
+    }
+
+  desk_panels_mouse(ev->part, ev->pos.x, ev->pos.y, ev->buttons);
+
   switch (ev->part)
     {
       case PART_TITLE:
@@ -1215,6 +1388,10 @@ static void on_mouse(struct desk_event_s *ev)
 
       case PART_LAUNCHER:
         desk_launcher_mouse(ev->pos.x, ev->pos.y, ev->buttons);
+        break;
+
+      case PART_MENU:
+        desk_menu_mouse(ev->pos.x, ev->pos.y, ev->buttons);
         break;
 
       default:
@@ -1270,22 +1447,72 @@ static void on_mouse(struct desk_event_s *ev)
   g_desk.buttons = ev->buttons;
 }
 
-/* Keys go to the active terminal */
+/* Keys go to a menu (Escape closes it), the launcher while it is open
+ * (its search), else the active window: key events (nxkeys.h) to an
+ * application that takes them, else what they type, as bytes; plain bytes
+ * (deskctl k) as they are
+ */
+
+static void kbd_bytes(struct desk_win_s *w, const uint8_t *ch, int n)
+{
+  if (n <= 0)
+    {
+      return;
+    }
+
+  if (g_desk.menu != NULL && n == 1 && ch[0] == 0x1b)
+    {
+      desk_menu_close();
+    }
+  else if (g_desk.launcher != NULL)
+    {
+      desk_launcher_key(ch, n);
+    }
+  else if (w != NULL && !w->closing && g_apps[w->app]->key != NULL)
+    {
+      g_apps[w->app]->key(w, ch, n);
+    }
+}
 
 static void on_kbd(struct desk_event_s *ev)
 {
   struct desk_win_s *w = g_desk.active;
+  const uint8_t *ch = ev->ch;
+  uint8_t bytes[sizeof(ev->ch) + NX_KEY_MAXBYTES];
+  uint8_t seq[NX_KEY_MAXBYTES];
+  struct nx_key_s key;
+  uint8_t byte;
+  int left = ev->nch;
+  int nb = 0;
+  int item;
 
-  if (g_desk.launcher != NULL && ev->nch > 0 && ev->ch[0] == 0x1b)
+  while ((item = nx_key_next(&ch, &left, &key, &byte)) != NX_KEYITEM_NONE)
     {
-      desk_launcher_toggle();                   /* Escape */
-      return;
+      if (item == NX_KEYITEM_BYTE)
+        {
+          bytes[nb++] = byte;
+          continue;
+        }
+
+      /* A key event: the bytes before it first */
+
+      kbd_bytes(w, bytes, nb);
+      nb = 0;
+
+      if (g_desk.menu == NULL && g_desk.launcher == NULL && w != NULL &&
+          !w->closing && g_apps[w->app]->keyev != NULL)
+        {
+          g_apps[w->app]->keyev(w, &key);
+        }
+      else
+        {
+          /* One call a key: an Escape on its own is the key (ui_keys()) */
+
+          kbd_bytes(w, seq, nx_key_bytes(&key, seq));
+        }
     }
 
-  if (w != NULL && !w->closing && g_apps[w->app]->key != NULL)
-    {
-      g_apps[w->app]->key(w, ev->ch, ev->nch);
-    }
+  kbd_bytes(w, bytes, nb);
 }
 
 static void on_event(struct desk_event_s *ev)
@@ -1378,6 +1605,30 @@ static bool animate(void)
   return more;
 }
 
+/* Application frames: the windows that asked for them (w->frames);
+ * returns whether any did
+ */
+
+static bool frames(void)
+{
+  struct desk_win_s *w;
+  struct desk_win_s *next;
+  bool more = false;
+
+  for (w = g_desk.wins; w != NULL; w = next)
+    {
+      next = w->next;
+      if (w->frames && !w->closing && !w->minimized &&
+          g_apps[w->app]->frame != NULL)
+        {
+          g_apps[w->app]->frame(w);
+          more |= w->frames;
+        }
+    }
+
+  return more;
+}
+
 static void tick(void)
 {
   struct desk_win_s *w;
@@ -1419,12 +1670,15 @@ int main(int argc, FAR char *argv[])
   pthread_attr_t attr;
   pthread_t thread;
   uint32_t nexttick;
+  uint32_t nextframe;
   bool anim = true;
+  bool framing = false;
   int caps;
   int ret;
 
   memset(&g_desk, 0, sizeof(g_desk));
   g_desk.dockhover = -1;
+  g_desk.dockout   = -1;                  /* Not placed yet */
   pthread_mutex_init(&g_q.lock, NULL);
   sem_init(&g_q.count, 0, 0);
 
@@ -1451,6 +1705,12 @@ int main(int argc, FAR char *argv[])
       fprintf(stderr, "desk: not connected: %d\n", errno);
       return EXIT_FAILURE;
     }
+
+  /* Key events, not only bytes: the applications that want them get
+   * presses and releases (games), the others what the keys type
+   */
+
+  nx_kbdmode(g_desk.hnx, NX_KBDMODE_KEYS);
 
   pthread_attr_init(&attr);
   pthread_attr_setstacksize(&attr, CONFIG_FPCDESK_LISTENER_STACKSIZE);
@@ -1488,6 +1748,15 @@ int main(int argc, FAR char *argv[])
                       "see the boot log): the desktop will look plain\n");
     }
 
+  desk_theme_set(g_prefs.theme, g_prefs.accent);
+  {
+    nxgl_mxpixel_t bg = g_theme.desktop;
+
+    nx_setbgcolor(g_desk.hnx, &bg);
+  }
+
+  desk_input_apply();
+  desk_layout();
   desk_luts_init();
   if (desk_atlas_init() < 0)
     {
@@ -1500,10 +1769,16 @@ int main(int argc, FAR char *argv[])
 
   desk_launch(APP_TERMINAL);
 
-  nexttick = desk_ms() + 1000;
+  nexttick  = desk_ms() + 1000;
+  nextframe = desk_ms();
   for (; ; )
     {
       int32_t wait = anim ? FRAME_MS : (int32_t)(nexttick - desk_ms());
+
+      if (framing && (int32_t)(nextframe - desk_ms()) < wait)
+        {
+          wait = (int32_t)(nextframe - desk_ms());
+        }
 
       if (wait < 1)
         {
@@ -1522,6 +1797,30 @@ int main(int argc, FAR char *argv[])
       q_wakes();
 
       anim = animate();
+
+      /* Applications' frames, at most one a FRAME_MS (events do not make
+       * them come sooner)
+       */
+
+      if ((int32_t)(desk_ms() - nextframe) >= 0)
+        {
+          nextframe += FRAME_MS;
+          if ((int32_t)(desk_ms() - nextframe) >= 0)
+            {
+              nextframe = desk_ms() + FRAME_MS;
+            }
+
+          framing = frames();
+        }
+      else
+        {
+          struct desk_win_s *w;
+
+          for (w = g_desk.wins; w != NULL && !framing; w = w->next)
+            {
+              framing = w->frames && !w->closing && !w->minimized;
+            }
+        }
 
       if ((int32_t)(desk_ms() - nexttick) >= 0)
         {

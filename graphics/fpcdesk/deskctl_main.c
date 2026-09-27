@@ -10,10 +10,18 @@
  *
  *   deskctl m X Y [BUTTONS]       move the pointer (buttons: 1 left, 2
  *                                 middle, 4 right; default none)
- *   deskctl c X Y                 click there
+ *   deskctl c X Y [N]             click there (N times: 2 a double click)
  *   deskctl d X0 Y0 X1 Y1 [N]     drag with the left button, in N steps
  *   deskctl k TEXT                type (\n Enter, \t Tab, \e Escape,
  *                                 \b Backspace, \xHH any byte)
+ *   deskctl key EVENT...          key events (nuttx/nx/nxkeys.h), as a
+ *                                 keyboard sends them: +NAME press, -NAME
+ *                                 release, NAME both, @MS wait MS ms.
+ *                                 NAME: a character (a, 1, -), space,
+ *                                 enter, esc, tab, bs, up, down, left,
+ *                                 right, home, end, pgup, pgdn, ins, del,
+ *                                 f1-f12, shift, ctrl, alt, gui (left),
+ *                                 rshift, rctrl, ralt, rgui
  *   deskctl shot FILE             the screen as a PPM file (simulator)
  *   deskctl test                  BLEND on the GPU, checked pixel by pixel
  *   deskctl stats [clear|N]       GPU commands and pixels since the last
@@ -22,6 +30,21 @@
  *   deskctl mode [N]              the display mode (N: change it)
  *   deskctl redraw                composite all of the display again (a
  *                                 check: the result must not change)
+ *   deskctl freeze [SECONDS|off]  stop the desktop's clock at SECONDS
+ *                                 since 1970 (default 2026-01-02 09:41
+ *                                 UTC), the cursors' blinking and the
+ *                                 games' clocks, and seed the games the
+ *                                 same way every time, for screenshots
+ *                                 that do not depend on when they are
+ *                                 taken; off: let them run
+ *   deskctl dock APP [r]          click APP's icon in the dock (r: with
+ *                                 the right button), wherever the dock
+ *                                 has it; APP: a part of its name
+ *   deskctl wins                  the windows, the top one first: the
+ *                                 application, position, size, state
+ *   deskctl codec on|off          parked windows kept compressed (a v6
+ *                                 GPU), or dropped and drawn again by
+ *                                 their clients as with a v5 GPU
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -32,10 +55,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
+
+#include <strings.h>
 
 #include <nuttx/nx/nx.h>
 #include <nuttx/nx/nxcompose.h>
+#include <nuttx/nx/nxkeys.h>
+
+#include "desk.h"
 
 /* The GPU's cursor and the simulator's screenshot are kernel functions of
  * the board (a flat build)
@@ -54,6 +83,7 @@ struct fpc_gpu_stats_s
 };
 
 void fpc_gpu_stats(struct fpc_gpu_stats_s *st, bool clear);
+void fpc_nxaccel_codec(bool on);
 #endif
 #ifdef CONFIG_ARCH_SIM
 int fpc_simgpu_screenshot(FAR const char *path);
@@ -163,6 +193,164 @@ static void deskctl_type(NXHANDLE h, FAR const char *text)
     }
 }
 
+/* Key events: names of the keys that type no character */
+
+static const struct
+{
+  const char *name;
+  uint8_t code;
+  uint8_t ch;
+  uint8_t mod;
+} g_keynames[] =
+{
+  { "space",  ' ',                              ' ',  0 },
+  { "enter",  NX_KEY_ENTER,                     '\n', 0 },
+  { "esc",    NX_KEY_ESCAPE,                    0x1b, 0 },
+  { "tab",    NX_KEY_TAB,                       '\t', 0 },
+  { "bs",     NX_KEY_BACKSPACE,                 0x7f, 0 },
+  { "up",     NX_KEY_SPECIAL(KEYCODE_UP),       0,    0 },
+  { "down",   NX_KEY_SPECIAL(KEYCODE_DOWN),     0,    0 },
+  { "left",   NX_KEY_SPECIAL(KEYCODE_LEFT),     0,    0 },
+  { "right",  NX_KEY_SPECIAL(KEYCODE_RIGHT),    0,    0 },
+  { "home",   NX_KEY_SPECIAL(KEYCODE_HOME),     0,    0 },
+  { "end",    NX_KEY_SPECIAL(KEYCODE_END),      0,    0 },
+  { "pgup",   NX_KEY_SPECIAL(KEYCODE_PAGEUP),   0,    0 },
+  { "pgdn",   NX_KEY_SPECIAL(KEYCODE_PAGEDOWN), 0,    0 },
+  { "ins",    NX_KEY_SPECIAL(KEYCODE_INSERT),   0,    0 },
+  { "del",    NX_KEY_SPECIAL(KEYCODE_FWDDEL),   0,    0 },
+  { "pause",  NX_KEY_SPECIAL(KEYCODE_PAUSE),    0,    0 },
+  { "shift",  NX_KEY_SPECIAL(KEYCODE_LSHIFT),   0,    NX_KEY_SHIFT },
+  { "rshift", NX_KEY_SPECIAL(KEYCODE_RSHIFT),   0,    NX_KEY_SHIFT },
+  { "ctrl",   NX_KEY_SPECIAL(KEYCODE_LCTRL),    0,    NX_KEY_CTRL },
+  { "rctrl",  NX_KEY_SPECIAL(KEYCODE_RCTRL),    0,    NX_KEY_CTRL },
+  { "alt",    NX_KEY_SPECIAL(KEYCODE_LALT),     0,    NX_KEY_ALT },
+  { "ralt",   NX_KEY_SPECIAL(KEYCODE_RALT),     0,    NX_KEY_ALT },
+  { "gui",    NX_KEY_SPECIAL(KEYCODE_LGUI),     0,    NX_KEY_GUI },
+  { "rgui",   NX_KEY_SPECIAL(KEYCODE_RGUI),     0,    NX_KEY_GUI },
+};
+
+static void deskctl_keyev(NXHANDLE h, uint8_t *mods, uint8_t code,
+                          uint8_t ch, uint8_t mod, bool release)
+{
+  uint8_t rec[NX_KEY_SIZE];
+  struct nx_key_s key;
+
+  *mods = release ? *mods & ~mod : *mods | mod;
+
+  /* What the key types with the modifiers held, as a US keyboard */
+
+  if (!release && ch >= 'a' && ch <= 'z')
+    {
+      if (*mods & NX_KEY_CTRL)
+        {
+          ch &= 0x1f;
+        }
+      else if (*mods & NX_KEY_SHIFT)
+        {
+          ch -= 'a' - 'A';
+        }
+    }
+
+  key.flags = *mods | (release ? NX_KEY_RELEASE : 0);
+  key.code  = code;
+  key.ch    = release ? 0 : ch;
+  nx_key_encode(rec, &key);
+  nx_kbdin(h, NX_KEY_SIZE, rec);
+}
+
+static int deskctl_key(NXHANDLE h, uint8_t *mods, FAR const char *a)
+{
+  bool press = true;
+  bool release = true;
+  uint8_t code = 0;
+  uint8_t ch = 0;
+  uint8_t mod = 0;
+  size_t k;
+
+  if (a[0] == '@')
+    {
+      usleep(atoi(a + 1) * 1000);
+      return 0;
+    }
+
+  if ((a[0] == '+' || a[0] == '-') && a[1] != '\0')
+    {
+      press   = a[0] == '+';
+      release = a[0] == '-';
+      a++;
+    }
+
+  if (a[1] == '\0')
+    {
+      code = nx_key_code((uint8_t)a[0], false);
+      ch   = (uint8_t)a[0];
+    }
+  else if (a[0] == 'f' && atoi(a + 1) >= 1 && atoi(a + 1) <= 12)
+    {
+      code = NX_KEY_SPECIAL(KEYCODE_F1 + atoi(a + 1) - 1);
+    }
+  else
+    {
+      for (k = 0; k < sizeof(g_keynames) / sizeof(g_keynames[0]); k++)
+        {
+          if (strcmp(a, g_keynames[k].name) == 0)
+            {
+              code = g_keynames[k].code;
+              ch   = g_keynames[k].ch;
+              mod  = g_keynames[k].mod;
+              break;
+            }
+        }
+
+      if (code == 0)
+        {
+          fprintf(stderr, "deskctl: no key %s\n", a);
+          return -1;
+        }
+    }
+
+  if (press)
+    {
+      deskctl_keyev(h, mods, code, ch, mod, false);
+    }
+
+  if (press && release)
+    {
+      usleep(30000);
+    }
+
+  if (release)
+    {
+      deskctl_keyev(h, mods, code, ch, mod, true);
+    }
+
+  return 0;
+}
+
+/* Events are arguments, or words of one (NSH takes few arguments) */
+
+static int deskctl_keys(NXHANDLE h, int argc, FAR char *argv[])
+{
+  uint8_t mods = 0;
+  FAR char *save;
+  FAR char *a;
+  int i;
+
+  for (i = 0; i < argc; i++)
+    {
+      for (a = strtok_r(argv[i], " ", &save); a != NULL;
+           a = strtok_r(NULL, " ", &save))
+        {
+          if (deskctl_key(h, &mods, a) < 0)
+            {
+              return -1;
+            }
+        }
+    }
+
+  return 0;
+}
+
 #ifdef CONFIG_FPC_GPU
 /* GPU time per pixel, ns, from docs/desktop.md (500 x 350: FILL 1.70 ms,
  * COPY 3.34 ms, BLEND of a colour 3.5 ms, of an image 4.75 ms); PUT and
@@ -236,11 +424,56 @@ static void deskctl_stats(FAR const char *arg)
 }
 #endif
 
+/* The desktop's state is read from here, another task of the flat build,
+ * without a lock: for tests, once the desktop has settled
+ */
+
+static int deskctl_app(FAR const char *name)
+{
+  int i;
+
+  for (i = 0; i < APP_COUNT; i++)
+    {
+      FAR const char *n = g_apps[i]->name;
+      size_t len = strlen(name);
+
+      for (; *n != '\0'; n++)
+        {
+          if (strncasecmp(n, name, len) == 0)
+            {
+              return i;
+            }
+        }
+    }
+
+  return -1;
+}
+
+static void deskctl_wins(void)
+{
+  FAR struct desk_win_s *w;
+
+  for (w = g_desk.wins; w != NULL; w = w->next)
+    {
+      if (w->closing)
+        {
+          continue;
+        }
+
+      printf("%-14s %4d,%-4d %4dx%-4d %s%s%s\"%s\"\n", g_apps[w->app]->name,
+             w->pos.x, w->pos.y, w->size.w, w->size.h,
+             w->active ? "active " : "", w->minimized ? "minimized " : "",
+             w->maximized ? "maximized " : "", w->title);
+    }
+}
+
 static void deskctl_usage(void)
 {
   fprintf(stderr,
           "usage: deskctl m X Y [BUTTONS] | c X Y | d X0 Y0 X1 Y1 [N] |\n"
-          "               k TEXT | shot FILE | stats [clear|N] | mode [N]\n");
+          "               k TEXT | key [+|-]NAME|@MS... | shot FILE |\n"
+          "               stats [clear|N] | mode [N] | redraw | test |\n"
+          "               freeze [SECONDS|off] | dock APP [r] | wins\n");
 }
 
 /****************************************************************************
@@ -269,7 +502,32 @@ int main(int argc, FAR char *argv[])
       deskctl_stats(argc >= 3 ? argv[2] : NULL);
       return EXIT_SUCCESS;
     }
+
+  if (strcmp(argv[1], "codec") == 0 && argc >= 3)
+    {
+      fpc_nxaccel_codec(strcmp(argv[2], "off") != 0);
+      return EXIT_SUCCESS;
+    }
 #endif
+
+  if (strcmp(argv[1], "freeze") == 0)
+    {
+      time_t t = 1767346860;         /* Fri 2026-01-02 09:41 UTC */
+
+      if (argc >= 3)
+        {
+          t = strcmp(argv[2], "off") == 0 ? 0 : (time_t)atoll(argv[2]);
+        }
+
+      desk_freeze(t);
+      return EXIT_SUCCESS;
+    }
+
+  if (strcmp(argv[1], "wins") == 0)
+    {
+      deskctl_wins();
+      return EXIT_SUCCESS;
+    }
 
   if (strcmp(argv[1], "shot") == 0)
     {
@@ -302,12 +560,16 @@ int main(int argc, FAR char *argv[])
     {
       int x = atoi(argv[2]);
       int y = atoi(argv[3]);
+      int n = argc >= 5 ? atoi(argv[4]) : 1;
 
       deskctl_pointer(h, x, y, 0);
-      usleep(30000);
-      deskctl_pointer(h, x, y, NX_MOUSE_LEFTBUTTON);
-      usleep(30000);
-      deskctl_pointer(h, x, y, 0);
+      while (n-- > 0)
+        {
+          usleep(30000);
+          deskctl_pointer(h, x, y, NX_MOUSE_LEFTBUTTON);
+          usleep(30000);
+          deskctl_pointer(h, x, y, 0);
+        }
     }
   else if (strcmp(argv[1], "d") == 0 && argc >= 6)
     {
@@ -359,22 +621,51 @@ int main(int argc, FAR char *argv[])
                  size.w, size.h);
         }
     }
+  else if (strcmp(argv[1], "dock") == 0 && argc >= 3)
+    {
+      int app = deskctl_app(argv[2]);
+      int button = argc >= 4 && argv[3][0] == 'r' ? NX_MOUSE_RIGHTBUTTON :
+                                                    NX_MOUSE_LEFTBUTTON;
+      int x;
+      int y;
+
+      if (app < 0 || !desk_dock_where(app, &x, &y))
+        {
+          fprintf(stderr, "deskctl: %s is not in the dock\n", argv[2]);
+          ret = EXIT_FAILURE;
+        }
+      else
+        {
+          deskctl_pointer(h, x, y, 0);
+          usleep(30000);
+          deskctl_pointer(h, x, y, button);
+          usleep(30000);
+          deskctl_pointer(h, x, y, 0);
+        }
+    }
   else if (strcmp(argv[1], "redraw") == 0)
     {
       /* A new background colour damages all of the display (the
-       * wallpaper hides it); then back to black
+       * wallpaper hides it); then back to the theme's
        */
 
-      nxgl_mxpixel_t c = 0x0841;
+      nxgl_mxpixel_t c = g_theme.desktop ^ 0x0841;
 
       nx_setbgcolor(h, &c);
       usleep(50000);
-      c = 0;
+      c = g_theme.desktop;
       nx_setbgcolor(h, &c);
     }
   else if (strcmp(argv[1], "k") == 0 && argc >= 3)
     {
       deskctl_type(h, argv[2]);
+    }
+  else if (strcmp(argv[1], "key") == 0 && argc >= 3)
+    {
+      if (deskctl_keys(h, argc - 2, &argv[2]) < 0)
+        {
+          ret = EXIT_FAILURE;
+        }
     }
   else
     {

@@ -110,21 +110,21 @@
 
 /* Colours: the desktop's, and a few of its own */
 
-#define C_GRAPH          RGB(0x24, 0x24, 0x28)
-#define C_GRID           RGB(0x36, 0x36, 0x3b)
-#define C_TRACK          RGB(0x46, 0x46, 0x4c)
-#define C_ROWALT         RGB(0x34, 0x34, 0x39)
-#define C_HEADER         RGB(0x3c, 0x3c, 0x42)
-#define C_SELECT         RGB(0x17, 0x4f, 0x8f)
-#define C_SELDIM         RGB(0xb8, 0xcc, 0xe6)
-#define C_CHIP           RGB(0x44, 0x44, 0x4a)
-#define C_CHIPON         RGB(0x1c, 0x44, 0x78)
-#define C_FAINT          RGB(0x68, 0x68, 0x6e)
-#define C_GREEN          RGB(0x30, 0xd1, 0x58)
-#define C_AMBER          RGB(0xff, 0x9f, 0x0a)
-#define C_RED            RGB(0xff, 0x45, 0x3a)
-#define C_VIOLET         RGB(0xbf, 0x5a, 0xf2)
-#define C_DANGER         RGB(0xc4, 0x2b, 0x22)
+#define C_GRAPH          THEMED(RGB(0x24, 0x24, 0x28), RGB(0xf4, 0xf4, 0xf7))
+#define C_GRID           THEMED(RGB(0x36, 0x36, 0x3b), RGB(0xe0, 0xe0, 0xe5))
+#define C_TRACK          THEMED(RGB(0x46, 0x46, 0x4c), RGB(0xdd, 0xdd, 0xe2))
+#define C_ROWALT         THEMED(RGB(0x34, 0x34, 0x39), RGB(0xf5, 0xf5, 0xf8))
+#define C_HEADER         THEMED(RGB(0x3c, 0x3c, 0x42), RGB(0xec, 0xec, 0xf0))
+#define C_SELECT         (g_theme.selection)
+#define C_SELDIM         THEMED(RGB(0xb8, 0xcc, 0xe6), g_theme.text_dim)
+#define C_CHIP           THEMED(RGB(0x44, 0x44, 0x4a), RGB(0xe6, 0xe6, 0xea))
+#define C_CHIPON         colour_mix(C_CARD, C_ACCENT, THEMED(90, 50))
+#define C_FAINT          (g_theme.text_faint)
+#define C_GREEN          (g_theme.success)
+#define C_AMBER          (g_theme.warning)
+#define C_RED            THEMED(RGB(0xff, 0x45, 0x3a), RGB(0xe0, 0x35, 0x2b))
+#define C_VIOLET         THEMED(RGB(0xbf, 0x5a, 0xf2), RGB(0x9b, 0x4a, 0xd0))
+#define C_DANGER         THEMED(RGB(0xc4, 0x2b, 0x22), RGB(0xe0, 0x3c, 0x34))
 
 /* The table's columns */
 
@@ -425,10 +425,25 @@ static struct
 } g_stats;
 #endif
 
-static const uint16_t g_cpucolours[MON_MAXCPUS] =
+/* A CPU's colour in the graphs (the first is the accent's) */
+
+static uint16_t cpu_colour(int i)
 {
-  C_ACCENT, C_AMBER, C_GREEN, RGB(0xff, 0x37, 0x5f)
-};
+  switch (i)
+    {
+      case 0:
+        return C_ACCENT;
+
+      case 1:
+        return C_ACCENT == C_AMBER ? C_VIOLET : C_AMBER;
+
+      case 2:
+        return C_GREEN;
+
+      default:
+        return RGB(0xff, 0x37, 0x5f);
+    }
+}
 
 static const uint8_t g_intervals[] =
 {
@@ -790,23 +805,42 @@ static void mon_readloads(struct mon_s *m)
     }
 }
 
-/* /proc/gpu: the numbers after a line's label, as sscanf() takes them */
+/* /proc/gpu: the numbers after a line's label, in order ("12.3" is 12 and
+ * 3), at most max of them; how many (not sscanf(): its stack is large)
+ */
 
-static int gpu_scan(const char *buf, const char *key, const char *fmt,
-                    void *a, void *b, void *c)
+static int gpu_nums(const char *buf, const char *key, unsigned long *out,
+                    int max)
 {
   const char *v = mon_field(buf, key);
+  int n = 0;
 
-  return v != NULL ? sscanf(v, fmt, a, b, c) : 0;
+  while (v != NULL && *v != '\0' && *v != '\n' && n < max)
+    {
+      if (isdigit((unsigned char)*v))
+        {
+          unsigned long x = 0;
+
+          while (isdigit((unsigned char)*v))
+            {
+              x = x * 10 + (*v++ - '0');
+            }
+
+          out[n++] = x;
+        }
+      else
+        {
+          v++;
+        }
+    }
+
+  return n;
 }
 
 static void mon_readgpu(struct mon_gpu_s *g)
 {
   static char buf[GPU_BUFSIZE];
-  unsigned long n[3];
-  unsigned int d[3];
-  unsigned int e[10];
-  const char *v;
+  unsigned long n[12];
   ssize_t total = 0;
   ssize_t r;
   int fd;
@@ -829,97 +863,94 @@ static void mon_readgpu(struct mon_gpu_s *g)
   buf[total] = '\0';
   g->have = true;
 
-  if (gpu_scan(buf, "Protocol:", "%lu", &n[0], NULL, NULL) == 1)
+  if (gpu_nums(buf, "Protocol:", n, 1) == 1)
     {
       g->version = (uint8_t)n[0];
     }
 
-  gpu_scan(buf, "Space:", "%*u x %*u = %lu", &n[0], NULL, NULL);
-  g->space = n[0];
-  if (gpu_scan(buf, "Display:", "%lu", &n[0], NULL, NULL) == 1)
+  if (gpu_nums(buf, "Space:", n, 3) == 3)
+    {
+      g->space = n[2];
+    }
+
+  if (gpu_nums(buf, "Display:", n, 1) == 1)
     {
       g->mem[0] = n[0];
     }
 
-  if (gpu_scan(buf, "Buffers:", "%*u %lu", &n[0], NULL, NULL) == 1)
+  if (gpu_nums(buf, "Buffers:", n, 2) == 2)
     {
-      g->mem[0] += n[0];
+      g->mem[0] += n[1];
     }
 
-  if (gpu_scan(buf, "Windows:", "%*u %lu", &n[0], NULL, NULL) == 1)
+  if (gpu_nums(buf, "Windows:", n, 2) == 2)
     {
-      g->mem[1] = n[0];
+      g->mem[1] = n[1];
     }
 
-  if (gpu_scan(buf, "Images:", "%*u %lu", &n[0], NULL, NULL) == 1)
+  if (gpu_nums(buf, "Images:", n, 2) == 2)
     {
-      g->mem[2] = n[0];
+      g->mem[2] = n[1];
     }
 
-  if (gpu_scan(buf, "Parked:", "%lu %lu px in %lu", &n[0], &n[1],
-               &n[2]) == 3)
+  if (gpu_nums(buf, "Parked:", n, 3) == 3)
     {
       g->nparked  = n[0];
       g->parkedpx = n[1];
       g->mem[3]   = n[2];
     }
 
-  if (gpu_scan(buf, "Released:", "%lu", &n[0], NULL, NULL) == 1)
+  if (gpu_nums(buf, "Released:", n, 1) == 1)
     {
       g->nlost = n[0];
     }
 
-  if (gpu_scan(buf, "Other:", "%*u %lu", &n[0], NULL, NULL) == 1)
+  if (gpu_nums(buf, "Other:", n, 2) == 2)
     {
-      g->mem[4] = n[0];
+      g->mem[4] = n[1];
     }
 
-  if (gpu_scan(buf, "Free:", "%lu px largest %u x %u", &n[0], &d[0],
-               &d[1]) == 3)
+  if (gpu_nums(buf, "Free:", n, 3) == 3)
     {
-      g->mem[5]  = n[0];
-      g->largew  = d[0];
-      g->largeh  = d[1];
+      g->mem[5] = n[0];
+      g->largew = n[1];
+      g->largeh = n[2];
     }
 
-  if (gpu_scan(buf, "In memory:", "%lu", &n[0], NULL, NULL) == 1)
+  if (gpu_nums(buf, "In memory:", n, 1) == 1)
     {
       g->nmem = n[0];
     }
 
-  if (gpu_scan(buf, "Frames:", "%u.%u", &d[0], &d[1], NULL) == 2)
+  if (gpu_nums(buf, "Frames:", n, 2) == 2)
     {
-      g->fps = d[0] * 10 + d[1];
+      g->fps = n[0] * 10 + n[1];
     }
 
-  if (gpu_scan(buf, "Link:", "%lu bytes/s %u.%u", &n[0], &d[0],
-               &d[1]) == 3)
+  if (gpu_nums(buf, "Link:", n, 3) == 3)
     {
       g->link = n[0];
-      g->wire = d[0] * 100 + d[1];
+      g->wire = n[1] * 100 + n[2];                  /* 0.01 % */
     }
 
-  if (gpu_scan(buf, "READY wait:", "%u.%u", &d[0], &d[1], NULL) == 2)
+  if (gpu_nums(buf, "READY wait:", n, 2) == 2)
     {
-      g->wait = d[0] * 10 + d[1];
+      g->wait = n[0] * 10 + n[1];
     }
 
-  /* A v6 GPU with a clock: how busy it is, the SDRAM's time by client */
+  /* A v6 GPU with a clock: how busy it is, the SDRAM's time by client
+   * ("SDRAM: t.t % scanout a.a blitter b.b DMA c.c CPU d.d codec e.e")
+   */
 
-  v = mon_field(buf, "GPU:");
-  if (v != NULL && sscanf(v, "%*u kHz busy %u.%u", &d[0], &d[1]) == 2)
+  if (gpu_nums(buf, "GPU:", n, 3) == 3)
     {
       g->hw   = true;
-      g->busy = d[0] * 10 + d[1];
-      v = mon_field(buf, "SDRAM:");
-      if (v != NULL &&
-          sscanf(v, "%*u.%*u %% scanout %u.%u blitter %u.%u DMA %u.%u "
-                 "CPU %u.%u codec %u.%u", &e[0], &e[1], &e[2], &e[3],
-                 &e[4], &e[5], &e[6], &e[7], &e[8], &e[9]) == 10)
+      g->busy = n[1] * 10 + n[2];
+      if (gpu_nums(buf, "SDRAM:", n, 12) == 12)
         {
           for (i = 0; i < MON_GPU_SDRAM; i++)
             {
-              g->sdram[i] = e[2 * i] * 10 + e[2 * i + 1];
+              g->sdram[i] = n[2 + 2 * i] * 10 + n[3 + 2 * i];
             }
         }
     }
@@ -1904,7 +1935,7 @@ static void graph_plot(struct mon_s *m, struct mon_graph_s *g, bool cpu,
     {
       for (s = nseries - 1; s >= 0; s--)
         {
-          uint16_t c = cpu ? g_cpucolours[s] : C_VIOLET;
+          uint16_t c = cpu ? cpu_colour(s) : C_VIOLET;
           int runx = -1;
           int runa = 0;
           int runb = 0;
@@ -2062,7 +2093,7 @@ static void draw_cpu(struct mon_s *m)
       if (m->force)
         {
           need(1);
-          ops_disc(&g_o, cx + 4, cy + 9, LUT_R3, 3, g_cpucolours[i], 255);
+          ops_disc(&g_o, cx + 4, cy + 9, LUT_R3, 3, cpu_colour(i), 255);
           snprintf(buf, sizeof(buf), "CPU%d", i);
           d_text(&g_desk_font_ui, cx + 13, cy, buf, C_TEXT_DIM);
         }
@@ -2349,12 +2380,12 @@ static void fmt_px(char *buf, size_t size, uint32_t px)
 
 static void draw_gpu(struct mon_s *m)
 {
-  static const uint16_t memcol[MON_GPU_MEMS] =
+  const uint16_t memcol[MON_GPU_MEMS] =                /* The theme's */
   {
     C_ACCENT, C_VIOLET, RGB(0x22, 0xd0, 0xb0), C_AMBER, C_FAINT, C_TRACK
   };
 
-  static const uint16_t sdcol[MON_GPU_SDRAM] =
+  const uint16_t sdcol[MON_GPU_SDRAM] =
   {
     C_ACCENT, C_VIOLET, C_GREEN, C_AMBER, RGB(0x22, 0xd0, 0xb0)
   };
@@ -2366,8 +2397,9 @@ static void draw_gpu(struct mon_s *m)
 
   const struct mon_gpu_s *g = &m->snap.gpu;
   const struct mon_rect_s *c = &m->gpucard;
+  static char keybuf[MON_GPU_MEMS][64];   /* Static: the desktop's stack is
+                                          * small */
   const char *key[MON_GPU_MEMS];
-  char keybuf[MON_GPU_MEMS][64];
   uint16_t kc[MON_GPU_MEMS];
   char buf[64];
   char b1[16];

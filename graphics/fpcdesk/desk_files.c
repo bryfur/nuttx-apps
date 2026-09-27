@@ -32,6 +32,7 @@
 #include <sys/stat.h>
 
 #include "desk_ui.h"
+#include "desk_image.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -53,12 +54,11 @@
 #define HIST_N         16
 #define DBLCLICK_MS    400
 
-#define C_SIDE         RGB(0x2a, 0x2a, 0x2e)
-#define C_PATHBAR      RGB(0x1c, 0x1c, 0x20)
+#define C_SIDE         (g_theme.sidebar)
+#define C_PATHBAR      THEMED(RGB(0x1c, 0x1c, 0x20), RGB(0xe6, 0xe6, 0xea))
 #define C_FOLDER       RGB(0x5a, 0xa8, 0xf0)
-#define C_PAGE         RGB(0xdc, 0xdc, 0xe2)
+#define C_PAGE         THEMED(RGB(0xdc, 0xdc, 0xe2), RGB(0xc8, 0xcc, 0xd4))
 #define C_EXEC         RGB(0x3d, 0xc0, 0x70)
-#define C_THUMB        RGB(0x80, 0x80, 0x88)
 
 /* Kinds of entry */
 
@@ -66,6 +66,7 @@
 #define K_FILE         1
 #define K_TEXT         2
 #define K_EXEC         3
+#define K_IMAGE        4
 
 /* Sort columns */
 
@@ -283,6 +284,11 @@ static uint8_t kind_of(const char *name, const struct stat *st)
       (ext != NULL && in_list(ext + 1, g_textext, true)))
     {
       return K_TEXT;
+    }
+
+  if (img_is_image(name))
+    {
+      return K_IMAGE;
     }
 
   if ((ext != NULL && in_list(ext + 1, g_execext, true)) ||
@@ -655,6 +661,18 @@ static void icon_page(struct desk_ops_s *o, int x, int y, int kind)
 {
   int i;
 
+  if (kind == K_IMAGE)
+    {
+      /* A picture: a frame, a sky, a hill */
+
+      ops_rrect(o, x, y + 2, 18, 14, LUT_R3, 3, C_PAGE, 255);
+      ops_fill(o, x + 2, y + 4, 14, 10, RGB(0x6c, 0xb4, 0xf0));
+      ops_fill(o, x + 11, y + 6, 2, 2, RGB(0xff, 0xd8, 0x50));
+      ui_triangle(o, x + 7, y + 11, 4, 0, RGB(0x34, 0xa0, 0x50), 255);
+      ops_fill(o, x + 2, y + 13, 14, 1, RGB(0x34, 0xa0, 0x50));
+      return;
+    }
+
   if (kind == K_EXEC)
     {
       ops_rrect(o, x, y + 1, 18, 16, LUT_R3, 3, C_EXEC, 255);
@@ -738,11 +756,12 @@ static void fmt_date(time_t t, char *buf, int n)
 {
   struct tm tm;
   struct tm now;
-  time_t tn = time(NULL);
+  time_t tz = (time_t)g_prefs.tzoff * 60;         /* The desktop's zone */
+  time_t tn = desk_time() + tz;
 
   buf[0] = '\0';
-  if (t <= 0 || localtime_r(&t, &tm) == NULL ||
-      localtime_r(&tn, &now) == NULL)
+  t += tz;
+  if (t <= tz || gmtime_r(&t, &tm) == NULL || gmtime_r(&tn, &now) == NULL)
     {
       return;
     }
@@ -796,8 +815,9 @@ static void row_draw(struct desk_win_s *w, struct lay_s *l, int i, int cy0,
     {
       struct fent_s *e = &f->ent[i];
       bool sel = i == f->sel;
-      uint16_t fg = sel ? C_WHITE : C_TEXT;
-      uint16_t dim = sel ? RGB(0xdc, 0xe8, 0xff) : C_TEXT_DIM;
+      uint16_t fg = sel ? C_ACCENT_TEXT : C_TEXT;
+      uint16_t dim = sel ? colour_mix(C_ACCENT_TEXT, C_ACCENT, 60) :
+                           C_TEXT_DIM;
 
       if (sel)
         {
@@ -807,7 +827,7 @@ static void row_draw(struct desk_win_s *w, struct lay_s *l, int i, int cy0,
       else if (i == f->hover)
         {
           ops_rrect(&g_o, l->lx + 4, y + 1, l->lw - 8, ROW_H - 2, LUT_R6, 6,
-                    C_WHITE, 16);
+                    C_HILITE, THEMED(16, 10));
         }
 
       if (e->kind == K_DIR)
@@ -1169,7 +1189,7 @@ static void sidebar_draw(struct desk_win_s *w, struct lay_s *l)
   for (k = 0; k < f->nplaces; k++)
     {
       bool here = strcmp(f->path, f->place[k].path) == 0;
-      uint16_t c = here ? C_WHITE : C_TEXT;
+      uint16_t c = here ? C_ACCENT_TEXT : C_TEXT;
       uint16_t bg = C_SIDE;
 
       if (y + PLACE_H > l->bottom - 8)
@@ -1670,6 +1690,10 @@ static void files_open_sel(struct desk_win_s *w)
           files_go(w, p, true, NULL);
           free(p);
         }
+    }
+  else if (e->kind == K_IMAGE)
+    {
+      desk_viewer_open(f->tmp);
     }
   else if (e->kind == K_TEXT || is_text(f->tmp))
     {

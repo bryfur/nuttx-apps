@@ -129,7 +129,7 @@ void ui_button(struct desk_ops_s *o, int x, int y, int w, int h,
                const char *label, int look)
 {
   uint16_t bg;
-  uint16_t fg = C_TEXT;
+  uint16_t fg = g_theme.control_text;
 
   switch (look)
     {
@@ -143,7 +143,7 @@ void ui_button(struct desk_ops_s *o, int x, int y, int w, int h,
 
       case UI_DEFAULT:
         bg = C_ACCENT;
-        fg = C_WHITE;
+        fg = C_ACCENT_TEXT;
         break;
 
       case UI_DANGER:
@@ -645,7 +645,7 @@ void ui_field_draw(struct desk_ops_s *o, struct ui_field_s *f, int x, int y,
   ui_clip(o, start, x + 4, y, x + w - 4, y + h);
   if (focus)
     {
-      ops_fill(o, cx, y + 4, 1, h - 8, C_WHITE);
+      ops_fill(o, cx, y + 4, 1, h - 8, C_TEXT);
     }
 }
 
