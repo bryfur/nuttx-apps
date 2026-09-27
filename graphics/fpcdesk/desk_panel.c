@@ -1865,6 +1865,13 @@ int desk_panels_init(void)
   panel_effects(g_desk.wallpaper, NX_LAYER_DESKTOP, 0, 0, 0, 0);
   desk_wallpaper_draw();
   nx_setvisibility(g_desk.wallpaper, false);
+#else
+  /* No wallpaper: the background (NX's, the colour) is ours, so that the
+   * pointer is seen where no window is (leaving the dock onto it)
+   */
+
+  nx_requestbkgd(g_desk.hnx, &g_desk_partcb,
+                 (FAR void *)(uintptr_t)PART_WALLPAPER);
 #endif
 
   /* The top bar */
