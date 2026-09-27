@@ -5,7 +5,8 @@
  *
  * The applications: the table of them, the icon tile they share, and the
  * small ones (the launcher's entry, Settings, About).  The others have a
- * file each: desk_term.c, desk_files.c, desk_edit.c, desk_monitor.c.
+ * file each: desk_term.c, desk_files.c, desk_edit.c, desk_monitor.c,
+ * desk_calc.c, desk_tetris.c, desk_solitaire.c, desk_breakout.c.
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -336,6 +337,10 @@ const struct desk_app_s * const g_apps[APP_COUNT] =
   [APP_FILES]    = &g_app_files,
   [APP_EDITOR]   = &g_app_editor,
   [APP_MONITOR]  = &g_app_monitor,
+  [APP_CALC]     = &g_app_calc,
+  [APP_TETRIS]   = &g_app_tetris,
+  [APP_SOLITAIRE] = &g_app_solitaire,
+  [APP_BREAKOUT] = &g_app_breakout,
   [APP_SETTINGS] = &g_app_settings,
   [APP_ABOUT]    = &g_app_about,
 };

@@ -92,6 +92,10 @@ enum desk_app_e
   APP_FILES,
   APP_EDITOR,
   APP_MONITOR,
+  APP_CALC,
+  APP_TETRIS,
+  APP_SOLITAIRE,
+  APP_BREAKOUT,
   APP_SETTINGS,
   APP_ABOUT,
   APP_COUNT
@@ -171,6 +175,7 @@ struct desk_win_s
   bool minimizing;                 /* Faded out: to be hidden */
   sem_t synced;                    /* The server has caught up (nx_synch) */
   bool wakeq;                      /* desk_wake(): the app's wake is due */
+  bool frames;                     /* The app's frame is due every frame */
   const char *button;              /* A title bar button's symbol, or NULL */
   bool buttonhover;
   bool buttonpressed;
@@ -213,6 +218,11 @@ struct desk_app_s
   void (*wake)(struct desk_win_s *w);            /* After desk_wake(w) */
   void (*focus)(struct desk_win_s *w);           /* w->active changed */
   void (*button)(struct desk_win_s *w);          /* w->button clicked */
+  void (*frame)(struct desk_win_s *w);           /* Every frame (about 60 a
+                                                  * second) while w->frames
+                                                  * and not minimised: games,
+                                                  * animations (desk_ms() for
+                                                  * the time) */
   bool single;                                   /* One window at most */
   bool (*canclose)(struct desk_win_s *w);        /* The close button: false
                                                   * keeps the window (to ask
@@ -273,6 +283,10 @@ extern const struct desk_app_s g_app_terminal;   /* desk_term.c */
 extern const struct desk_app_s g_app_files;      /* desk_files.c */
 extern const struct desk_app_s g_app_editor;     /* desk_edit.c */
 extern const struct desk_app_s g_app_monitor;    /* desk_monitor.c */
+extern const struct desk_app_s g_app_calc;       /* desk_calc.c */
+extern const struct desk_app_s g_app_tetris;     /* desk_tetris.c */
+extern const struct desk_app_s g_app_solitaire;  /* desk_solitaire.c */
+extern const struct desk_app_s g_app_breakout;   /* desk_breakout.c */
 
 /****************************************************************************
  * Public Function Prototypes
@@ -307,8 +321,28 @@ void ops_text_centre(struct desk_ops_s *o, const struct desk_font_s *f,
                      uint8_t alpha);
 uint16_t colour_mix(uint16_t a, uint16_t b, int t256);
 
+/* Any anti-aliased shape: inside(arg, x, y) says whether a point, in 1/16
+ * pixel from (x, y), is in it; 4 x 4 samples a pixel, drawn as runs of
+ * pixels of the same coverage (a FILL or BLEND each; the list is sent to
+ * hwnd when full).  For small shapes drawn once (symbols, sprites).
+ */
+
+typedef bool (*ops_inside_t)(void *arg, int x, int y);
+void ops_shape(NXWINDOW hwnd, struct desk_ops_s *o, int x, int y, int w,
+               int h, uint16_t c, uint8_t alpha, ops_inside_t inside,
+               void *arg);
+
 int  desk_atlas_init(void);
 void desk_luts_init(void);
+
+/* A hidden window of w x h pixels in the GPU's memory, to draw into once
+ * and use as an image source (op->src) for COPY and BLEND: sprites,
+ * pre-drawn tiles.  *lost is set (on the listener thread) when the server
+ * has had to take its pixels away: draw them again.
+ */
+
+NXWINDOW desk_surface_open(int w, int h, volatile bool *lost);
+void desk_surface_close(NXWINDOW hwnd);
 
 /* Send operations: into a window's pixels, or as a layer's display list */
 

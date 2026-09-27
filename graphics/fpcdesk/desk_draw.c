@@ -208,11 +208,6 @@ void ops_hgrad(struct desk_ops_s *o, int x, int y, int w, int h,
   ops_ramp(o, x, y, w, h, c1, alpha, false, w);
 }
 
-/* A round rectangle with a vertical gradient: bands of the same round
- * shape (its parameters are absolute, so the bands meet exactly), each of
- * one colour of the gradient, dithered
- */
-
 uint16_t colour_mix(uint16_t a, uint16_t b, int t256)
 {
   int r = ((a >> 11) * (256 - t256) + (b >> 11) * t256) >> 8;
@@ -222,21 +217,66 @@ uint16_t colour_mix(uint16_t a, uint16_t b, int t256)
   return (uint16_t)(r << 11 | g << 5 | bl);
 }
 
+/* A round rectangle with a vertical gradient, in six to eight operations:
+ * the shape in c0, then c1 along a ramp over the part of it that is
+ * straight (a band across the middle, a column through the top and
+ * bottom), then the round corners in c1 through the shape, each with the
+ * ramp's alpha at its middle (the top ones only if that is not small)
+ */
+
+static void ops_rrect_ramp(struct desk_ops_s *o, int x, int y, int w,
+                           int h, int y0, int len, uint16_t c1,
+                           uint8_t alpha)
+{
+  struct nx_gpuop_s *op;
+
+  if (w <= 0 || h <= 0)
+    {
+      return;
+    }
+
+  op = ops_rect(o, NX_GPUOP_BLEND, x, y, w, h);
+  op->colour = c1;
+  op->alpha  = alpha;
+  op->mode   = NX_BLEND_SRC_COLOUR | NX_BLEND_DITHER | NX_BLEND_MOD_VRAMP;
+  op->p[0]   = y0;
+  op->p[1]   = len > 1 ? (255 * 256) / (len - 1) : 0;
+  op->p[2]   = 0;
+}
+
 void ops_rrect_vgrad(struct desk_ops_s *o, int x, int y, int w, int h,
                      int slot, int r, uint16_t c0, uint16_t c1,
                      uint8_t alpha)
 {
-  int bands = h / 3 > 16 ? 16 : h / 3 < 2 ? 2 : h / 3;
   int i;
 
-  for (i = 0; i < bands; i++)
+  if (r * 2 > h || r * 2 > w)
     {
-      int y0 = y + h * i / bands;
-      int y1 = y + h * (i + 1) / bands;
-      struct nx_gpuop_s *op = ops_rect(o, NX_GPUOP_BLEND, x, y0, w, y1 - y0);
+      r = (h < w ? h : w) / 2;
+    }
 
-      op->colour = colour_mix(c0, c1, (256 * i + 128) / bands);
-      op->alpha  = alpha;
+  ops_rrect(o, x, y, w, h, slot, r, c0, alpha);
+  ops_rrect_ramp(o, x, y + r, w, h - 2 * r, y, h, c1, alpha);
+  ops_rrect_ramp(o, x + r, y, w - 2 * r, r, y, h, c1, alpha);
+  ops_rrect_ramp(o, x + r, y + h - r, w - 2 * r, r, y, h, c1, alpha);
+
+  for (i = 0; i < 4 && r > 0; i++)
+    {
+      int cy = i < 2 ? y : y + h - r;
+      int t = h > 1 ? (cy - y + r / 2) * 255 / (h - 1) : 0;
+      struct nx_gpuop_s *op;
+
+      /* Hardly any of c1 yet at the top: not worth an operation */
+
+      if (t < 40)
+        {
+          continue;
+        }
+
+      op = ops_rect(o, NX_GPUOP_BLEND, i & 1 ? x + w - r : x, cy, r, r);
+
+      op->colour = c1;
+      op->alpha  = (uint8_t)(alpha * t / 255);
       op->mode   = NX_BLEND_SRC_COLOUR | NX_BLEND_MOD_LUT | NX_BLEND_DITHER;
       op->slot   = slot;
       op->p[0]   = x + r;
@@ -364,6 +404,118 @@ void ops_text_centre(struct desk_ops_s *o, const struct desk_font_s *f,
                      uint8_t alpha)
 {
   ops_text(o, f, cx - text_width(f, s) / 2, y, s, c, alpha);
+}
+
+/* Any shape: each pixel's coverage from 4 x 4 samples, then runs of the
+ * same coverage along each row, one operation a run
+ */
+
+void ops_shape(NXWINDOW hwnd, struct desk_ops_s *o, int x, int y, int w,
+               int h, uint16_t c, uint8_t alpha, ops_inside_t inside,
+               void *arg)
+{
+  int px;
+  int py;
+
+  for (py = 0; py < h; py++)
+    {
+      int run = 0;
+      int runcov = 0;
+
+      for (px = 0; px <= w; px++)
+        {
+          int cov = 0;
+          int i;
+          int j;
+
+          if (px < w)
+            {
+              for (j = 0; j < 4; j++)
+                {
+                  for (i = 0; i < 4; i++)
+                    {
+                      cov += inside(arg, px * 16 + i * 4 + 2,
+                                    py * 16 + j * 4 + 2);
+                    }
+                }
+            }
+
+          if (px < w && cov == runcov)
+            {
+              run++;
+              continue;
+            }
+
+          if (run > 0 && runcov > 0)
+            {
+              int a = alpha * runcov / 16;
+
+              if (o->n == NX_GPUOPS_MAX)
+                {
+                  ops_draw(hwnd, o);
+                }
+
+              if (a == 255)
+                {
+                  ops_fill(o, x + px - run, y + py, run, 1, c);
+                }
+              else
+                {
+                  ops_blend(o, x + px - run, y + py, run, 1, c, (uint8_t)a);
+                }
+            }
+
+          run    = 1;
+          runcov = cov;
+        }
+    }
+}
+
+/* Surfaces: hidden windows, image sources */
+
+static void surface_redraw(NXWINDOW hwnd, const struct nxgl_rect_s *rect,
+                           bool more, void *arg)
+{
+  if (arg != NULL)
+    {
+      *(volatile bool *)arg = true;
+    }
+}
+
+static const struct nx_callback_s g_surfacecb =
+{
+  surface_redraw, NULL, NULL, NULL, NULL
+};
+
+NXWINDOW desk_surface_open(int w, int h, volatile bool *lost)
+{
+  struct nxgl_point_s pos;
+  struct nxgl_size_s size;
+  NXWINDOW hwnd;
+
+  hwnd = nx_openwindow(g_desk.hnx,
+                       NXBE_WINDOW_RAMBACKED | NXBE_WINDOW_HIDDEN,
+                       &g_surfacecb, (void *)lost);
+  if (hwnd == NULL)
+    {
+      return NULL;
+    }
+
+  pos.x  = 0;
+  pos.y  = 0;
+  size.w = w;
+  size.h = h;
+  nx_setsize(hwnd, &size);
+  nx_setposition(hwnd, &pos);
+  return hwnd;
+}
+
+void desk_surface_close(NXWINDOW hwnd)
+{
+  if (hwnd != NULL)
+    {
+      nx_closewindow(hwnd);
+    }
 }
 
 void ops_draw(NXWINDOW hwnd, struct desk_ops_s *o)

@@ -1372,6 +1372,30 @@ static bool animate(void)
   return more;
 }
 
+/* Application frames: the windows that asked for them (w->frames);
+ * returns whether any did
+ */
+
+static bool frames(void)
+{
+  struct desk_win_s *w;
+  struct desk_win_s *next;
+  bool more = false;
+
+  for (w = g_desk.wins; w != NULL; w = next)
+    {
+      next = w->next;
+      if (w->frames && !w->closing && !w->minimized &&
+          g_apps[w->app]->frame != NULL)
+        {
+          g_apps[w->app]->frame(w);
+          more |= w->frames;
+        }
+    }
+
+  return more;
+}
+
 static void tick(void)
 {
   struct desk_win_s *w;
@@ -1413,7 +1437,9 @@ int main(int argc, FAR char *argv[])
   pthread_attr_t attr;
   pthread_t thread;
   uint32_t nexttick;
+  uint32_t nextframe;
   bool anim = true;
+  bool framing = false;
   int caps;
   int ret;
 
@@ -1494,10 +1520,16 @@ int main(int argc, FAR char *argv[])
 
   desk_launch(APP_TERMINAL);
 
-  nexttick = desk_ms() + 1000;
+  nexttick  = desk_ms() + 1000;
+  nextframe = desk_ms();
   for (; ; )
     {
       int32_t wait = anim ? FRAME_MS : (int32_t)(nexttick - desk_ms());
+
+      if (framing && (int32_t)(nextframe - desk_ms()) < wait)
+        {
+          wait = (int32_t)(nextframe - desk_ms());
+        }
 
       if (wait < 1)
         {
@@ -1516,6 +1548,30 @@ int main(int argc, FAR char *argv[])
       q_wakes();
 
       anim = animate();
+
+      /* Applications' frames, at most one a FRAME_MS (events do not make
+       * them come sooner)
+       */
+
+      if ((int32_t)(desk_ms() - nextframe) >= 0)
+        {
+          nextframe += FRAME_MS;
+          if ((int32_t)(desk_ms() - nextframe) >= 0)
+            {
+              nextframe = desk_ms() + FRAME_MS;
+            }
+
+          framing = frames();
+        }
+      else
+        {
+          struct desk_win_s *w;
+
+          for (w = g_desk.wins; w != NULL && !framing; w = w->next)
+            {
+              framing = w->frames && !w->closing && !w->minimized;
+            }
+        }
 
       if ((int32_t)(desk_ms() - nexttick) >= 0)
         {

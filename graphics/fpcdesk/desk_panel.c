@@ -455,13 +455,26 @@ void desk_dock_mouse(int x, int y, uint8_t buttons)
  * Public Functions: the launcher
  ****************************************************************************/
 
+/* The tiles: in as few rows as fit the display, as even as can be */
+
 static void tile_pos(int i, int *x, int *y)
 {
   int n = APP_COUNT - 1;
-  int w = n * TILE + (n - 1) * TILE_GAP;
+  int cols = (DESK_W - 80 + TILE_GAP) / (TILE + TILE_GAP);
+  int rows;
+  int row;
+  int inrow;
+  int w;
 
-  *x = (DESK_W - w) / 2 + (i - 1) * (TILE + TILE_GAP);
-  *y = DESK_H * 43 / 100;
+  cols  = cols < 1 ? 1 : cols;
+  rows  = (n + cols - 1) / cols;
+  cols  = (n + rows - 1) / rows;
+  row   = (i - 1) / cols;
+  inrow = row < rows - 1 ? cols : n - row * cols;
+  w     = inrow * TILE + (inrow - 1) * TILE_GAP;
+
+  *x = (DESK_W - w) / 2 + (i - 1 - row * cols) * (TILE + TILE_GAP);
+  *y = DESK_H * (rows > 1 ? 37 : 43) / 100 + row * (TILE + 40);
 }
 
 void desk_launcher_draw(void)
