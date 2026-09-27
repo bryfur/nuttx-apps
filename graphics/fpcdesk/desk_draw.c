@@ -534,6 +534,52 @@ void ops_setlist(NXWINDOW hwnd, struct desk_ops_s *o)
   o->n = 0;
 }
 
+static void list_take(struct desk_list_s *l, struct desk_ops_s *o)
+{
+  if (l->n + o->n > l->cap)
+    {
+      int cap = l->n + o->n + NX_GPUOPS_MAX;
+      struct nx_gpuop_s *p;
+
+      cap = cap > NX_DLIST_MAX ? NX_DLIST_MAX : cap;
+      p   = realloc(l->op, cap * sizeof(*p));
+      if (p != NULL)
+        {
+          l->op  = p;
+          l->cap = cap;
+        }
+    }
+
+  if (l->n + o->n <= l->cap)
+    {
+      memcpy(l->op + l->n, o->op, o->n * sizeof(o->op[0]));
+      l->n += o->n;
+    }
+
+  o->n = 0;                              /* (Dropped if there is no room) */
+}
+
+void list_room(struct desk_list_s *l, struct desk_ops_s *o, int need)
+{
+  if (o->n + need > NX_GPUOPS_MAX)
+    {
+      list_take(l, o);
+    }
+}
+
+void list_set(NXWINDOW hwnd, struct desk_list_s *l, struct desk_ops_s *o)
+{
+  if (l->n == 0)
+    {
+      ops_setlist(hwnd, o);                /* It all fitted in o */
+      return;
+    }
+
+  list_take(l, o);
+  nx_setdisplaylist(hwnd, l->op, l->n);
+  l->n = 0;
+}
+
 /****************************************************************************
  * Name: desk_luts_init
  *

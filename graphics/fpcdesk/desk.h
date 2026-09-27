@@ -15,12 +15,14 @@
 #include <stdint.h>
 #include <sys/types.h>
 #include <semaphore.h>
+#include <time.h>
 
 #include <nuttx/nx/nx.h>
 #include <nuttx/nx/nxtk.h>
 #include <nuttx/nx/nxcompose.h>
 
 #include "desk_font.h"
+#include "desk_theme.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -38,35 +40,69 @@
 #define RGB(r, g, b)      ((uint16_t)((((r) >> 3) << 11) | (((g) >> 2) << 5) | \
                                       ((b) >> 3)))
 
-/* The look */
+/* The look: colours by role come from the theme (desk_theme.h); these are
+ * the older names for them
+ */
 
 #define TOPBAR_H          28
 #define TITLE_H           34
-#define DOCK_ICON         48
-#define DOCK_PAD          10
-#define DOCK_H            (DOCK_ICON + 2 * DOCK_PAD)
-#define DOCK_MARGIN       8
-#define WORK_Y            (TOPBAR_H + 6)                 /* Where windows may go */
-#define WORK_H            (DESK_H - WORK_Y - DOCK_H - 2 * DOCK_MARGIN)
 
-#define C_TITLE_ACTIVE    RGB(0x38, 0x38, 0x3c)
-#define C_TITLE_INACTIVE  RGB(0x28, 0x28, 0x2c)
-#define C_TITLE_HILITE    RGB(0x48, 0x48, 0x4d)
-#define C_TITLE_TEXT      RGB(0xec, 0xec, 0xee)
-#define C_TITLE_DIM       RGB(0x8e, 0x8e, 0x93)
-#define C_WINDOW_BG       RGB(0x20, 0x20, 0x24)
-#define C_CARD            RGB(0x30, 0x30, 0x34)
-#define C_TEXT            RGB(0xe8, 0xe8, 0xea)
-#define C_TEXT_DIM        RGB(0x98, 0x98, 0x9e)
-#define C_ACCENT          RGB(0x0a, 0x84, 0xff)
+#define C_TITLE_ACTIVE    (g_theme.title_active)
+#define C_TITLE_INACTIVE  (g_theme.title_inactive)
+#define C_TITLE_HILITE    (g_theme.title_hilite)
+#define C_TITLE_TEXT      (g_theme.title_text)
+#define C_TITLE_DIM       (g_theme.title_dim)
+#define C_WINDOW_BG       (g_theme.window_bg)
+#define C_CARD            (g_theme.card)
+#define C_TEXT            (g_theme.text)
+#define C_TEXT_DIM        (g_theme.text_dim)
+#define C_TEXT_FAINT      (g_theme.text_faint)
+#define C_ACCENT          (g_theme.accent)
+#define C_ACCENT_TEXT     (g_theme.accent_text)
+#define C_SELECTION       (g_theme.selection)
+#define C_HILITE          (g_theme.hilite)
+#define C_SHADE           (g_theme.shade)
+#define C_THUMB           (g_theme.thumb)
+#define C_LIGHT_OFF       (g_theme.light_off)
+#define C_TERM_BG         (g_theme.term_bg)
+#define C_TERM_FG         (g_theme.term_fg)
+
+/* Fixed colours: the traffic lights, white and black */
+
 #define C_CLOSE           RGB(0xff, 0x5f, 0x57)
 #define C_MINIMIZE        RGB(0xfe, 0xbc, 0x2e)
 #define C_MAXIMIZE        RGB(0x28, 0xc8, 0x40)
-#define C_LIGHT_OFF       RGB(0x48, 0x48, 0x4c)
-#define C_TERM_BG         RGB(0x18, 0x18, 0x1c)
-#define C_TERM_FG         RGB(0xd8, 0xd8, 0xd8)
 #define C_WHITE           RGB(0xff, 0xff, 0xff)
 #define C_BLACK           RGB(0x00, 0x00, 0x00)
+
+/* The dock: its icons' size is a setting (40 to 64), and where it is */
+
+#define DOCK_ICON         (g_prefs.dockicon)
+#define DOCK_ICON_MIN     40
+#define DOCK_ICON_MAX     64
+#define DOCK_PAD          (DOCK_ICON / 5)
+#define DOCK_H            (DOCK_ICON + 2 * DOCK_PAD)     /* Its thickness */
+#define DOCK_MARGIN       8
+
+#define DOCK_BOTTOM       0
+#define DOCK_LEFT         1
+#define DOCK_RIGHT        2
+
+/* Where windows may go: the display less the top bar and the dock (unless
+ * it hides itself); desk_layout() works it out
+ */
+
+#define WORK_X            (g_desk.work.pt1.x)
+#define WORK_Y            (g_desk.work.pt1.y)
+#define WORK_W            (g_desk.work.pt2.x - g_desk.work.pt1.x + 1)
+#define WORK_H            (g_desk.work.pt2.y - g_desk.work.pt1.y + 1)
+
+/* Window shadows (Settings) */
+
+#define SHADOW_OFF        0
+#define SHADOW_LIGHT      1
+#define SHADOW_NORMAL     2
+#define SHADOW_STRONG     3
 
 /* Client shape tables (nx_setlut()): round corners of these radii */
 
@@ -98,6 +134,7 @@ enum desk_app_e
   APP_BREAKOUT,
   APP_SETTINGS,
   APP_ABOUT,
+  APP_LOG,
   APP_COUNT
 };
 
@@ -121,7 +158,9 @@ enum desk_part_e
   PART_DOCK,
   PART_LAUNCHER,
   PART_WALLPAPER,
-  PART_TIP
+  PART_TIP,
+  PART_MENU,                       /* A pop-up menu */
+  PART_EDGE                        /* Where the hidden dock comes out */
 };
 
 /****************************************************************************
@@ -149,6 +188,17 @@ struct desk_ops_s
 {
   int n;
   struct nx_gpuop_s op[NX_GPUOPS_MAX];
+};
+
+/* A layer window's display list longer than one desk_ops_s (up to
+ * NX_DLIST_MAX): operations are built in a desk_ops_s and moved into it
+ */
+
+struct desk_list_s
+{
+  struct nx_gpuop_s *op;
+  int n;
+  int cap;
 };
 
 /* An application window */
@@ -223,11 +273,38 @@ struct desk_app_s
                                                   * and not minimised: games,
                                                   * animations (desk_ms() for
                                                   * the time) */
+  void (*theme)(struct desk_win_s *w);           /* The theme changed: all
+                                                  * of it again (default:
+                                                  * expose all of the client
+                                                  * area, else draw) */
   bool single;                                   /* One window at most */
   bool (*canclose)(struct desk_win_s *w);        /* The close button: false
                                                   * keeps the window (to ask
                                                   * first; the app then calls
                                                   * desk_win_close()) */
+};
+
+/* The settings remembered across boots (desk_prefs_load(), _save()) */
+
+struct desk_prefs_s
+{
+  uint8_t theme;                   /* THEME_* */
+  uint8_t accent;                  /* ACCENT_* */
+  uint8_t shadow;                  /* SHADOW_* */
+  bool border;                     /* Windows' 1-pixel edge */
+  bool clock24;                    /* The top bar's clock: 24-hour */
+  bool clockdate;                  /* ... with the date */
+  bool clocksecs;                  /* ... with seconds */
+  uint8_t dockicon;                /* DOCK_ICON_MIN to _MAX */
+  uint8_t dockpos;                 /* DOCK_BOTTOM, _LEFT, _RIGHT */
+  bool dockhide;                   /* The dock hides until the pointer
+                                    * touches its edge */
+  uint16_t repdelay;               /* Keys repeat after (ms), 0: never */
+  uint16_t reprate;                /* ... every (ms) */
+  uint16_t ptrspeed;               /* Pointer speed, percent */
+  int16_t tzoff;                   /* Time zone: minutes east of UTC */
+  uint8_t npinned;                 /* The dock's favourites, in order */
+  uint8_t pinned[APP_COUNT];
 };
 
 /* The desktop */
@@ -247,9 +324,16 @@ struct desk_s
   NXWINDOW tip;
   NXWINDOW launcher;               /* NULL when closed */
   int wallstyle;                   /* Settings: which wallpaper */
-  int dockx;                       /* The dock's left edge */
-  int dockw;
-  int dockhover;                   /* App under the pointer, -1 */
+  NXWINDOW menu;                   /* A pop-up menu, NULL */
+  NXWINDOW edge;                   /* The hidden dock's edge, NULL */
+  struct nxgl_rect_s work;         /* Where windows may go */
+  int dockx;                       /* The dock's top-left, shown */
+  int docky;
+  int dockw;                       /* Its size */
+  int dockh;
+  int dockhover;                   /* Item under the pointer, -1 */
+  int dockout;                     /* Autohide: 0 hidden .. DOCK_STEPS out */
+  bool dockwant;                   /* ... it should be out */
   int launcherfade;                /* Launcher opening: steps to go */
   int topbarhover;                 /* 1: over "Activities" */
 
@@ -278,6 +362,7 @@ struct desk_s
  ****************************************************************************/
 
 extern struct desk_s g_desk;
+extern struct desk_prefs_s g_prefs;
 extern const struct desk_app_s * const g_apps[APP_COUNT];
 extern const struct desk_app_s g_app_terminal;   /* desk_term.c */
 extern const struct desk_app_s g_app_files;      /* desk_files.c */
@@ -287,6 +372,8 @@ extern const struct desk_app_s g_app_calc;       /* desk_calc.c */
 extern const struct desk_app_s g_app_tetris;     /* desk_tetris.c */
 extern const struct desk_app_s g_app_solitaire;  /* desk_solitaire.c */
 extern const struct desk_app_s g_app_breakout;   /* desk_breakout.c */
+extern const struct desk_app_s g_app_settings;   /* desk_settings.c */
+extern const struct desk_app_s g_app_log;        /* desk_log.c */
 
 /****************************************************************************
  * Public Function Prototypes
@@ -349,6 +436,13 @@ void desk_surface_close(NXWINDOW hwnd);
 void ops_draw(NXWINDOW hwnd, struct desk_ops_s *o);
 void ops_setlist(NXWINDOW hwnd, struct desk_ops_s *o);
 
+/* Long display lists: make room for need more operations in o (moving
+ * what it has into l), and set l, with what is left in o, as hwnd's list
+ */
+
+void list_room(struct desk_list_s *l, struct desk_ops_s *o, int need);
+void list_set(NXWINDOW hwnd, struct desk_list_s *l, struct desk_ops_s *o);
+
 /* desk_main.c: windows */
 
 struct desk_win_s *desk_win_open(int app, const char *title, int w, int h);
@@ -368,10 +462,28 @@ void desk_win_sync(struct desk_win_s *w);
 void desk_wake(struct desk_win_s *w);
 struct desk_win_s *desk_app_window(int app);
 void desk_launch(int app);
+void desk_app_quit(int app);                /* Close all of its windows */
 uint32_t desk_ms(void);
+
+/* The theme or the look of windows has changed (g_theme, g_prefs): draw
+ * everything again
+ */
+
+void desk_theme_changed(void);
+
+/* The work area, the dock and the windows after a change of the display's
+ * size or of the dock's settings
+ */
+
+void desk_relayout(void);
+
+/* The time as the desktop shows it: UTC plus g_prefs.tzoff */
+
+void desk_localtime(struct tm *tm);
 
 /* desk_panel.c: the top bar, the dock, the launcher, the wallpaper */
 
+void desk_layout(void);                     /* g_desk.work, the dock */
 int  desk_panels_init(void);
 void desk_topbar_draw(void);
 void desk_dock_draw(void);
@@ -386,14 +498,52 @@ void desk_wallpaper_preview(struct desk_ops_s *o, int style, int x, int y,
 void desk_panels_tick(void);
 bool desk_panels_animate(void);
 void desk_panels_relayout(void);           /* The display's size changed */
+void desk_panels_mouse(int part, int x, int y, uint8_t buttons);
+                                           /* Any pointer event (autohide) */
+bool desk_launcher_key(const uint8_t *ch, int n);
+bool desk_dock_pinned(int app);
+void desk_dock_pin(int app, bool pin);
+
+/* Pop-up menus: items (a label of "-" is a separator) with ids; pick is
+ * called with the id of the one chosen.  At (x, y) on the display, moved
+ * to stay on it.  Any press elsewhere, or Escape, closes it.
+ */
+
+struct desk_menu_item_s
+{
+  const char *label;
+  int id;
+  bool enabled;
+};
+
+void desk_menu_show(int x, int y, const struct desk_menu_item_s *items,
+                    int n, void (*pick)(int id, void *arg), void *arg);
+void desk_menu_close(void);
+void desk_menu_mouse(int x, int y, uint8_t buttons);
 
 /* desk_apps.c: the applications */
 
 void desk_load_sample(void);
 int  desk_prefs_load(void);                 /* The saved display mode, or -1 */
 void desk_prefs_save(void);
+void desk_input_apply(void);                /* Key repeat, pointer speed:
+                                             * to the desktop session */
+void desk_about_draw(NXWINDOW hwnd, int x, int y, int w);
+                                            /* About this computer */
 void icon_tile(struct desk_ops_s *o, int x, int y, int s, uint16_t top,
                uint16_t bottom, uint8_t a);
+
+/* desk_settings.c: Settings, at one of its pages */
+
+#define SETTINGS_APPEARANCE 0
+#define SETTINGS_DISPLAY    1
+#define SETTINGS_DOCK       2
+#define SETTINGS_INPUT      3               /* Mouse & Keyboard */
+#define SETTINGS_DATETIME   4
+#define SETTINGS_ABOUT      5
+#define SETTINGS_PAGES      6
+
+void desk_settings_show(int page);
 
 /* desk_edit.c: open a file in a new editor window (NULL: a new file) */
 
