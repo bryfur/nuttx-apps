@@ -680,10 +680,33 @@ void desk_luts_init(void)
   nx_setlut(g_desk.hnx, LUT_R6, lut);
   lut_disc(lut, 3);
   nx_setlut(g_desk.hnx, LUT_R3, lut);
-  lut_disc(lut, 20);
-  nx_setlut(g_desk.hnx, LUT_R20, lut);
   lut_glow(lut);
   nx_setlut(g_desk.hnx, LUT_GLOW, lut);
+}
+
+/****************************************************************************
+ * Name: desk_lut_app
+ *
+ * Description:
+ *   The applications' table (LUT_APP): the one keyed key, made by make if
+ *   the slot holds another.  The server keeps the operations in order, so
+ *   an application loads it, then draws with it; another one may load
+ *   something else after.
+ *
+ ****************************************************************************/
+
+void desk_lut_app(uint32_t key, desk_lutmake_t make, int arg)
+{
+  static uint8_t lut[NX_BLEND_LUT_N][NX_BLEND_LUT_N];
+  static uint32_t loaded;
+
+  if (key != 0 && key == loaded)
+    {
+      return;
+    }
+
+  make(lut, arg);
+  loaded = nx_setlut(g_desk.hnx, LUT_APP, lut) < 0 ? 0 : key;
 }
 
 /****************************************************************************

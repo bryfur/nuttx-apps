@@ -95,6 +95,13 @@ extern int usemouse;
 
 void i_init_graphics(void);
 
+#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
+/* The desktop's session (i_main.c), NULL if not started by the desktop */
+
+struct deskgame_s;
+struct deskgame_s *i_deskgame(void);
+#endif
+
 void i_graphics_check_commandline(void);
 
 void i_shutdown_graphics(void);

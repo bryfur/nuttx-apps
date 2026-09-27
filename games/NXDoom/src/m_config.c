@@ -2080,8 +2080,10 @@ static void load_default_collection(default_collection_t *collection)
 {
   FILE *f;
   default_t *def;
-  char defname[80];
-  char strparm[100];
+  char line[200];
+  char *defname;
+  char *strparm;
+  char *p;
 
   /* read the file in, overriding any set defaults */
 
@@ -2096,12 +2098,38 @@ static void load_default_collection(default_collection_t *collection)
       return;
     }
 
-  while (!feof(f))
+  /* Lines of a name, spaces, the value.  Taken apart here: NuttX's
+   * fscanf("%79s %99[^\n]\n") matched the lines but gave empty values.
+   */
+
+  while (fgets(line, sizeof(line), f) != NULL)
     {
-      if (fscanf(f, "%79s %99[^\n]\n", defname, strparm) != 2)
+      for (p = line; isspace((unsigned char)*p); p++)
+        {
+        }
+
+      defname = p;
+      while (*p != '\0' && !isspace((unsigned char)*p))
+        {
+          p++;
+        }
+
+      if (*p == '\0' || p == defname)
         {
           /* This line doesn't match */
 
+          continue;
+        }
+
+      *p++ = '\0';
+      while (isspace((unsigned char)*p))
+        {
+          p++;
+        }
+
+      strparm = p;
+      if (*strparm == '\0')
+        {
           continue;
         }
 
@@ -2133,7 +2161,7 @@ static void load_default_collection(default_collection_t *collection)
           strparm[strlen(strparm) - 1] == '"')
         {
           strparm[strlen(strparm) - 1] = '\0';
-          memmove(strparm, strparm + 1, sizeof(strparm) - 1);
+          strparm++;
         }
 
       set_variable(def, strparm);

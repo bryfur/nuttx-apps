@@ -70,7 +70,7 @@ static void load_response_file(int argv_index, const char *filename)
   if (handle == NULL)
     {
       printf("\nNo such response file!");
-      exit(1);
+      i_exit(1);
     }
 
   printf("Found response file %s!\n", filename);

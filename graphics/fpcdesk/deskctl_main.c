@@ -14,6 +14,14 @@
  *   deskctl d X0 Y0 X1 Y1 [N]     drag with the left button, in N steps
  *   deskctl k TEXT                type (\n Enter, \t Tab, \e Escape,
  *                                 \b Backspace, \xHH any byte)
+ *   deskctl key EVENT...          key events (nuttx/nx/nxkeys.h), as a
+ *                                 keyboard sends them: +NAME press, -NAME
+ *                                 release, NAME both, @MS wait MS ms.
+ *                                 NAME: a character (a, 1, -), space,
+ *                                 enter, esc, tab, bs, up, down, left,
+ *                                 right, home, end, pgup, pgdn, ins, del,
+ *                                 f1-f12, shift, ctrl, alt, gui (left),
+ *                                 rshift, rctrl, ralt, rgui
  *   deskctl shot FILE             the screen as a PPM file (simulator)
  *   deskctl test                  BLEND on the GPU, checked pixel by pixel
  *   deskctl stats [clear|N]       GPU commands and pixels since the last
@@ -51,6 +59,7 @@
 
 #include <nuttx/nx/nx.h>
 #include <nuttx/nx/nxcompose.h>
+#include <nuttx/nx/nxkeys.h>
 
 #include "desk.h"
 
@@ -180,6 +189,164 @@ static void deskctl_type(NXHANDLE h, FAR const char *text)
     }
 }
 
+/* Key events: names of the keys that type no character */
+
+static const struct
+{
+  const char *name;
+  uint8_t code;
+  uint8_t ch;
+  uint8_t mod;
+} g_keynames[] =
+{
+  { "space",  ' ',                              ' ',  0 },
+  { "enter",  NX_KEY_ENTER,                     '\n', 0 },
+  { "esc",    NX_KEY_ESCAPE,                    0x1b, 0 },
+  { "tab",    NX_KEY_TAB,                       '\t', 0 },
+  { "bs",     NX_KEY_BACKSPACE,                 0x7f, 0 },
+  { "up",     NX_KEY_SPECIAL(KEYCODE_UP),       0,    0 },
+  { "down",   NX_KEY_SPECIAL(KEYCODE_DOWN),     0,    0 },
+  { "left",   NX_KEY_SPECIAL(KEYCODE_LEFT),     0,    0 },
+  { "right",  NX_KEY_SPECIAL(KEYCODE_RIGHT),    0,    0 },
+  { "home",   NX_KEY_SPECIAL(KEYCODE_HOME),     0,    0 },
+  { "end",    NX_KEY_SPECIAL(KEYCODE_END),      0,    0 },
+  { "pgup",   NX_KEY_SPECIAL(KEYCODE_PAGEUP),   0,    0 },
+  { "pgdn",   NX_KEY_SPECIAL(KEYCODE_PAGEDOWN), 0,    0 },
+  { "ins",    NX_KEY_SPECIAL(KEYCODE_INSERT),   0,    0 },
+  { "del",    NX_KEY_SPECIAL(KEYCODE_FWDDEL),   0,    0 },
+  { "pause",  NX_KEY_SPECIAL(KEYCODE_PAUSE),    0,    0 },
+  { "shift",  NX_KEY_SPECIAL(KEYCODE_LSHIFT),   0,    NX_KEY_SHIFT },
+  { "rshift", NX_KEY_SPECIAL(KEYCODE_RSHIFT),   0,    NX_KEY_SHIFT },
+  { "ctrl",   NX_KEY_SPECIAL(KEYCODE_LCTRL),    0,    NX_KEY_CTRL },
+  { "rctrl",  NX_KEY_SPECIAL(KEYCODE_RCTRL),    0,    NX_KEY_CTRL },
+  { "alt",    NX_KEY_SPECIAL(KEYCODE_LALT),     0,    NX_KEY_ALT },
+  { "ralt",   NX_KEY_SPECIAL(KEYCODE_RALT),     0,    NX_KEY_ALT },
+  { "gui",    NX_KEY_SPECIAL(KEYCODE_LGUI),     0,    NX_KEY_GUI },
+  { "rgui",   NX_KEY_SPECIAL(KEYCODE_RGUI),     0,    NX_KEY_GUI },
+};
+
+static void deskctl_keyev(NXHANDLE h, uint8_t *mods, uint8_t code,
+                          uint8_t ch, uint8_t mod, bool release)
+{
+  uint8_t rec[NX_KEY_SIZE];
+  struct nx_key_s key;
+
+  *mods = release ? *mods & ~mod : *mods | mod;
+
+  /* What the key types with the modifiers held, as a US keyboard */
+
+  if (!release && ch >= 'a' && ch <= 'z')
+    {
+      if (*mods & NX_KEY_CTRL)
+        {
+          ch &= 0x1f;
+        }
+      else if (*mods & NX_KEY_SHIFT)
+        {
+          ch -= 'a' - 'A';
+        }
+    }
+
+  key.flags = *mods | (release ? NX_KEY_RELEASE : 0);
+  key.code  = code;
+  key.ch    = release ? 0 : ch;
+  nx_key_encode(rec, &key);
+  nx_kbdin(h, NX_KEY_SIZE, rec);
+}
+
+static int deskctl_key(NXHANDLE h, uint8_t *mods, FAR const char *a)
+{
+  bool press = true;
+  bool release = true;
+  uint8_t code = 0;
+  uint8_t ch = 0;
+  uint8_t mod = 0;
+  size_t k;
+
+  if (a[0] == '@')
+    {
+      usleep(atoi(a + 1) * 1000);
+      return 0;
+    }
+
+  if ((a[0] == '+' || a[0] == '-') && a[1] != '\0')
+    {
+      press   = a[0] == '+';
+      release = a[0] == '-';
+      a++;
+    }
+
+  if (a[1] == '\0')
+    {
+      code = nx_key_code((uint8_t)a[0], false);
+      ch   = (uint8_t)a[0];
+    }
+  else if (a[0] == 'f' && atoi(a + 1) >= 1 && atoi(a + 1) <= 12)
+    {
+      code = NX_KEY_SPECIAL(KEYCODE_F1 + atoi(a + 1) - 1);
+    }
+  else
+    {
+      for (k = 0; k < sizeof(g_keynames) / sizeof(g_keynames[0]); k++)
+        {
+          if (strcmp(a, g_keynames[k].name) == 0)
+            {
+              code = g_keynames[k].code;
+              ch   = g_keynames[k].ch;
+              mod  = g_keynames[k].mod;
+              break;
+            }
+        }
+
+      if (code == 0)
+        {
+          fprintf(stderr, "deskctl: no key %s\n", a);
+          return -1;
+        }
+    }
+
+  if (press)
+    {
+      deskctl_keyev(h, mods, code, ch, mod, false);
+    }
+
+  if (press && release)
+    {
+      usleep(30000);
+    }
+
+  if (release)
+    {
+      deskctl_keyev(h, mods, code, ch, mod, true);
+    }
+
+  return 0;
+}
+
+/* Events are arguments, or words of one (NSH takes few arguments) */
+
+static int deskctl_keys(NXHANDLE h, int argc, FAR char *argv[])
+{
+  uint8_t mods = 0;
+  FAR char *save;
+  FAR char *a;
+  int i;
+
+  for (i = 0; i < argc; i++)
+    {
+      for (a = strtok_r(argv[i], " ", &save); a != NULL;
+           a = strtok_r(NULL, " ", &save))
+        {
+          if (deskctl_key(h, &mods, a) < 0)
+            {
+              return -1;
+            }
+        }
+    }
+
+  return 0;
+}
+
 #ifdef CONFIG_FPC_GPU
 /* GPU time per pixel, ns, from docs/desktop.md (500 x 350: FILL 1.70 ms,
  * COPY 3.34 ms, BLEND of a colour 3.5 ms, of an image 4.75 ms); PUT and
@@ -300,9 +467,9 @@ static void deskctl_usage(void)
 {
   fprintf(stderr,
           "usage: deskctl m X Y [BUTTONS] | c X Y | d X0 Y0 X1 Y1 [N] |\n"
-          "               k TEXT | shot FILE | stats [clear|N] | mode [N] |\n"
-          "               redraw | test | freeze [SECONDS|off] | dock APP [r] |\n"
-          "               wins\n");
+          "               k TEXT | key [+|-]NAME|@MS... | shot FILE |\n"
+          "               stats [clear|N] | mode [N] | redraw | test |\n"
+          "               freeze [SECONDS|off] | dock APP [r] | wins\n");
 }
 
 /****************************************************************************
@@ -482,6 +649,13 @@ int main(int argc, FAR char *argv[])
   else if (strcmp(argv[1], "k") == 0 && argc >= 3)
     {
       deskctl_type(h, argv[2]);
+    }
+  else if (strcmp(argv[1], "key") == 0 && argc >= 3)
+    {
+      if (deskctl_keys(h, argc - 2, &argv[2]) < 0)
+        {
+          ret = EXIT_FAILURE;
+        }
     }
   else
     {
