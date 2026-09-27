@@ -74,7 +74,13 @@
 #define LUT_R6            (NX_LUT_CLIENT0 + 1)
 #define LUT_GLOW          (NX_LUT_CLIENT0 + 2)   /* A wide Gaussian around a point */
 #define LUT_R3            (NX_LUT_CLIENT0 + 3)
-#define LUT_R20           (NX_LUT_CLIENT0 + 4)
+
+/* The applications' table: loaded by an application for what it draws into
+ * its own windows, never for a display list (the compositor would replay
+ * that with whatever table is loaded then).  desk_lut_app() loads it.
+ */
+
+#define LUT_APP           (NX_LUT_CLIENT0 + 4)
 
 /* Traffic lights: three discs of radius 6 in the title bar */
 
@@ -91,6 +97,8 @@ enum desk_app_e
   APP_TERMINAL,
   APP_FILES,
   APP_EDITOR,
+  APP_VIEWER,
+  APP_PAINT,
   APP_MONITOR,
   APP_SETTINGS,
   APP_ABOUT,
@@ -273,6 +281,8 @@ extern const struct desk_app_s g_app_terminal;   /* desk_term.c */
 extern const struct desk_app_s g_app_files;      /* desk_files.c */
 extern const struct desk_app_s g_app_editor;     /* desk_edit.c */
 extern const struct desk_app_s g_app_monitor;    /* desk_monitor.c */
+extern const struct desk_app_s g_app_viewer;     /* desk_viewer.c */
+extern const struct desk_app_s g_app_paint;      /* desk_paint.c */
 
 /****************************************************************************
  * Public Function Prototypes
@@ -309,6 +319,12 @@ uint16_t colour_mix(uint16_t a, uint16_t b, int t256);
 
 int  desk_atlas_init(void);
 void desk_luts_init(void);
+
+/* LUT_APP: make (if key is not what it holds) and load it; key 0 is none */
+
+typedef void (*desk_lutmake_t)(uint8_t lut[NX_BLEND_LUT_N][NX_BLEND_LUT_N],
+                               int arg);
+void desk_lut_app(uint32_t key, desk_lutmake_t make, int arg);
 
 /* Send operations: into a window's pixels, or as a layer's display list */
 
@@ -364,6 +380,11 @@ void icon_tile(struct desk_ops_s *o, int x, int y, int s, uint16_t top,
 /* desk_edit.c: open a file in a new editor window (NULL: a new file) */
 
 int desk_editor_open(const char *path);
+
+/* desk_viewer.c: show an image; desk_paint.c: edit one (NULL: a new one) */
+
+int desk_viewer_open(const char *path);
+int desk_paint_open(const char *path);
 
 /* desk_ui.c: the clipboard, shared by the applications (a copy is kept) */
 

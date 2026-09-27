@@ -32,6 +32,7 @@
 #include <sys/stat.h>
 
 #include "desk_ui.h"
+#include "desk_image.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -66,6 +67,7 @@
 #define K_FILE         1
 #define K_TEXT         2
 #define K_EXEC         3
+#define K_IMAGE        4
 
 /* Sort columns */
 
@@ -283,6 +285,11 @@ static uint8_t kind_of(const char *name, const struct stat *st)
       (ext != NULL && in_list(ext + 1, g_textext, true)))
     {
       return K_TEXT;
+    }
+
+  if (img_is_image(name))
+    {
+      return K_IMAGE;
     }
 
   if ((ext != NULL && in_list(ext + 1, g_execext, true)) ||
@@ -654,6 +661,18 @@ static void icon_folder(struct desk_ops_s *o, int x, int y, uint16_t c)
 static void icon_page(struct desk_ops_s *o, int x, int y, int kind)
 {
   int i;
+
+  if (kind == K_IMAGE)
+    {
+      /* A picture: a frame, a sky, a hill */
+
+      ops_rrect(o, x, y + 2, 18, 14, LUT_R3, 3, C_PAGE, 255);
+      ops_fill(o, x + 2, y + 4, 14, 10, RGB(0x6c, 0xb4, 0xf0));
+      ops_fill(o, x + 11, y + 6, 2, 2, RGB(0xff, 0xd8, 0x50));
+      ui_triangle(o, x + 7, y + 11, 4, 0, RGB(0x34, 0xa0, 0x50), 255);
+      ops_fill(o, x + 2, y + 13, 14, 1, RGB(0x34, 0xa0, 0x50));
+      return;
+    }
 
   if (kind == K_EXEC)
     {
@@ -1670,6 +1689,10 @@ static void files_open_sel(struct desk_win_s *w)
           files_go(w, p, true, NULL);
           free(p);
         }
+    }
+  else if (e->kind == K_IMAGE)
+    {
+      desk_viewer_open(f->tmp);
     }
   else if (e->kind == K_TEXT || is_text(f->tmp))
     {
