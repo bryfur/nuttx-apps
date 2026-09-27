@@ -479,13 +479,26 @@ static void dlg_event(struct kit_s *dk, struct kit_widget_s *wg, int ev)
       case KIT_EV_ACTIVATE:
         if (id == D_LIST && d->list.sel >= 0 && d->list.sel < d->n)
           {
-            if (d->ent[d->list.sel].dir || d->kind == KIT_DLG_OPEN)
+            /* A folder opens (whatever the name field says); a file is
+             * the answer
+             */
+
+            if (d->ent[d->list.sel].dir)
               {
-                dlg_ok(d);
+                char path[PATH_MAX];
+
+                path_join(path, d->dir, d->ent[d->list.sel].name);
+                replace_ask(d, false, NULL);
+                dir_go(d, path, NULL);
               }
             else
               {
-                ui_field_set(&d->field, d->ent[d->list.sel].name);
+                if (d->kind == KIT_DLG_SAVE)
+                  {
+                    ui_field_set(&d->field, d->ent[d->list.sel].name);
+                    kit_invalidate(dk, D_FIELD);
+                  }
+
                 dlg_ok(d);
               }
           }

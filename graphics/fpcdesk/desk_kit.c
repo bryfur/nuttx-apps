@@ -4744,17 +4744,21 @@ void kit_tick(struct kit_s *k)
       return;
     }
 
-  /* A field's caret blinks */
+  /* A field's caret blinks (not while the desktop is frozen: tests) */
 
-  if (f != NULL && f->type == KIT_FIELD && k->w->active)
+  if (f != NULL && f->type == KIT_FIELD && k->w->active &&
+      (!desk_frozen() || !k->caret))
     {
       k->caret = !k->caret;
       dirty(k, k->focus);
     }
 
-  /* A tooltip, under the widget (or over it) */
+  /* A tooltip, under the widget (or over it); none while frozen, when
+   * they would come or not depending on how long a test takes
+   */
 
   if (h != NULL && h->tip != NULL && !k->tipshown && k->buttons == 0 &&
+      !desk_frozen() &&
       !k->pop.open && desk_ms() - k->hotms >= KIT_TIP_MS)
     {
       int th;

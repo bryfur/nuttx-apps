@@ -244,6 +244,22 @@ static void set_status(struct demo_s *d, const char *fmt, ...)
   kit_set_text(&d->kit, W_STATUS, d->status);
 }
 
+/* Where the file dialogs start: the home directory */
+
+static const char *demo_home(void)
+{
+  const char *home = getenv("HOME");
+
+#ifdef CONFIG_LIBC_HOMEDIR
+  if (home == NULL)
+    {
+      home = CONFIG_LIBC_HOMEDIR;
+    }
+#endif
+
+  return home != NULL ? home : "/";
+}
+
 static void demo_event(struct kit_s *k, struct kit_widget_s *wg, int ev)
 {
   static const char * const deleting[] =
@@ -298,12 +314,17 @@ static void demo_event(struct kit_s *k, struct kit_widget_s *wg, int ev)
                   break;
 
                 case 4:
-                  kit_dialog(k, 5, KIT_DLG_OPEN, "Open", "/", NULL, 0);
+                  kit_dialog(k, 5, KIT_DLG_OPEN, "Open", demo_home(), NULL,
+                             0);
                   break;
 
                 default:
-                  kit_dialog(k, 6, KIT_DLG_SAVE, "Save As",
-                             "/tmp/Untitled.txt", NULL, 0);
+                  {
+                    snprintf(d->answer, sizeof(d->answer),
+                             "%s/Untitled.txt", demo_home());
+                    kit_dialog(k, 6, KIT_DLG_SAVE, "Save As", d->answer,
+                               NULL, 0);
+                  }
                   break;
               }
 
@@ -347,8 +368,15 @@ static void demo_event(struct kit_s *k, struct kit_widget_s *wg, int ev)
         break;
 
       case KIT_EV_ACTIVATE:
-        set_status(d, "Opened row %d",
-                   ((struct kit_list_s *)wg->data)->sel + 1);
+        if (id == W_TABLE || id == W_SIDE)
+          {
+            set_status(d, "Opened row %d",
+                       ((struct kit_list_s *)wg->data)->sel + 1);
+          }
+        else if (id >= W_SLIDER && id < W_SLIDER + 2)
+          {
+            set_status(d, "Slider let go at %d", (int)wg->value);
+          }
         break;
 
       case KIT_EV_SORT:
