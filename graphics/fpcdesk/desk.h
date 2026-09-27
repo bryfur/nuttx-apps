@@ -147,6 +147,9 @@ enum desk_app_e
   APP_SETTINGS,
   APP_ABOUT,
   APP_LOG,
+#ifdef CONFIG_FPCDESK_WIDGETS
+  APP_WIDGETS,
+#endif
 #ifdef CONFIG_FPCDESK_MUSIC
   APP_MUSIC,                       /* (Last: the icons' places in their
                                     * window, and so their dither, stay
@@ -411,6 +414,7 @@ extern const struct desk_app_s g_app_doom;       /* desk_game.c */
 
 extern const struct desk_app_s g_app_viewer;     /* desk_viewer.c */
 extern const struct desk_app_s g_app_paint;      /* desk_paint.c */
+extern const struct desk_app_s g_app_widgets;    /* desk_kitdemo.c */
 
 /****************************************************************************
  * Public Function Prototypes
@@ -455,6 +459,14 @@ typedef bool (*ops_inside_t)(void *arg, int x, int y);
 void ops_shape(NXWINDOW hwnd, struct desk_ops_s *o, int x, int y, int w,
                int h, uint16_t c, uint8_t alpha, ops_inside_t inside,
                void *arg);
+
+/* A disc d pixels across at (x, y), from the glyph atlas like a character
+ * (one BLEND): false if the atlas has none of that size (6, 8, 14, 16,
+ * 18, 20, 22)
+ */
+
+bool ops_disc_atlas(struct desk_ops_s *o, int x, int y, int d, uint16_t c,
+                    uint8_t alpha);
 
 int  desk_atlas_init(void);
 void desk_luts_init(void);

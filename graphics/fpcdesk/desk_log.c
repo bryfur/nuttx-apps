@@ -19,6 +19,10 @@
  * shown when none is selected); Clear empties the list (not the kernel's
  * log).  Keys: typing filters, Escape clears the filter, arrows, Page
  * Up/Down, Home and End scroll (End follows again), Ctrl-A selects all.
+ *
+ * The tool bar, the filter, the scroll bar and the status bar are the
+ * widget kit's (desk_kit.h); the list is the log's own, a custom widget
+ * of the kit that it draws itself.
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -36,7 +40,7 @@
 #include <unistd.h>
 
 #include "desk.h"
-#include "desk_ui.h"
+#include "desk_kit.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -54,25 +58,29 @@
 #define READER_STACK     2048
 #define POLL_MS          500
 
-#define TB_H             44            /* The toolbar */
-#define ST_H             26            /* The status bar */
 #define ROW_H            18            /* A row: the mono font's cell */
 #define CELL_W           9
 #define CELL_BASE        14            /* Its baseline below the top */
 #define PAD_X            10
-#define SB_W             12            /* The scroll bar */
 #define FILTER_W         220
 
 #define LEVEL_INFO       0
 #define LEVEL_WARN       1
 #define LEVEL_ERROR      2
 
-/* Toolbar zones (desk_ui.h) */
+#define LOG_NWG          16            /* The kit's widgets */
 
-#define Z_FOLLOW         1
-#define Z_CLEAR          2
-#define Z_COPY           3
-#define Z_FILTER         4
+/* The widgets' ids */
+
+#define L_FOLLOW         1
+#define L_CLEAR          2
+#define L_COPY           3
+#define L_FILTER         4
+#define L_LIST           5
+#define L_SCROLL         6
+#define L_STATUS         7
+#define L_DOT            8
+#define L_COUNTS         9
 
 /****************************************************************************
  * Private Types
@@ -148,19 +156,19 @@ struct log_s
   int lw;
   int lh;
   int vis;                             /* Rows that fit */
-  int sbx;
-  int sbty;                            /* The thumb as drawn */
-  int sbth;
 
-  /* The pointer and the keys */
+  /* The tool bar, the scroll bar, the status bar: the widget kit's */
+
+  struct kit_s kit;
+  struct kit_widget_s wg[LOG_NWG];
+  struct ui_field_s filter;
+  char status[64];
+  char counts[64];
+
+  /* The pointer on the list */
 
   uint8_t buttons;
   bool dragsel;
-  bool sbdrag;
-  int sbgrab;
-  struct ui_zones_s zs;
-  struct ui_field_s filter;
-  struct ui_keys_s keys;
 };
 
 /****************************************************************************
@@ -485,16 +493,17 @@ static void need(int n)
   ui_flush(g_hwnd, g_op, n);
 }
 
+/* Where the list is: the kit's custom widget (after kit_layout()) */
+
 static void log_layout(struct desk_win_s *w, struct log_s *l)
 {
+  struct kit_widget_s *wg = kit_get(&l->kit, L_LIST);
   int cols;
 
-  l->lx   = 0;
-  l->ly   = TITLE_H + TB_H;
-  l->sbx  = w->csize.w - SB_W;
-  l->lw   = l->sbx - l->lx;
-  l->lh   = w->csize.h - TB_H - ST_H;
-  l->lh   = l->lh < ROW_H ? ROW_H : l->lh;
+  l->lx   = wg->x;
+  l->ly   = wg->y;
+  l->lw   = wg->w;
+  l->lh   = wg->h < ROW_H ? ROW_H : wg->h;
   l->vis  = l->lh / ROW_H;
   cols    = (l->lw - 2 * PAD_X) / CELL_W;
   cols    = cols < 8 ? 8 : cols;
@@ -569,39 +578,6 @@ static void rows_draw(struct log_s *l, int r0, int r1)
     }
 }
 
-static void scrollbar_draw(struct log_s *l, bool force)
-{
-  int th;
-  int ty;
-
-  if (l->nrow <= l->vis)
-    {
-      th = 0;
-      ty = 0;
-    }
-  else
-    {
-      th = l->lh * l->vis / l->nrow;
-      th = th < 24 ? 24 : th;
-      ty = (l->lh - th) * l->top / max_top(l);
-    }
-
-  if (!force && th == l->sbth && ty == l->sbty)
-    {
-      return;
-    }
-
-  l->sbth = th;
-  l->sbty = ty;
-  need(2);
-  ops_fill(g_op, l->sbx, l->ly, SB_W, l->lh, list_bg());
-  if (th > 0)
-    {
-      ops_rrect(g_op, l->sbx + 3, l->ly + ty + 2, 6, th - 4, LUT_R3, 3,
-                C_THUMB, 200);
-    }
-}
-
 static void list_draw(struct log_s *l)
 {
   need(2);
@@ -621,7 +597,6 @@ static void list_draw(struct log_s *l)
     }
 
   rows_draw(l, l->top, l->top + l->vis + 1);
-  scrollbar_draw(l, true);
 }
 
 /* Show rows from top: the rows still shown move with one COPY, the rest
@@ -639,7 +614,6 @@ static void scroll_to(struct log_s *l, int top, int from)
       if (from < l->nrow)
         {
           rows_draw(l, from, l->nrow);
-          scrollbar_draw(l, false);
         }
 
       return;
@@ -678,61 +652,23 @@ static void scroll_to(struct log_s *l, int top, int from)
       rows_draw(l, top, top - d);
       rows_draw(l, top + l->vis, top + l->vis + 1);    /* The part row */
     }
-
-  scrollbar_draw(l, false);
 }
 
-static void toolbar_draw(struct desk_win_s *w, struct log_s *l)
+/* The tool bar, the scroll bar and the status bar: what they show, into
+ * the kit's widgets (only what changed is drawn again)
+ */
+
+static void log_sync(struct log_s *l)
 {
-  int y = TITLE_H + (TB_H - 28) / 2;
-  int x = 12;
-  int bw;
-
-  ui_zones_clear(&l->zs, 0);
-  need(40);
-  ops_fill(g_op, 0, TITLE_H, w->csize.w, TB_H, C_UI_BAR);
-  ops_fill(g_op, 0, TITLE_H + TB_H - 1, w->csize.w, 1, C_UI_LINE);
-
-  bw = ui_button_width("Pause");
-  ui_button(g_op, x, y, bw, 28, l->follow ? "Pause" : "Follow",
-            l->follow ? ui_look(&l->zs, Z_FOLLOW, true) : UI_DEFAULT);
-  ui_zone_add(&l->zs, 0, Z_FOLLOW, x, y, bw, 28, true);
-  x += bw + 8;
-
-  bw = ui_button_width("Clear");
-  ui_button(g_op, x, y, bw, 28, "Clear",
-            ui_look(&l->zs, Z_CLEAR, l->nline > 0));
-  ui_zone_add(&l->zs, 0, Z_CLEAR, x, y, bw, 28, l->nline > 0);
-  x += bw + 8;
-
-  bw = ui_button_width("Copy");
-  ui_button(g_op, x, y, bw, 28, "Copy",
-            ui_look(&l->zs, Z_COPY, l->nrow > 0));
-  ui_zone_add(&l->zs, 0, Z_COPY, x, y, bw, 28, l->nrow > 0);
-
-  x = w->csize.w - 12 - FILTER_W;
-  need(LOG_LINE_MAX / 4);
-  ui_field_draw(g_op, &l->filter, x, y, FILTER_W, 28, true);
-  if (l->filter.len == 0)
-    {
-      ops_text(g_op, &g_desk_font_ui, x + 10,
-               y + (28 - text_height(&g_desk_font_ui)) / 2, "Filter",
-               g_theme.text_faint, 255);
-    }
-
-  ui_zone_add(&l->zs, 0, Z_FILTER, x, y, FILTER_W, 28, true);
-}
-
-static void status_draw(struct desk_win_s *w, struct log_s *l)
-{
-  const struct desk_font_s *f = &g_desk_font_ui;
-  int y = TITLE_H + w->csize.h - ST_H;
-  int ty = y + (ST_H - text_height(f)) / 2;
+  struct kit_s *k = &l->kit;
   char buf[64];
 
-  need(80);
-  ops_fill(g_op, 0, y, w->csize.w, ST_H, C_UI_BAR);
-  ops_fill(g_op, 0, y, w->csize.w, 1, C_UI_LINE);
+  kit_set_text(k, L_FOLLOW, l->follow ? "Pause" : "Follow");
+  kit_set_style(k, L_FOLLOW, l->follow ? KIT_BTN_NORMAL : KIT_BTN_DEFAULT);
+  kit_enable(k, L_CLEAR, l->nline > 0);
+  kit_enable(k, L_COPY, l->nrow > 0);
+  kit_scroll_set(k, L_SCROLL, l->top, l->vis, l->nrow);
+
   if (l->msgticks > 0)
     {
       snprintf(buf, sizeof(buf), "%s", l->msg);
@@ -747,18 +683,31 @@ static void status_draw(struct desk_win_s *w, struct log_s *l)
       snprintf(buf, sizeof(buf), "%d lines", l->nline);
     }
 
-  ops_text(g_op, f, 14, ty, buf, g_theme.text_dim, 255);
+  if (strcmp(buf, l->status) != 0)
+    {
+      strlcpy(l->status, buf, sizeof(l->status));
+      kit_invalidate(k, L_STATUS);
+    }
 
   snprintf(buf, sizeof(buf), "%d error%s  %d warning%s  %s", l->nerrs,
            l->nerrs == 1 ? "" : "s", l->nwarns, l->nwarns == 1 ? "" : "s",
            l->follow ? "Following" : "Paused");
-  ops_text(g_op, f, w->csize.w - 14 - text_width(f, buf), ty, buf,
-           g_theme.text_dim, 255);
-  if (l->nerrs > 0)
+  if (strcmp(buf, l->counts) != 0)
     {
-      ops_disc(g_op, w->csize.w - 22 - text_width(f, buf), y + ST_H / 2,
-               LUT_R3, 3, g_theme.error, 255);
+      strlcpy(l->counts, buf, sizeof(l->counts));
+      kit_set_text(k, L_COUNTS, l->counts);
     }
+
+  kit_show(k, L_DOT, l->nerrs > 0);
+}
+
+/* Send what was drawn: the list's operations, then the kit's */
+
+static void log_flush(struct desk_win_s *w, struct log_s *l)
+{
+  ops_draw(g_hwnd, g_op);
+  log_sync(l);
+  kit_flush(&l->kit);
 }
 
 static void log_draw(struct desk_win_s *w)
@@ -778,9 +727,21 @@ static void log_draw(struct desk_win_s *w)
       l->top = max_top(l);
     }
 
-  toolbar_draw(w, l);
+  log_sync(l);
+  kit_redraw(&l->kit);                       /* The list too: log_paint() */
+}
+
+/* The kit's draw function: the list, when the kit draws what is under it
+ * again (an expose, a tooltip gone)
+ */
+
+static void log_paint(struct kit_s *k, struct kit_widget_s *wg, int x0,
+                      int y0, int x1, int y1)
+{
+  struct log_s *l = k->priv;
+
+  g_hwnd = (NXWINDOW)k->w->hwnd;
   list_draw(l);
-  status_draw(w, l);
   ops_draw(g_hwnd, g_op);
 }
 
@@ -801,14 +762,8 @@ static void log_update(struct desk_win_s *w, struct log_s *l, int oldrows)
     {
       scroll_to(l, max_top(l), oldrows);
     }
-  else
-    {
-      scrollbar_draw(l, false);
-    }
 
-  status_draw(w, l);
-  toolbar_draw(w, l);
-  ops_draw(g_hwnd, g_op);
+  log_flush(w, l);
 }
 
 /****************************************************************************
@@ -827,9 +782,7 @@ static void set_follow(struct desk_win_s *w, struct log_s *l, bool follow)
           scroll_to(l, max_top(l), INT_MAX);
         }
 
-      toolbar_draw(w, l);
-      status_draw(w, l);
-      ops_draw(g_hwnd, g_op);
+      log_flush(w, l);
     }
 }
 
@@ -841,7 +794,7 @@ static void user_scroll(struct desk_win_s *w, struct log_s *l, int top)
   g_hwnd = (NXWINDOW)w->hwnd;
   ops_reset(g_op);
   scroll_to(l, top, INT_MAX);
-  ops_draw(g_hwnd, g_op);
+  log_flush(w, l);
   set_follow(w, l, top >= max_top(l));
 }
 
@@ -849,7 +802,10 @@ static void refilter(struct desk_win_s *w, struct log_s *l)
 {
   rows_build(l);
   l->top = l->follow ? max_top(l) : 0;
-  log_draw(w);
+  g_hwnd = (NXWINDOW)w->hwnd;
+  ops_reset(g_op);
+  list_draw(l);
+  log_flush(w, l);
 }
 
 static void log_copy(struct desk_win_s *w, struct log_s *l)
@@ -895,8 +851,7 @@ static void log_copy(struct desk_win_s *w, struct log_s *l)
   l->msgticks = 3;
   g_hwnd = (NXWINDOW)w->hwnd;
   ops_reset(g_op);
-  status_draw(w, l);
-  ops_draw(g_hwnd, g_op);
+  log_flush(w, l);
 }
 
 static void select_lines(struct desk_win_s *w, struct log_s *l, bool sel,
@@ -911,124 +866,21 @@ static void select_lines(struct desk_win_s *w, struct log_s *l, bool sel,
   ops_draw(g_hwnd, g_op);
 }
 
-static void log_mouse(struct desk_win_s *w, int x, int y, uint8_t buttons)
+/* The pointer on the list (the kit hands it over while a button pressed
+ * there is held): a line is selected, a drag selects more
+ */
+
+static void list_mouse(struct desk_win_s *w, struct log_s *l, int y,
+                       uint8_t buttons)
 {
-  struct log_s *l = w->priv;
   bool press = (buttons & NX_MOUSE_LEFTBUTTON) &&
                !(l->buttons & NX_MOUSE_LEFTBUTTON);
-  bool release = !(buttons & NX_MOUSE_LEFTBUTTON) &&
-                 (l->buttons & NX_MOUSE_LEFTBUTTON);
-  struct ui_zone_s *z;
-  int hot;
-
-  if (l == NULL)
-    {
-      return;
-    }
+  int r;
 
   l->buttons = buttons;
-  y += TITLE_H;
-
-  /* Dragging the thumb, or a selection */
-
-  if (l->sbdrag)
+  if (press && y >= l->ly && y < l->ly + l->lh)
     {
-      int span = l->lh - l->sbth;
-
-      if (span > 0)
-        {
-          user_scroll(w, l, (y - l->ly - l->sbgrab) * max_top(l) / span);
-        }
-
-      l->sbdrag = !release;
-      return;
-    }
-
-  if (l->dragsel)
-    {
-      int r = l->top + (y - l->ly) / ROW_H;
-
-      r = y < l->ly ? l->top - 1 : r;
-      if (r >= 0 && r < l->nrow)
-        {
-          if (y < l->ly || y >= l->ly + l->lh)
-            {
-              user_scroll(w, l, y < l->ly ? l->top - 1 : l->top + 1);
-            }
-
-          select_lines(w, l, true, l->anchor, l->row[r].seq);
-        }
-
-      l->dragsel = !release;
-      return;
-    }
-
-  /* The toolbar */
-
-  z   = x >= 0 ? ui_zone_at(&l->zs, x, y) : NULL;
-  hot = z != NULL && z->enabled ? z->id : 0;
-  if (hot != l->zs.hot || (press && hot != 0) ||
-      (release && l->zs.pressed != 0))
-    {
-      int pressed = l->zs.pressed;
-
-      l->zs.hot     = hot;
-      l->zs.pressed = press ? hot : release ? 0 : l->zs.pressed;
-      g_hwnd = (NXWINDOW)w->hwnd;
-      ops_reset(g_op);
-      toolbar_draw(w, l);
-      ops_draw(g_hwnd, g_op);
-
-      if (release && pressed == hot && hot != 0)
-        {
-          switch (hot)
-            {
-              case Z_FOLLOW:
-                set_follow(w, l, !l->follow);
-                break;
-
-              case Z_CLEAR:
-                lines_clear(l);
-                log_draw(w);
-                break;
-
-              case Z_COPY:
-                log_copy(w, l);
-                break;
-            }
-        }
-    }
-
-  if (!press || hot != 0)
-    {
-      return;
-    }
-
-  /* The scroll bar: the thumb is dragged, the track pages */
-
-  if (x >= l->sbx && y >= l->ly && y < l->ly + l->lh)
-    {
-      if (l->sbth > 0 && y >= l->ly + l->sbty &&
-          y < l->ly + l->sbty + l->sbth)
-        {
-          l->sbdrag = true;
-          l->sbgrab = y - l->ly - l->sbty;
-        }
-      else if (l->sbth > 0)
-        {
-          user_scroll(w, l, y < l->ly + l->sbty ? l->top - l->vis :
-                                                  l->top + l->vis);
-        }
-
-      return;
-    }
-
-  /* A line: selected (a drag selects more); a click past the end none */
-
-  if (y >= l->ly && y < l->ly + l->lh)
-    {
-      int r = l->top + (y - l->ly) / ROW_H;
-
+      r = l->top + (y - l->ly) / ROW_H;
       if (r < l->nrow)
         {
           l->anchor  = l->row[r].seq;
@@ -1039,8 +891,93 @@ static void log_mouse(struct desk_win_s *w, int x, int y, uint8_t buttons)
         {
           select_lines(w, l, false, 0, 0);
         }
+
+      return;
+    }
+
+  if (!l->dragsel)
+    {
+      return;
+    }
+
+  if (!(buttons & NX_MOUSE_LEFTBUTTON))
+    {
+      l->dragsel = false;
+      return;
+    }
+
+  r = y < l->ly ? l->top - 1 : l->top + (y - l->ly) / ROW_H;
+  if (r >= 0 && r < l->nrow)
+    {
+      if (y < l->ly || y >= l->ly + l->lh)
+        {
+          user_scroll(w, l, y < l->ly ? l->top - 1 : l->top + 1);
+        }
+
+      select_lines(w, l, true, l->anchor, l->row[r].seq);
     }
 }
+
+static void log_event(struct kit_s *k, struct kit_widget_s *wg, int ev)
+{
+  struct desk_win_s *w = k->w;
+  struct log_s *l = k->priv;
+  int id = wg != NULL ? wg->id : 0;
+
+  switch (ev)
+    {
+      case KIT_EV_CLICK:
+        if (id == L_FOLLOW)
+          {
+            set_follow(w, l, !l->follow);
+          }
+        else if (id == L_CLEAR)
+          {
+            lines_clear(l);
+            log_draw(w);
+          }
+        else if (id == L_COPY)
+          {
+            log_copy(w, l);
+          }
+        break;
+
+      case KIT_EV_CHANGE:
+        if (id == L_FILTER)
+          {
+            refilter(w, l);
+          }
+        else if (id == L_SCROLL)
+          {
+            user_scroll(w, l, wg->value);
+          }
+        break;
+
+      case KIT_EV_MOUSE:
+        if (id == L_LIST)
+          {
+            list_mouse(w, l, k->my, k->mbuttons);
+          }
+        break;
+
+      default:
+        break;
+    }
+}
+
+static void log_mouse(struct desk_win_s *w, int x, int y, uint8_t buttons)
+{
+  struct log_s *l = w->priv;
+
+  if (l != NULL)
+    {
+      kit_mouse(&l->kit, x, y, buttons);
+    }
+}
+
+/* Keys: the list's (scrolling, selecting, copying) first; the rest go to
+ * the kit, and so to the filter
+ */
 
 static void log_key(struct desk_win_s *w, const uint8_t *ch, int n)
 {
@@ -1054,7 +991,7 @@ static void log_key(struct desk_win_s *w, const uint8_t *ch, int n)
       return;
     }
 
-  nk = ui_keys(&l->keys, ch, n, keys, 16);
+  nk = kit_keys(&l->kit, ch, n, keys, 16);
   for (i = 0; i < nk; i++)
     {
       switch (keys[i] & KEY_MASK)
@@ -1099,6 +1036,7 @@ static void log_key(struct desk_win_s *w, const uint8_t *ch, int n)
             if (l->filter.len > 0)
               {
                 ui_field_set(&l->filter, "");
+                kit_invalidate(&l->kit, L_FILTER);
                 refilter(w, l);
               }
             else if (l->sel)
@@ -1108,14 +1046,12 @@ static void log_key(struct desk_win_s *w, const uint8_t *ch, int n)
             break;
 
           default:
-            if ((keys[i] & KEY_MASK) != KEY_CTL('a') &&
-                ui_field_key(&l->filter, keys[i]))
-              {
-                refilter(w, l);
-              }
+            kit_press_key(&l->kit, keys[i]);
             break;
         }
     }
+
+  kit_flush(&l->kit);
 }
 
 /* The thread says there is more */
@@ -1150,13 +1086,95 @@ static void log_tick(struct desk_win_s *w)
 {
   struct log_s *l = w->priv;
 
-  if (l != NULL && l->msgticks > 0 && --l->msgticks == 0)
+  if (l == NULL)
     {
-      g_hwnd = (NXWINDOW)w->hwnd;
-      ops_reset(g_op);
-      status_draw(w, l);
-      ops_draw(g_hwnd, g_op);
+      return;
     }
+
+  if (l->msgticks > 0)
+    {
+      l->msgticks--;
+      log_sync(l);
+    }
+
+  kit_tick(&l->kit);
+}
+
+static void log_resize(struct desk_win_s *w)
+{
+  struct log_s *l = w->priv;
+
+  if (l != NULL)
+    {
+      kit_layout(&l->kit);
+      log_draw(w);
+    }
+}
+
+static void log_expose(struct desk_win_s *w, int x, int y, int cw, int ch)
+{
+  struct log_s *l = w->priv;
+
+  if (l != NULL)
+    {
+      kit_expose(&l->kit, x, y, cw, ch);
+    }
+}
+
+static void log_focus(struct desk_win_s *w)
+{
+  struct log_s *l = w->priv;
+
+  if (l != NULL)
+    {
+      kit_activate(&l->kit);
+    }
+}
+
+/* The tool bar, the list and its scroll bar, the status bar */
+
+static void log_build(struct desk_win_s *w, struct log_s *l)
+{
+  struct kit_s *k = &l->kit;
+  struct kit_widget_s *wg;
+
+  kit_init(k, w, l->wg, LOG_NWG, log_event);
+  k->priv = l;
+  k->draw = log_paint;
+
+  kit_col(k, KIT_BOX_WINDOW);
+    kit_row(k, KIT_BOX_BAR);
+      kit_button(k, L_FOLLOW, "Pause", KIT_ICON_NONE, KIT_BTN_NORMAL);
+      kit_size(k, 72, 0);
+      kit_tip(k, "Keep showing the newest lines");
+      kit_button(k, L_CLEAR, "Clear", KIT_ICON_NONE, KIT_BTN_NORMAL);
+      kit_tip(k, "Empty the list (not the kernel's log)");
+      kit_button(k, L_COPY, "Copy", KIT_ICON_NONE, KIT_BTN_NORMAL);
+      kit_tip(k, "The lines selected, or all shown, to the clipboard");
+      kit_spacer(k, 1);
+      kit_field(k, L_FILTER, &l->filter, "Filter");
+      kit_size(k, FILTER_W, 0);
+    kit_end(k);
+
+    wg = kit_row(k, KIT_BOX_NONE);
+    wg->gap = 0;
+    kit_grow(k, 1);
+      kit_custom(k, L_LIST)->flags |= KIT_F_NOFOCUS;
+      kit_grow(k, 1);
+      kit_scroll(k, L_SCROLL);
+    kit_end(k);
+
+    kit_row(k, KIT_BOX_STATUS)->gap = 6;
+      kit_label(k, L_STATUS, l->status, KIT_TEXT_DIM);
+      kit_grow(k, 1);
+      kit_label(k, L_DOT, DESK_CH_BULLET, KIT_TEXT_ERROR)->flags |=
+        KIT_F_HIDDEN;
+      kit_label(k, L_COUNTS, l->counts, KIT_TEXT_DIM);
+    kit_end(k);
+  kit_end(k);
+
+  kit_focus(k, L_FILTER);
+  kit_layout(k);
 }
 
 static void log_close(struct desk_win_s *w)
@@ -1208,7 +1226,6 @@ static struct desk_win_s *log_open(void)
     }
 
   l->follow = true;
-  l->zs.hot = 0;
   w = desk_win_open(APP_LOG, "System Log", 760, 460);
   if (w == NULL)
     {
@@ -1219,6 +1236,7 @@ static struct desk_win_s *log_open(void)
     }
 
   w->priv = l;
+  log_build(w, l);
   log_layout(w, l);
 
   fd = open(LOG_DEV, O_RDONLY | O_NONBLOCK);
@@ -1300,10 +1318,13 @@ const struct desk_app_s g_app_log =
   .icon   = log_icon,
   .open   = log_open,
   .draw   = log_draw,
+  .expose = log_expose,
+  .resize = log_resize,
   .mouse  = log_mouse,
   .key    = log_key,
   .tick   = log_tick,
   .wake   = log_wake,
+  .focus  = log_focus,
   .close  = log_close,
   .single = true,
 };

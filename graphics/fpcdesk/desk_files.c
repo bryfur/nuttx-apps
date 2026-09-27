@@ -3,16 +3,18 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Files: the file manager.  A sidebar of places, a tool bar (back, up, the
- * path as buttons, refresh), the folder as a list (icon, name, size,
- * modified; folders first, sorted by a column), and a bar at the bottom:
- * the status and the actions (new folder, rename, delete), or a question.
+ * Files: the file manager, built with the widget kit (desk_kit.h).  A
+ * sidebar of places, a tool bar (back, up, the path as buttons, refresh),
+ * the folder as a table (icon, name, size, modified; folders first,
+ * sorted by a column: click it), and a status bar with the actions (new
+ * folder, rename, delete: each asks in a dialog).  The right button on a
+ * row is a menu of what can be done with it.
  *
- * The list scrolls by pixels: a COPY within the window moves what stays,
- * and only the rows that come into view are drawn (cut to the list with
- * ui_clip()).  The pointer or the selection moving redraws just the rows
- * concerned.  Once a second the folder's names are read (without stat()):
- * if they changed, the folder is loaded again.
+ * The table is the kit's list: it scrolls by pixels with a COPY within
+ * the window and draws only the rows that come into view; the pointer or
+ * the selection moving draws just the rows concerned.  Once a second the
+ * folder's names are read (without stat()): if they changed, the folder
+ * is loaded again.
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -31,7 +33,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
-#include "desk_ui.h"
+#include "desk_kit.h"
 #include "desk_image.h"
 
 /****************************************************************************
@@ -41,21 +43,14 @@
 #define FILES_W        700
 #define FILES_H        440
 
-#define TB_H           44               /* Tool bar */
 #define SIDE_W         150              /* Places */
-#define HDR_H          28               /* Column names */
-#define ROW_H          28
 #define BAR_H          42               /* Status and actions */
-#define SB_W           12               /* Scroll bar */
-#define PLACE_H        30
+#define NWG            24               /* The kit's widgets */
 
 #define MAX_PLACES     6
 #define MAX_CRUMBS     16
 #define HIST_N         16
-#define DBLCLICK_MS    400
 
-#define C_SIDE         (g_theme.sidebar)
-#define C_PATHBAR      THEMED(RGB(0x1c, 0x1c, 0x20), RGB(0xe6, 0xe6, 0xea))
 #define C_FOLDER       RGB(0x5a, 0xa8, 0xf0)
 #define C_PAGE         THEMED(RGB(0xdc, 0xdc, 0xe2), RGB(0xc8, 0xcc, 0xd4))
 #define C_EXEC         RGB(0x3d, 0xc0, 0x70)
@@ -74,32 +69,32 @@
 #define COL_SIZE       1
 #define COL_DATE       2
 
-/* Areas that react to the pointer, by group (redrawn together) */
+/* The widgets */
 
-#define ZG_TOOL        0
-#define ZG_SIDE        1
-#define ZG_HEAD        2
-#define ZG_BAR         3
+#define F_BACK         1
+#define F_UP           2
+#define F_PATH         3
+#define F_REFRESH      4
+#define F_PLACES       5
+#define F_LIST         6
+#define F_STATUS       7
+#define F_NEWDIR       8
+#define F_RENAME       9
+#define F_DELETE       10
 
-#define Z_NONE         0
-#define Z_BACK         1
-#define Z_UP           2
-#define Z_REFRESH      3
-#define Z_NEWDIR       4
-#define Z_RENAME       5
-#define Z_DELETE       6
-#define Z_OK           7
-#define Z_CANCEL       8
-#define Z_COL          16                /* + column */
-#define Z_CRUMB        32                /* + crumb */
-#define Z_PLACE        64                /* + place */
-
-/* Questions in the bottom bar */
+/* Questions (dialogs, their ids) and the row's menu */
 
 #define P_NONE         0
 #define P_NEWDIR       1
 #define P_RENAME       2
 #define P_DELETE       3
+
+#define M_ROW          1
+#define M_OPEN         0                /* Its items */
+#define M_RENAME       1
+#define M_DELETE       2
+#define M_COPYPATH     4
+#define M_NEWDIR       5
 
 /****************************************************************************
  * Private Types
@@ -121,29 +116,8 @@ struct place_s
 
 struct crumb_s
 {
-  int16_t w;
   int16_t len;                           /* Its path: this much of ours */
   char label[40];
-};
-
-/* Where things are, in frame coordinates */
-
-struct lay_s
-{
-  int cw;
-  int y0;                                /* Top of the client area */
-  int bottom;                            /* Below it */
-  int lx;                                /* The rows */
-  int ly;
-  int lw;
-  int lh;
-  int hy;                                /* Column names */
-  int sbx;                               /* Scroll bar */
-  int by;                                /* Bottom bar */
-  int namex;                             /* Name text */
-  int namew;
-  int sizer;                             /* Right edge of sizes, 0: none */
-  int datex;                             /* Dates, 0: none */
 };
 
 struct files_s
@@ -156,10 +130,6 @@ struct files_s
   uint32_t sig;                          /* The names, hashed */
   int nfiles;
   int ndirs;
-
-  int sel;                               /* -1: none */
-  int hover;                             /* Row under the pointer, -1 */
-  int top;                               /* Scrolled, pixels */
   int sortcol;
   bool sortdesc;
 
@@ -169,30 +139,39 @@ struct files_s
   struct place_s place[MAX_PLACES];
   int nplaces;
   struct crumb_s crumb[MAX_CRUMBS];
+  const char *crumbp[MAX_CRUMBS];        /* Their labels, for the kit */
   int ncrumbs;
-  int crumb0;                            /* First shown, the rest elided */
-  struct ui_zones_s zs;
 
-  uint8_t buttons;
-  bool dragthumb;
-  int grab;                              /* Pointer in the thumb */
-  uint32_t clickms;
-  int clickrow;
+  /* The window: the kit's widgets, the table and the places */
+
+  struct kit_s kit;
+  struct kit_widget_s wg[NWG];
+  struct kit_list_s list;
+  struct kit_list_s places;
+  char status[160];
 
   char msg[128];
   bool msgerr;
-
-  int prompt;
   bool deltree;                          /* Delete: a folder with contents */
-  struct ui_field_s field;
-  struct ui_keys_s keys;
 };
 
 /****************************************************************************
  * Private Data
  ****************************************************************************/
 
-static struct desk_ops_s g_o;
+static const struct kit_col_s g_cols[3] =
+{
+  { "Name",     0,   0,   0 },
+  { "Size",     104, 300, KIT_COL_RIGHT | KIT_COL_DIM },
+  { "Modified", 148, 470, KIT_COL_DIM },
+};
+
+static const char * const g_rowmenu[6] =
+{
+  "Open", "Rename" DESK_CH_ELLIPSIS, "Delete" DESK_CH_ELLIPSIS, "-",
+  "Copy Path", "New Folder" DESK_CH_ELLIPSIS
+};
+
 static int g_sortcol;
 static bool g_sortdesc;
 
@@ -577,76 +556,6 @@ static int dir_load(struct files_s *f, const char *path)
 }
 
 /****************************************************************************
- * Private Functions: layout
- ****************************************************************************/
-
-static void layout(struct desk_win_s *w, struct lay_s *l)
-{
-  l->cw     = w->csize.w;
-  l->y0     = TITLE_H;
-  l->bottom = TITLE_H + w->csize.h;
-  l->hy     = l->y0 + TB_H;
-  l->lx     = SIDE_W + 1;
-  l->ly     = l->hy + HDR_H;
-  l->sbx    = l->cw - SB_W;
-  l->lw     = l->sbx - l->lx;
-  l->by     = l->bottom - BAR_H;
-  l->lh     = l->by - l->ly;
-  if (l->lh < 0)
-    {
-      l->lh = 0;
-    }
-
-  l->namex = l->lx + 40;
-  l->sizer = 0;
-  l->datex = 0;
-  if (l->lw >= 470)
-    {
-      l->datex = l->lx + l->lw - 136;
-      l->sizer = l->datex - 24;
-      l->namew = l->sizer - 80 - l->namex;
-    }
-  else if (l->lw >= 300)
-    {
-      l->sizer = l->lx + l->lw - 14;
-      l->namew = l->sizer - 80 - l->namex;
-    }
-  else
-    {
-      l->namew = l->lx + l->lw - 10 - l->namex;
-    }
-}
-
-static int content_h(struct files_s *f)
-{
-  return f->n * ROW_H;
-}
-
-static int max_top(struct files_s *f, struct lay_s *l)
-{
-  int m = content_h(f) - l->lh;
-
-  return m > 0 ? m : 0;
-}
-
-/* The scroll bar's thumb: its top and height; false if there is none */
-
-static bool thumb(struct files_s *f, struct lay_s *l, int *ty, int *th)
-{
-  int total = content_h(f);
-
-  if (total <= l->lh || l->lh <= 0)
-    {
-      return false;
-    }
-
-  *th = l->lh * l->lh / total;
-  *th = *th < 24 ? 24 : *th;
-  *ty = l->ly + (l->lh - *th) * f->top / max_top(f, l);
-  return true;
-}
-
-/****************************************************************************
  * Private Functions: icons
  ****************************************************************************/
 
@@ -727,7 +636,7 @@ static void icon_place(struct desk_ops_s *o, const char *path, int x, int y,
 }
 
 /****************************************************************************
- * Private Functions: drawing
+ * Private Functions: what the widgets show
  ****************************************************************************/
 
 static void fmt_size(off_t s, char *buf, int n)
@@ -780,222 +689,92 @@ static void fmt_date(time_t t, char *buf, int n)
     }
 }
 
-/* Row i (past the last: empty), cut to [cy0, cy1) of the list */
+/* The table's rows: an entry's name, size and date; its icon */
 
-static void row_draw(struct desk_win_s *w, struct lay_s *l, int i, int cy0,
-                     int cy1)
+static const char *row_text(struct kit_s *k, struct kit_widget_s *wg,
+                            int row, int col, char *buf, int size)
 {
-  struct files_s *f = w->priv;
-  NXWINDOW hwnd = (NXWINDOW)w->hwnd;
-  const struct desk_font_s *font = &g_desk_font_ui;
-  int y = l->ly + i * ROW_H - f->top;
-  int ty = y + (ROW_H - text_height(font)) / 2;
-  char buf[96];
-  int start;
+  struct files_s *f = k->priv;
+  struct fent_s *e;
 
-  if (cy0 < l->ly)
+  if (row >= f->n)
     {
-      cy0 = l->ly;
+      return NULL;
     }
 
-  if (cy1 > l->ly + l->lh)
+  e = &f->ent[row];
+  switch (col)
     {
-      cy1 = l->ly + l->lh;
-    }
+      case COL_NAME:
+        return e->name;
 
-  if (y >= cy1 || y + ROW_H <= cy0)
+      case COL_SIZE:
+        if (e->kind == K_DIR)
+          {
+            return NULL;
+          }
+
+        fmt_size(e->size, buf, size);
+        return buf;
+
+      default:
+        fmt_date(e->mtime, buf, size);
+        return buf;
+    }
+}
+
+static void row_icon(struct kit_s *k, struct kit_widget_s *wg,
+                     struct desk_ops_s *o, int row, int x, int y,
+                     uint16_t fg, uint16_t bg)
+{
+  struct files_s *f = k->priv;
+
+  if (row >= f->n)
     {
       return;
     }
 
-  ui_flush(hwnd, &g_o, 160);
-  start = g_o.n;
-  ops_fill(&g_o, l->lx, y, l->lw, ROW_H, C_WINDOW_BG);
-  if (i < f->n)
+  if (f->ent[row].kind == K_DIR)
     {
-      struct fent_s *e = &f->ent[i];
-      bool sel = i == f->sel;
-      uint16_t fg = sel ? C_ACCENT_TEXT : C_TEXT;
-      uint16_t dim = sel ? colour_mix(C_ACCENT_TEXT, C_ACCENT, 60) :
-                           C_TEXT_DIM;
-
-      if (sel)
-        {
-          ops_rrect(&g_o, l->lx + 4, y + 1, l->lw - 8, ROW_H - 2, LUT_R6, 6,
-                    C_ACCENT, 255);
-        }
-      else if (i == f->hover)
-        {
-          ops_rrect(&g_o, l->lx + 4, y + 1, l->lw - 8, ROW_H - 2, LUT_R6, 6,
-                    C_HILITE, THEMED(16, 10));
-        }
-
-      if (e->kind == K_DIR)
-        {
-          icon_folder(&g_o, l->lx + 12, y + 5, C_FOLDER);
-        }
-      else
-        {
-          icon_page(&g_o, l->lx + 12, y + 5, e->kind);
-        }
-
-      ui_fit(font, e->name, l->namew, buf, sizeof(buf));
-      ops_text(&g_o, font, l->namex, ty, buf, fg, 255);
-      if (l->sizer > 0 && e->kind != K_DIR)
-        {
-          fmt_size(e->size, buf, sizeof(buf));
-          ops_text(&g_o, font, l->sizer - text_width(font, buf), ty, buf,
-                   dim, 255);
-        }
-
-      if (l->datex > 0)
-        {
-          fmt_date(e->mtime, buf, sizeof(buf));
-          ops_text(&g_o, font, l->datex, ty, buf, dim, 255);
-        }
-    }
-
-  ui_clip(&g_o, start, l->lx, cy0, l->lx + l->lw, cy1);
-}
-
-static void scrollbar_draw(struct desk_win_s *w, struct lay_s *l)
-{
-  struct files_s *f = w->priv;
-  int ty;
-  int th;
-
-  ui_flush((NXWINDOW)w->hwnd, &g_o, 8);
-  ops_fill(&g_o, l->sbx, l->ly, SB_W, l->lh, C_WINDOW_BG);
-  if (thumb(f, l, &ty, &th))
-    {
-      ops_rrect(&g_o, l->sbx + 3, ty + 2, 6, th - 4, LUT_R3, 3, C_THUMB,
-                f->dragthumb ? 255 : 170);
-    }
-}
-
-/* The list between y0 and y1 (frame coordinates) */
-
-static void list_paint(struct desk_win_s *w, struct lay_s *l, int y0,
-                       int y1)
-{
-  struct files_s *f = w->priv;
-  int i;
-  int last;
-
-  if (y0 < l->ly)
-    {
-      y0 = l->ly;
-    }
-
-  if (y1 > l->ly + l->lh)
-    {
-      y1 = l->ly + l->lh;
-    }
-
-  if (y1 <= y0)
-    {
-      return;
-    }
-
-  last = (y1 - 1 - l->ly + f->top) / ROW_H;
-  for (i = (y0 - l->ly + f->top) / ROW_H; i <= last; i++)
-    {
-      row_draw(w, l, i, y0, y1);
-    }
-
-  if (f->n == 0)
-    {
-      int start = g_o.n;
-
-      ops_text_centre(&g_o, &g_desk_font_ui, l->lx + l->lw / 2,
-                      l->ly + l->lh / 2 - 20, "Folder is empty", C_TEXT_DIM,
-                      255);
-      ui_clip(&g_o, start, l->lx, y0, l->lx + l->lw, y1);
-    }
-}
-
-static void list_draw(struct desk_win_s *w, struct lay_s *l)
-{
-  list_paint(w, l, l->ly, l->ly + l->lh);
-  scrollbar_draw(w, l);
-  ops_draw((NXWINDOW)w->hwnd, &g_o);
-}
-
-/* Scroll the list to top: what stays is copied, the rest drawn */
-
-static void list_scroll(struct desk_win_s *w, struct lay_s *l, int top)
-{
-  struct files_s *f = w->priv;
-  struct nx_gpuop_s *op;
-  int d;
-
-  if (top > max_top(f, l))
-    {
-      top = max_top(f, l);
-    }
-
-  if (top < 0)
-    {
-      top = 0;
-    }
-
-  d = top - f->top;
-  if (d == 0)
-    {
-      return;
-    }
-
-  f->top = top;
-  if (d >= l->lh || -d >= l->lh)
-    {
-      list_paint(w, l, l->ly, l->ly + l->lh);
+      icon_folder(o, x - 1, y - 1, C_FOLDER);
     }
   else
     {
-      ui_flush((NXWINDOW)w->hwnd, &g_o, 1);
-      op = ops_add(&g_o);
-      op->op = NX_GPUOP_COPY;
-      op->x  = l->lx;
-      op->w  = l->lw;
-      op->h  = l->lh - (d > 0 ? d : -d);
-      op->sx = l->lx;
-      if (d > 0)
-        {
-          op->y  = l->ly;
-          op->sy = l->ly + d;
-          list_paint(w, l, l->ly + l->lh - d, l->ly + l->lh);
-        }
-      else
-        {
-          op->y  = l->ly - d;
-          op->sy = l->ly;
-          list_paint(w, l, l->ly, l->ly - d);
-        }
+      icon_page(o, x - 1, y - 1, f->ent[row].kind);
     }
-
-  scrollbar_draw(w, l);
-  ops_draw((NXWINDOW)w->hwnd, &g_o);
 }
 
-static void row_redraw(struct desk_win_s *w, struct lay_s *l, int i)
+/* The places: their names and symbols */
+
+static const char *place_text(struct kit_s *k, struct kit_widget_s *wg,
+                              int row, int col, char *buf, int size)
 {
-  if (i >= 0)
+  struct files_s *f = k->priv;
+
+  return row < f->nplaces ? f->place[row].name : NULL;
+}
+
+static void place_icon(struct kit_s *k, struct kit_widget_s *wg,
+                       struct desk_ops_s *o, int row, int x, int y,
+                       uint16_t fg, uint16_t bg)
+{
+  struct files_s *f = k->priv;
+
+  if (row < f->nplaces)
     {
-      row_draw(w, l, i, l->ly, l->ly + l->lh);
+      icon_place(o, f->place[row].path, x, y, fg, bg);
     }
 }
 
-/* The path as buttons: the place it is in, then a button a folder; the
- * first ones are left out (an ellipsis) if they do not fit in avail
+/* The path as buttons: the place it is in, then a button a folder (the
+ * kit leaves out the first ones if they do not fit)
  */
 
-static void crumbs_build(struct files_s *f, int avail)
+static void crumbs_build(struct files_s *f)
 {
-  const struct desk_font_s *font = &g_desk_font_ui;
   const char *p = f->path;
   size_t blen = 0;
   int base = -1;
-  int total;
   int n = 0;
   int i;
   int k;
@@ -1054,248 +833,26 @@ static void crumbs_build(struct files_s *f, int avail)
     }
 
   f->ncrumbs = n;
-
-  /* Widths; leave out the first ones if they do not fit */
-
-  total = -14;
   for (k = 0; k < n; k++)
     {
-      const struct desk_font_s *cf = k == n - 1 ? &g_desk_font_uib : font;
-      char buf[40];
-
-      ui_fit(cf, f->crumb[k].label, 180, buf, sizeof(buf));
-      strlcpy(f->crumb[k].label, buf, sizeof(f->crumb[k].label));
-      f->crumb[k].w = text_width(cf, buf) + 16;
-      total += f->crumb[k].w + 14;
-    }
-
-  f->crumb0 = 0;
-  while (total > avail && f->crumb0 < n - 1)
-    {
-      total -= f->crumb[f->crumb0].w + 14;
-      if (f->crumb0 == 0)
-        {
-          total += text_width(font, DESK_CH_ELLIPSIS) + 16 + 14;
-        }
-
-      f->crumb0++;
+      f->crumbp[k] = f->crumb[k].label;
     }
 }
 
-static void toolbar_draw(struct desk_win_s *w, struct lay_s *l)
-{
-  struct files_s *f = w->priv;
-  NXWINDOW hwnd = (NXWINDOW)w->hwnd;
-  const struct desk_font_s *font = &g_desk_font_ui;
-  int y = l->y0 + 7;
-  int ty = y + (30 - text_height(font)) / 2;
-  int px = 88;
-  int pw = l->cw - px - 52;
-  uint16_t rbg;
-  int x;
-  int k;
-  bool can;
+/* The status bar's text: a message, the selection, or what is here */
 
-  ui_zones_clear(&f->zs, ZG_TOOL);
-  ui_flush(hwnd, &g_o, 220);
-  ops_fill(&g_o, 0, l->y0, l->cw, TB_H, C_UI_BAR);
-  ops_fill(&g_o, 0, l->y0 + TB_H - 1, l->cw, 1, C_UI_LINE);
-
-  /* Back, up */
-
-  can = f->nhist > 0;
-  ui_button(&g_o, 10, y, 32, 30, NULL, ui_look(&f->zs, Z_BACK, can));
-  ops_fill(&g_o, 21, y + 14, 11, 2, can ? C_TEXT : C_TEXT_DIM);
-  ui_triangle(&g_o, 19, y + 15, 5, 2, can ? C_TEXT : C_TEXT_DIM, 255);
-  ui_zone_add(&f->zs, ZG_TOOL, Z_BACK, 10, y, 32, 30, can);
-
-  can = strcmp(f->path, "/") != 0;
-  ui_button(&g_o, 46, y, 32, 30, NULL, ui_look(&f->zs, Z_UP, can));
-  ops_fill(&g_o, 61, y + 12, 2, 11, can ? C_TEXT : C_TEXT_DIM);
-  ui_triangle(&g_o, 62, y + 10, 5, 0, can ? C_TEXT : C_TEXT_DIM, 255);
-  ui_zone_add(&f->zs, ZG_TOOL, Z_UP, 46, y, 32, 30, can);
-
-  /* The path */
-
-  ops_rrect(&g_o, px, y, pw, 30, LUT_R6, 6, C_PATHBAR, 255);
-  crumbs_build(f, pw - 8);
-  x = px + 4;
-  if (f->crumb0 > 0)
-    {
-      int cw = text_width(font, DESK_CH_ELLIPSIS) + 16;
-
-      if (f->zs.hot == Z_CRUMB + f->crumb0 - 1)
-        {
-          ops_rrect(&g_o, x, y + 3, cw, 24, LUT_R6, 6, C_UI_HOVER, 255);
-        }
-
-      ops_text(&g_o, font, x + 8, ty, DESK_CH_ELLIPSIS, C_TEXT_DIM, 255);
-      ui_zone_add(&f->zs, ZG_TOOL, Z_CRUMB + f->crumb0 - 1, x, y, cw, 30,
-                  true);
-      x += cw;
-      ops_text(&g_o, font, x + 4, ty, "/", C_TEXT_DIM, 160);
-      x += 14;
-    }
-
-  for (k = f->crumb0; k < f->ncrumbs; k++)
-    {
-      struct crumb_s *c = &f->crumb[k];
-      bool last = k == f->ncrumbs - 1;
-
-      if (f->zs.hot == Z_CRUMB + k && !last)
-        {
-          ops_rrect(&g_o, x, y + 3, c->w, 24, LUT_R6, 6, C_UI_HOVER, 255);
-        }
-
-      ops_text(&g_o, last ? &g_desk_font_uib : font, x + 8, ty, c->label,
-               last ? C_TEXT : C_TEXT_DIM, 255);
-      ui_zone_add(&f->zs, ZG_TOOL, Z_CRUMB + k, x, y, c->w, 30, !last);
-      x += c->w;
-      if (!last)
-        {
-          ops_text(&g_o, font, x + 4, ty, "/", C_TEXT_DIM, 160);
-          x += 14;
-        }
-    }
-
-  /* Refresh: a ring with a gap and an arrowhead */
-
-  x = l->cw - 42;
-  k = ui_look(&f->zs, Z_REFRESH, true);
-  rbg = k == UI_PRESSED ? C_UI_PRESSED : k == UI_HOVER ? C_UI_HOVER :
-        C_UI_BUTTON;
-  ui_button(&g_o, x, y, 32, 30, NULL, k);
-  ops_disc(&g_o, x + 16, y + 15, LUT_R6, 6, C_TEXT, 255);
-  ops_disc(&g_o, x + 16, y + 15, LUT_R6, 4, rbg, 255);
-  ops_fill(&g_o, x + 17, y + 8, 6, 7, rbg);
-  ui_triangle(&g_o, x + 18, y + 11, 4, 3, C_TEXT, 255);
-  ui_zone_add(&f->zs, ZG_TOOL, Z_REFRESH, x, y, 32, 30, true);
-  ops_draw(hwnd, &g_o);
-}
-
-static void sidebar_draw(struct desk_win_s *w, struct lay_s *l)
-{
-  struct files_s *f = w->priv;
-  NXWINDOW hwnd = (NXWINDOW)w->hwnd;
-  int y = l->y0 + TB_H;
-  int k;
-
-  ui_zones_clear(&f->zs, ZG_SIDE);
-  ui_flush(hwnd, &g_o, 220);
-  ops_fill(&g_o, 0, y, SIDE_W, l->bottom - y, C_SIDE);
-  ops_fill(&g_o, SIDE_W, y, 1, l->bottom - y, C_UI_LINE);
-  ops_text(&g_o, &g_desk_font_small, 16, y + 12, "Places", C_TEXT_DIM, 255);
-  y += 32;
-  for (k = 0; k < f->nplaces; k++)
-    {
-      bool here = strcmp(f->path, f->place[k].path) == 0;
-      uint16_t c = here ? C_ACCENT_TEXT : C_TEXT;
-      uint16_t bg = C_SIDE;
-
-      if (y + PLACE_H > l->bottom - 8)
-        {
-          break;
-        }
-
-      if (here)
-        {
-          bg = C_ACCENT;
-          ops_rrect(&g_o, 8, y, SIDE_W - 16, PLACE_H - 2, LUT_R6, 6, bg,
-                    255);
-        }
-      else if (f->zs.hot == Z_PLACE + k)
-        {
-          bg = C_UI_HOVER;
-          ops_rrect(&g_o, 8, y, SIDE_W - 16, PLACE_H - 2, LUT_R6, 6, bg,
-                    255);
-        }
-
-      icon_place(&g_o, f->place[k].path, 18, y + 6, c, bg);
-      ops_text(&g_o, &g_desk_font_ui, 42, y + 6, f->place[k].name, c, 255);
-      ui_zone_add(&f->zs, ZG_SIDE, Z_PLACE + k, 8, y, SIDE_W - 16,
-                  PLACE_H - 2, true);
-      y += PLACE_H;
-    }
-
-  ops_draw(hwnd, &g_o);
-}
-
-static void header_draw(struct desk_win_s *w, struct lay_s *l)
-{
-  static const char * const names[3] =
-  {
-    "Name", "Size", "Modified"
-  };
-
-  struct files_s *f = w->priv;
-  NXWINDOW hwnd = (NXWINDOW)w->hwnd;
-  const struct desk_font_s *font = &g_desk_font_small;
-  int ty = l->hy + (HDR_H - text_height(font)) / 2;
-  int c;
-
-  ui_zones_clear(&f->zs, ZG_HEAD);
-  ui_flush(hwnd, &g_o, 60);
-  ops_fill(&g_o, l->lx, l->hy, l->cw - l->lx, HDR_H, C_WINDOW_BG);
-  ops_fill(&g_o, l->lx + 8, l->hy + HDR_H - 1, l->cw - l->lx - 16, 1,
-           C_UI_BAR);
-  for (c = 0; c < 3; c++)
-    {
-      int x;
-      int zx;
-      int zw;
-      int tw = text_width(font, names[c]);
-      bool on = f->sortcol == c;
-      uint16_t col = on || f->zs.hot == Z_COL + c ? C_TEXT : C_TEXT_DIM;
-
-      if (c == COL_NAME)
-        {
-          x  = l->namex;
-          zx = l->lx;
-          zw = l->namex + l->namew - l->lx;
-        }
-      else if (c == COL_SIZE && l->sizer > 0)
-        {
-          x  = l->sizer - tw;
-          zx = l->sizer - 80;
-          zw = 80 + 8;
-        }
-      else if (c == COL_DATE && l->datex > 0)
-        {
-          x  = l->datex;
-          zx = l->datex - 8;
-          zw = l->lx + l->lw - zx;
-        }
-      else
-        {
-          continue;
-        }
-
-      ops_text(&g_o, font, x, ty, names[c], col, 255);
-      if (on)
-        {
-          int ax = c == COL_SIZE ? x - 10 : x + tw + 10;
-
-          ui_triangle(&g_o, ax, l->hy + HDR_H / 2, 4, f->sortdesc ? 1 : 0,
-                      col, 255);
-        }
-
-      ui_zone_add(&f->zs, ZG_HEAD, Z_COL + c, zx, l->hy, zw, HDR_H, true);
-    }
-
-  ops_draw(hwnd, &g_o);
-}
-
-static void bar_text(struct files_s *f, char *buf, int n)
+static void status_text(struct files_s *f, char *buf, int n)
 {
   char size[24];
+  int sel = f->list.sel;
 
   if (f->msg[0] != '\0')
     {
       strlcpy(buf, f->msg, n);
     }
-  else if (f->sel >= 0 && f->sel < f->n)
+  else if (sel >= 0 && sel < f->n)
     {
-      struct fent_s *e = &f->ent[f->sel];
+      struct fent_s *e = &f->ent[sel];
 
       if (e->kind == K_DIR)
         {
@@ -1315,139 +872,45 @@ static void bar_text(struct files_s *f, char *buf, int n)
     }
 }
 
-/* A button of the bottom bar, right-aligned at x; returns the next x */
+/* Everything but the table's rows, from the state: the kit draws what
+ * changed at its next flush
+ */
 
-static int bar_button(struct files_s *f, int x, int y, int id,
-                      const char *label, bool enabled, int accent)
+static void files_sync(struct files_s *f)
 {
-  int bw = ui_button_width(label);
-  int lk = ui_look(&f->zs, id, enabled);
-
-  if (accent != UI_NORMAL && lk != UI_DISABLED && lk != UI_PRESSED)
-    {
-      lk = accent;
-    }
-
-  x -= bw;
-  ui_button(&g_o, x, y, bw, 28, label, lk);
-  ui_zone_add(&f->zs, ZG_BAR, id, x, y, bw, 28, enabled);
-  return x - 8;
-}
-
-static void bar_draw(struct desk_win_s *w, struct lay_s *l)
-{
-  struct files_s *f = w->priv;
-  NXWINDOW hwnd = (NXWINDOW)w->hwnd;
-  const struct desk_font_s *font = &g_desk_font_ui;
-  int x0 = l->lx;
-  int y = l->by + (BAR_H - 28) / 2;
-  int ty = l->by + (BAR_H - text_height(font)) / 2;
-  int x = l->cw - 12;
+  struct kit_s *k = &f->kit;
+  bool sel = f->list.sel >= 0 && f->list.sel < f->n;
   char buf[160];
-  char fit[160];
-  bool sel = f->sel >= 0 && f->sel < f->n;
+  int here = -1;
+  int i;
 
-  ui_zones_clear(&f->zs, ZG_BAR);
-  ops_draw(hwnd, &g_o);
-  ops_fill(&g_o, x0, l->by, l->cw - x0, BAR_H, C_UI_BAR);
-  ops_fill(&g_o, x0, l->by, l->cw - x0, 1, C_UI_LINE);
+  kit_enable(k, F_BACK, f->nhist > 0);
+  kit_enable(k, F_UP, strcmp(f->path, "/") != 0);
+  kit_enable(k, F_RENAME, sel);
+  kit_enable(k, F_DELETE, sel);
 
-  switch (f->prompt)
+  for (i = 0; i < f->nplaces; i++)
     {
-      case P_NEWDIR:
-      case P_RENAME:
+      if (strcmp(f->path, f->place[i].path) == 0)
         {
-          const char *label = f->prompt == P_NEWDIR ? "Folder name" :
-                              "Rename to";
-          int lw = text_width(font, label);
-
-          x = bar_button(f, x, y, Z_OK, f->prompt == P_NEWDIR ? "Create" :
-                         "Rename", f->field.len > 0, UI_DEFAULT);
-          x = bar_button(f, x, y, Z_CANCEL, "Cancel", true, UI_NORMAL);
-          ops_text(&g_o, font, x0 + 14, ty, label, C_TEXT_DIM, 255);
-          ui_field_draw(&g_o, &f->field, x0 + 24 + lw, y, x - x0 - 24 - lw,
-                        28, true);
+          here = i;
         }
-        break;
-
-      case P_DELETE:
-        x = bar_button(f, x, y, Z_OK, "Delete", true, UI_DANGER);
-        x = bar_button(f, x, y, Z_CANCEL, "Cancel", true, UI_NORMAL);
-        if (sel)
-          {
-            snprintf(buf, sizeof(buf), f->deltree ?
-                     "Delete \"%s\" and all it holds?" : "Delete \"%s\"?",
-                     f->ent[f->sel].name);
-            ui_fit(font, buf, x - x0 - 20, fit, sizeof(fit));
-            ops_text(&g_o, font, x0 + 14, ty, fit, C_TEXT, 255);
-          }
-        break;
-
-      default:
-        x = bar_button(f, x, y, Z_DELETE, "Delete", sel, UI_NORMAL);
-        x = bar_button(f, x, y, Z_RENAME, "Rename", sel, UI_NORMAL);
-        x = bar_button(f, x, y, Z_NEWDIR, "New Folder", true, UI_NORMAL);
-        bar_text(f, buf, sizeof(buf));
-        ui_fit(font, buf, x - x0 - 20, fit, sizeof(fit));
-        ops_text(&g_o, font, x0 + 14, ty, fit,
-                 f->msg[0] != '\0' && f->msgerr ? C_UI_ERROR : C_TEXT_DIM,
-                 255);
-        break;
     }
 
-  ops_draw(hwnd, &g_o);
-}
-
-static void group_draw(struct desk_win_s *w, int group)
-{
-  struct lay_s l;
-
-  layout(w, &l);
-  switch (group)
+  if (here != f->places.sel)
     {
-      case ZG_TOOL:
-        toolbar_draw(w, &l);
-        break;
-
-      case ZG_SIDE:
-        sidebar_draw(w, &l);
-        break;
-
-      case ZG_HEAD:
-        header_draw(w, &l);
-        break;
-
-      case ZG_BAR:
-        bar_draw(w, &l);
-        break;
-
-      default:
-        break;
+      kit_list_select(k, F_PLACES, here);
     }
-}
 
-static void files_draw(struct desk_win_s *w)
-{
-  struct files_s *f = w->priv;
-  struct lay_s l;
-
-  if (f == NULL)
+  status_text(f, buf, sizeof(buf));
+  if (strcmp(buf, f->status) != 0)
     {
-      return;
+      strlcpy(f->status, buf, sizeof(f->status));
+      kit_invalidate(k, F_STATUS);
     }
 
-  layout(w, &l);
-  if (f->top > max_top(f, &l))
-    {
-      f->top = max_top(f, &l);
-    }
-
-  ops_reset(&g_o);
-  toolbar_draw(w, &l);
-  sidebar_draw(w, &l);
-  header_draw(w, &l);
-  list_draw(w, &l);
-  bar_draw(w, &l);
+  kit_set_style(k, F_STATUS, f->msg[0] != '\0' && f->msgerr ?
+                KIT_TEXT_ERROR : KIT_TEXT_DIM);
 }
 
 /****************************************************************************
@@ -1478,6 +941,29 @@ static void set_title(struct desk_win_s *w)
     }
 }
 
+/* The folder's entries are new: the table, the path, the title */
+
+static void files_shown(struct desk_win_s *w, const char *select)
+{
+  struct files_s *f = w->priv;
+
+  f->list.n   = f->n;
+  f->list.sel = ent_find(f, select);
+  crumbs_build(f);
+  kit_set_items(&f->kit, F_PATH, f->crumbp, f->ncrumbs);
+  kit_list_changed(&f->kit, F_LIST);
+  if (f->list.sel >= 0)
+    {
+      /* In the middle, if it can be */
+
+      kit_list_scroll(&f->kit, F_LIST, f->list.sel * KIT_ROW_H -
+                      kit_list_visible(&f->kit, F_LIST) * KIT_ROW_H / 2);
+    }
+
+  files_sync(f);
+  set_title(w);
+}
+
 /* Go to a folder (push: remember where we were, for Back); select the
  * entry named select if there is one
  */
@@ -1498,7 +984,7 @@ static int files_go(struct desk_win_s *w, const char *path, bool push,
   if (ret < 0)
     {
       set_msg(f, true, "Cannot open \"%s\": %s", path, strerror(-ret));
-      group_draw(w, ZG_BAR);
+      files_sync(f);
       free(old);
       return ret;
     }
@@ -1522,23 +1008,10 @@ static int files_go(struct desk_win_s *w, const char *path, bool push,
       strlcpy(f->path, path, sizeof(f->path));
     }
 
-  f->sel    = ent_find(f, select);
-  f->hover  = -1;
-  f->top    = 0;
-  f->msg[0] = '\0';
-  f->prompt = P_NONE;
-  if (f->sel >= 0)
-    {
-      struct lay_s l;
-
-      layout(w, &l);
-      f->top = f->sel * ROW_H - l.lh / 2;
-      f->top = f->top < 0 ? 0 : f->top > max_top(f, &l) ? max_top(f, &l) :
-               f->top;
-    }
-
-  files_draw(w);
-  set_title(w);
+  f->list.top = 0;
+  f->msg[0]   = '\0';
+  kit_dialog_close(&f->kit);
+  files_shown(w, select);
   return 0;
 }
 
@@ -1550,9 +1023,9 @@ static void files_reload(struct desk_win_s *w)
   char *name = NULL;
   int ret;
 
-  if (f->sel >= 0 && f->sel < f->n)
+  if (f->list.sel >= 0 && f->list.sel < f->n)
     {
-      name = strdup(f->ent[f->sel].name);
+      name = strdup(f->ent[f->list.sel].name);
     }
 
   ret = dir_load(f, f->path);
@@ -1574,69 +1047,16 @@ static void files_reload(struct desk_win_s *w)
 
       files_go(w, p, false, NULL);
       set_msg(f, true, "The folder has gone");
-      group_draw(w, ZG_BAR);
+      files_sync(f);
       free(p);
       return;
     }
 
-  f->sel = ent_find(f, name);
-  f->hover = -1;
+  f->list.n   = f->n;
+  f->list.sel = ent_find(f, name);
   free(name);
-  files_draw(w);
-}
-
-static void ensure_visible(struct desk_win_s *w, int i)
-{
-  struct files_s *f = w->priv;
-  struct lay_s l;
-  int y;
-
-  layout(w, &l);
-  y = i * ROW_H;
-  if (y < f->top)
-    {
-      list_scroll(w, &l, y);
-    }
-  else if (y + ROW_H > f->top + l.lh)
-    {
-      list_scroll(w, &l, y + ROW_H - l.lh);
-    }
-}
-
-static void select_row(struct desk_win_s *w, int i)
-{
-  struct files_s *f = w->priv;
-  struct lay_s l;
-  int old = f->sel;
-
-  if (i >= f->n)
-    {
-      i = f->n - 1;
-    }
-
-  if (i < -1)
-    {
-      i = -1;
-    }
-
-  layout(w, &l);
-  if (i != old || f->msg[0] != '\0')
-    {
-      f->sel = i;
-      f->msg[0] = '\0';
-      row_redraw(w, &l, old);
-      row_redraw(w, &l, i);
-      ops_draw((NXWINDOW)w->hwnd, &g_o);
-      if (f->prompt == P_NONE)
-        {
-          bar_draw(w, &l);
-        }
-    }
-
-  if (i >= 0)
-    {
-      ensure_visible(w, i);
-    }
+  kit_list_changed(&f->kit, F_LIST);
+  files_sync(f);
 }
 
 /* Text: its start has no NUL and few control characters */
@@ -1674,12 +1094,12 @@ static void files_open_sel(struct desk_win_s *w)
   struct files_s *f = w->priv;
   struct fent_s *e;
 
-  if (f->sel < 0 || f->sel >= f->n)
+  if (f->list.sel < 0 || f->list.sel >= f->n)
     {
       return;
     }
 
-  e = &f->ent[f->sel];
+  e = &f->ent[f->list.sel];
   path_join(f->tmp, f->path, e->name);
   if (e->kind == K_DIR)
     {
@@ -1702,7 +1122,7 @@ static void files_open_sel(struct desk_win_s *w)
   else
     {
       set_msg(f, true, "No application opens \"%s\"", e->name);
-      group_draw(w, ZG_BAR);
+      files_sync(f);
     }
 }
 
@@ -1744,7 +1164,7 @@ static void files_back(struct desk_win_s *w)
   p = f->hist[--f->nhist];
   if (files_go(w, p, false, NULL) < 0)
     {
-      group_draw(w, ZG_TOOL);
+      files_sync(f);
     }
 
   free(p);
@@ -1845,72 +1265,88 @@ static bool dir_empty(const char *path)
   return empty;
 }
 
-static void prompt_start(struct desk_win_s *w, int prompt)
-{
-  struct files_s *f = w->priv;
-  bool sel = f->sel >= 0 && f->sel < f->n;
+/* Ask: a new folder's name, a new name, or whether to delete */
 
-  if (prompt != P_NEWDIR && !sel)
+static void ask(struct desk_win_s *w, int prompt)
+{
+  static const char * const create[2] =
+  {
+    "Create", "Cancel"
+  };
+
+  static const char * const rename[2] =
+  {
+    "Rename", "Cancel"
+  };
+
+  static const char * const delete[2] =
+  {
+    "Delete", "Cancel"
+  };
+
+  struct files_s *f = w->priv;
+  struct fent_s *e = f->list.sel >= 0 && f->list.sel < f->n ?
+                     &f->ent[f->list.sel] : NULL;
+  char title[96];
+
+  if (prompt != P_NEWDIR && e == NULL)
     {
       return;
     }
 
-  f->prompt = prompt;
   f->msg[0] = '\0';
-  f->zs.hot    = Z_NONE;
   switch (prompt)
     {
       case P_NEWDIR:
-        ui_field_set(&f->field, "New Folder");
+        kit_dialog(&f->kit, P_NEWDIR, KIT_DLG_PROMPT, "New folder",
+                   "New Folder", create, 2);
         break;
 
       case P_RENAME:
-        ui_field_set(&f->field, f->ent[f->sel].name);
-        break;
-
-      case P_DELETE:
-        path_join(f->tmp, f->path, f->ent[f->sel].name);
-        f->deltree = f->ent[f->sel].kind == K_DIR && !dir_empty(f->tmp);
+        snprintf(title, sizeof(title), "Rename \"%s\"", e->name);
+        kit_dialog(&f->kit, P_RENAME, KIT_DLG_PROMPT, title, e->name,
+                   rename, 2);
         break;
 
       default:
+        path_join(f->tmp, f->path, e->name);
+        f->deltree = e->kind == K_DIR && !dir_empty(f->tmp);
+        snprintf(title, sizeof(title), f->deltree ?
+                 "Delete \"%s\" and all it holds?" : "Delete \"%s\"?",
+                 e->name);
+        kit_dialog(&f->kit, P_DELETE, KIT_DLG_CONFIRM | KIT_DLG_DANGER,
+                   title, "It cannot be brought back.", delete, 2);
         break;
     }
-
-  group_draw(w, ZG_BAR);
 }
 
-static void prompt_end(struct desk_win_s *w, bool ok)
+/* The answer: do it (name: what the prompt's field said) */
+
+static void answer(struct desk_win_s *w, int prompt, const char *text)
 {
   struct files_s *f = w->priv;
+  int sel = f->list.sel;
   char *name = NULL;
   int ret = 0;
 
-  if (!ok)
-    {
-      f->prompt = P_NONE;
-      group_draw(w, ZG_BAR);
-      return;
-    }
-
-  switch (f->prompt)
+  switch (prompt)
     {
       case P_NEWDIR:
-        if (f->field.len == 0 || strchr(f->field.text, '/') != NULL)
+        if (text[0] == '\0' || strchr(text, '/') != NULL)
           {
             return;
           }
 
-        path_join(f->tmp, f->path, f->field.text);
+        path_join(f->tmp, f->path, text);
         if (mkdir(f->tmp, 0777) < 0)
           {
             ret = -errno;
-            set_msg(f, true, "Cannot make \"%s\": %s", f->field.text,
+            set_msg(f, true, "Cannot make \"%s\": %s", text,
                     strerror(errno));
           }
         else
           {
-            name = strdup(f->field.text);
+            name = strdup(text);
           }
         break;
 
@@ -1918,15 +1354,10 @@ static void prompt_end(struct desk_win_s *w, bool ok)
         {
           char *to;
 
-          if (f->field.len == 0 || strchr(f->field.text, '/') != NULL ||
-              f->sel < 0 || f->sel >= f->n)
+          if (text[0] == '\0' || strchr(text, '/') != NULL || sel < 0 ||
+              sel >= f->n || strcmp(text, f->ent[sel].name) == 0)
             {
               return;
-            }
-
-          if (strcmp(f->field.text, f->ent[f->sel].name) == 0)
-            {
-              break;
             }
 
           to = malloc(PATH_MAX);
@@ -1935,16 +1366,16 @@ static void prompt_end(struct desk_win_s *w, bool ok)
               return;
             }
 
-          path_join(f->tmp, f->path, f->ent[f->sel].name);
-          path_join(to, f->path, f->field.text);
+          path_join(f->tmp, f->path, f->ent[sel].name);
+          path_join(to, f->path, text);
 
           /* (FAT's names ignore case: renaming to another case is fine) */
 
           if (access(to, F_OK) == 0 &&
-              strcasecmp(f->field.text, f->ent[f->sel].name) != 0)
+              strcasecmp(text, f->ent[sel].name) != 0)
             {
               ret = -EEXIST;
-              set_msg(f, true, "\"%s\" already exists", f->field.text);
+              set_msg(f, true, "\"%s\" already exists", text);
             }
           else if (rename(f->tmp, to) < 0)
             {
@@ -1953,7 +1384,7 @@ static void prompt_end(struct desk_win_s *w, bool ok)
             }
           else
             {
-              name = strdup(f->field.text);
+              name = strdup(text);
             }
 
           free(to);
@@ -1961,13 +1392,13 @@ static void prompt_end(struct desk_win_s *w, bool ok)
         break;
 
       case P_DELETE:
-        if (f->sel < 0 || f->sel >= f->n)
+        if (sel < 0 || sel >= f->n)
           {
-            break;
+            return;
           }
 
-        path_join(f->tmp, f->path, f->ent[f->sel].name);
-        if (f->ent[f->sel].kind == K_DIR)
+        path_join(f->tmp, f->path, f->ent[sel].name);
+        if (f->ent[sel].kind == K_DIR)
           {
             ret = remove_tree(f->tmp, 0);
           }
@@ -1978,27 +1409,26 @@ static void prompt_end(struct desk_win_s *w, bool ok)
 
         if (ret < 0)
           {
-            set_msg(f, true, "Cannot delete \"%s\": %s",
-                    f->ent[f->sel].name, strerror(-ret));
+            set_msg(f, true, "Cannot delete \"%s\": %s", f->ent[sel].name,
+                    strerror(-ret));
           }
         else
           {
             /* Select what follows */
 
-            int next = f->sel + 1 < f->n ? f->sel + 1 : f->sel - 1;
+            int next = sel + 1 < f->n ? sel + 1 : sel - 1;
 
             name = next >= 0 ? strdup(f->ent[next].name) : NULL;
           }
         break;
 
       default:
-        break;
+        return;
     }
 
-  f->prompt = P_NONE;
   if (ret < 0)
     {
-      group_draw(w, ZG_BAR);
+      files_sync(f);
       return;
     }
 
@@ -2006,113 +1436,41 @@ static void prompt_end(struct desk_win_s *w, bool ok)
 
   if (dir_load(f, f->path) == 0)
     {
-      f->sel = ent_find(f, name);
-      f->hover = -1;
+      f->list.n   = f->n;
+      f->list.sel = ent_find(f, name);
+      kit_list_changed(&f->kit, F_LIST);
+      kit_list_show(&f->kit, F_LIST, f->list.sel);
     }
 
   free(name);
-  files_draw(w);
-  if (f->sel >= 0)
-    {
-      ensure_visible(w, f->sel);
-    }
+  files_sync(f);
 }
 
-static void sort_by(struct desk_win_s *w, int col)
+/* Sorted by another column (the kit has set the list's): the selection
+ * stays selected
+ */
+
+static void files_sort(struct files_s *f)
 {
-  struct files_s *f = w->priv;
-  char *name = f->sel >= 0 ? strdup(f->ent[f->sel].name) : NULL;
+  char *name = f->list.sel >= 0 ? strdup(f->ent[f->list.sel].name) : NULL;
 
-  if (f->sortcol == col)
-    {
-      f->sortdesc = !f->sortdesc;
-    }
-  else
-    {
-      f->sortcol  = col;
-      f->sortdesc = false;
-    }
-
+  f->sortcol  = f->list.sortcol;
+  f->sortdesc = f->list.sortdesc;
   ents_sort(f);
-  f->sel = ent_find(f, name);
-  f->hover = -1;
+  f->list.sel = ent_find(f, name);
   free(name);
-  files_draw(w);
+  kit_list_changed(&f->kit, F_LIST);
+  kit_list_show(&f->kit, F_LIST, f->list.sel);
 }
 
-static void zone_action(struct desk_win_s *w, int id)
+static void copy_path(struct files_s *f)
 {
-  struct files_s *f = w->priv;
-
-  if (id >= Z_PLACE)
+  if (f->list.sel >= 0 && f->list.sel < f->n)
     {
-      char *p = strdup(f->place[id - Z_PLACE].path);
-
-      if (p != NULL)
-        {
-          files_go(w, p, true, NULL);
-          free(p);
-        }
-    }
-  else if (id >= Z_CRUMB)
-    {
-      int k = id - Z_CRUMB;
-      char *p = malloc(PATH_MAX);
-      char *child = k + 1 < f->ncrumbs ? strdup(f->crumb[k + 1].label) :
-                    NULL;
-
-      if (p != NULL)
-        {
-          snprintf(p, PATH_MAX, "%.*s", f->crumb[k].len, f->path);
-          files_go(w, p, true, child);
-        }
-
-      free(child);
-      free(p);
-    }
-  else if (id >= Z_COL)
-    {
-      sort_by(w, id - Z_COL);
-    }
-  else
-    {
-      switch (id)
-        {
-          case Z_BACK:
-            files_back(w);
-            break;
-
-          case Z_UP:
-            files_up(w);
-            break;
-
-          case Z_REFRESH:
-            files_reload(w);
-            break;
-
-          case Z_NEWDIR:
-            prompt_start(w, P_NEWDIR);
-            break;
-
-          case Z_RENAME:
-            prompt_start(w, P_RENAME);
-            break;
-
-          case Z_DELETE:
-            prompt_start(w, P_DELETE);
-            break;
-
-          case Z_OK:
-            prompt_end(w, true);
-            break;
-
-          case Z_CANCEL:
-            prompt_end(w, false);
-            break;
-
-          default:
-            break;
-        }
+      path_join(f->tmp, f->path, f->ent[f->list.sel].name);
+      desk_clip_set(f->tmp, strlen(f->tmp));
+      set_msg(f, false, "Copied the path of \"%s\"",
+              f->ent[f->list.sel].name);
     }
 }
 
@@ -2120,302 +1478,246 @@ static void zone_action(struct desk_win_s *w, int id)
  * Private Functions: events
  ****************************************************************************/
 
-static void set_hot(struct desk_win_s *w, int id)
+/* Keys the table did not take */
+
+static void files_keyev(struct desk_win_s *w, int key)
 {
   struct files_s *f = w->priv;
-  int old = f->zs.hot;
-  int g0 = ui_zone_group(&f->zs, old);
-  int g1 = ui_zone_group(&f->zs, id);
 
-  if (id == old)
+  switch (key & ~KEY_SHIFT)
     {
-      return;
+      case 0x7f:
+      case 0x08:
+      case KEY_LEFT | KEY_CTRL:
+        files_up(w);
+        break;
+
+      case KEY_DEL:
+        ask(w, P_DELETE);
+        break;
+
+      case KEY_F2:
+        ask(w, P_RENAME);
+        break;
+
+      case KEY_F5:
+      case KEY_CTL('r'):
+        files_reload(w);
+        break;
+
+      case KEY_CTL('n'):
+        ask(w, P_NEWDIR);
+        break;
+
+      case KEY_CTL('c'):
+        copy_path(f);
+        break;
+
+      case KEY_ESC:
+        kit_list_select(&f->kit, F_LIST, -1);
+        break;
+
+      default:
+
+        /* A letter: the next name that starts with it */
+
+        if (key > ' ' && key < 0x7f && f->n > 0)
+          {
+            int j;
+
+            for (j = 1; j <= f->n; j++)
+              {
+                int e = (f->list.sel + j + f->n) % f->n;
+
+                if (tolower((uint8_t)f->ent[e].name[0]) == tolower(key))
+                  {
+                    kit_list_select(&f->kit, F_LIST, e);
+                    f->msg[0] = '\0';
+                    break;
+                  }
+              }
+          }
+        break;
     }
 
-  f->zs.hot = id;
-  if (g0 >= 0)
-    {
-      group_draw(w, g0);
-    }
-
-  if (g1 >= 0 && g1 != g0)
-    {
-      group_draw(w, g1);
-    }
+  files_sync(f);
 }
 
-static void set_hover(struct desk_win_s *w, struct lay_s *l, int row)
+static void files_event(struct kit_s *k, struct kit_widget_s *wg, int ev)
 {
-  struct files_s *f = w->priv;
-  int old = f->hover;
+  struct desk_win_s *w = k->w;
+  struct files_s *f = k->priv;
+  int id = wg != NULL ? wg->id : 0;
 
-  if (row == old)
+  switch (ev)
     {
-      return;
-    }
+      case KIT_EV_CLICK:
+        switch (id)
+          {
+            case F_BACK:
+              files_back(w);
+              break;
 
-  f->hover = row;
-  row_redraw(w, l, old);
-  row_redraw(w, l, row);
-  ops_draw((NXWINDOW)w->hwnd, &g_o);
-}
+            case F_UP:
+              files_up(w);
+              break;
 
-static void files_mouse(struct desk_win_s *w, int x, int cy,
-                        uint8_t buttons)
-{
-  struct files_s *f = w->priv;
-  bool press = (buttons & NX_MOUSE_LEFTBUTTON) &&
-               !(f->buttons & NX_MOUSE_LEFTBUTTON);
-  bool release = !(buttons & NX_MOUSE_LEFTBUTTON) &&
-                 (f->buttons & NX_MOUSE_LEFTBUTTON);
-  struct ui_zone_s *z;
-  struct lay_s l;
-  int y = cy + TITLE_H;
-  int row = -1;
-  int ty;
-  int th;
+            case F_REFRESH:
+              files_reload(w);
+              break;
 
-  f->buttons = buttons;
-  layout(w, &l);
+            case F_NEWDIR:
+              ask(w, P_NEWDIR);
+              break;
 
-  /* The pointer has left */
+            case F_RENAME:
+              ask(w, P_RENAME);
+              break;
 
-  if (x < 0 && cy < 0 && buttons == 0)
-    {
-      set_hot(w, Z_NONE);
-      set_hover(w, &l, -1);
-      f->zs.pressed = Z_NONE;
-      f->dragthumb = false;
-      return;
-    }
+            case F_DELETE:
+              ask(w, P_DELETE);
+              break;
 
-  /* Dragging the scroll bar's thumb */
+            case F_PATH:
+              if (k->arg >= 0 && k->arg < f->ncrumbs)
+                {
+                  char *p = malloc(PATH_MAX);
+                  char *child = k->arg + 1 < f->ncrumbs ?
+                                strdup(f->crumb[k->arg + 1].label) : NULL;
 
-  if (f->dragthumb)
-    {
-      if ((buttons & NX_MOUSE_LEFTBUTTON) && thumb(f, &l, &ty, &th) &&
-          l.lh > th)
-        {
-          list_scroll(w, &l, (y - f->grab - l.ly) * max_top(f, &l) /
-                      (l.lh - th));
-        }
-      else
-        {
-          f->dragthumb = false;
-          scrollbar_draw(w, &l);
-          ops_draw((NXWINDOW)w->hwnd, &g_o);
-        }
+                  if (p != NULL)
+                    {
+                      snprintf(p, PATH_MAX, "%.*s", f->crumb[k->arg].len,
+                               f->path);
+                      files_go(w, p, true, child);
+                    }
 
-      return;
-    }
+                  free(child);
+                  free(p);
+                }
+              break;
 
-  z = ui_zone_at(&f->zs, x, y);
-  if (x >= l.lx && x < l.lx + l.lw && y >= l.ly && y < l.ly + l.lh)
-    {
-      row = (y - l.ly + f->top) / ROW_H;
-      if (row >= f->n)
-        {
-          row = -1;
-        }
-    }
+            default:
+              break;
+          }
+        break;
 
-  if (!(buttons & NX_MOUSE_LEFTBUTTON) || press)
-    {
-      set_hot(w, z != NULL && z->enabled ? z->id : Z_NONE);
-      set_hover(w, &l, row);
-    }
+      case KIT_EV_CHANGE:
+        if (id == F_PLACES && f->places.sel >= 0)
+          {
+            char *p = strdup(f->place[f->places.sel].path);
 
-  if (press)
-    {
-      if (z != NULL)
-        {
-          if (z->enabled)
-            {
-              f->zs.pressed = z->id;
-              group_draw(w, z->group);
-            }
-        }
-      else if (x >= l.sbx && y >= l.ly && y < l.ly + l.lh)
-        {
-          if (!thumb(f, &l, &ty, &th))
-            {
-              return;
-            }
+            if (p != NULL)
+              {
+                files_go(w, p, true, NULL);
+                free(p);
+              }
 
-          if (y >= ty && y < ty + th)
-            {
-              f->dragthumb = true;
-              f->grab = y - ty;
-              scrollbar_draw(w, &l);
-              ops_draw((NXWINDOW)w->hwnd, &g_o);
-            }
-          else
-            {
-              list_scroll(w, &l, f->top + (y < ty ? -l.lh : l.lh));
-            }
-        }
-      else if (x >= l.lx && x < l.lx + l.lw && y >= l.ly &&
-               y < l.ly + l.lh && f->prompt == P_NONE)
-        {
-          uint32_t now = desk_ms();
+            kit_focus(k, F_LIST);
+          }
+        else if (id == F_LIST)
+          {
+            f->msg[0] = '\0';
+            files_sync(f);
+          }
+        break;
 
-          select_row(w, row);
-          if (row >= 0 && row == f->clickrow &&
-              now - f->clickms < DBLCLICK_MS)
-            {
-              f->clickrow = -1;
+      case KIT_EV_ACTIVATE:
+        if (id == F_LIST)
+          {
+            files_open_sel(w);
+          }
+        break;
+
+      case KIT_EV_SORT:
+        files_sort(f);
+        break;
+
+      case KIT_EV_MOUSE:
+
+        /* The right button on a row: it is selected, and its menu */
+
+        if (id == F_LIST && (k->mbuttons & NX_MOUSE_RIGHTBUTTON))
+          {
+            int row = kit_list_at(k, F_LIST, k->mx, k->my);
+
+            if (row >= 0)
+              {
+                kit_list_select(k, F_LIST, row);
+              }
+
+            kit_menu(k, M_ROW, k->mx, k->my, g_rowmenu, 6,
+                     row < 0 ? 0x17 : 0);
+            files_sync(f);
+          }
+        break;
+
+      case KIT_EV_MENU:
+        switch (k->arg)
+          {
+            case M_OPEN:
               files_open_sel(w);
-              return;
-            }
+              break;
 
-          f->clickrow = row;
-          f->clickms  = now;
-        }
+            case M_RENAME:
+              ask(w, P_RENAME);
+              break;
+
+            case M_DELETE:
+              ask(w, P_DELETE);
+              break;
+
+            case M_COPYPATH:
+              copy_path(f);
+              files_sync(f);
+              break;
+
+            case M_NEWDIR:
+              ask(w, P_NEWDIR);
+              break;
+
+            default:
+              break;
+          }
+        break;
+
+      case KIT_EV_DIALOG:
+        if (k->arg == KIT_ANS_OK)
+          {
+            answer(w, k->key, k->answer);
+          }
+        break;
+
+      case KIT_EV_KEY:
+        if (!kit_dialog_open(k))
+          {
+            files_keyev(w, k->key);
+            k->key = 0;
+          }
+        break;
+
+      default:
+        break;
     }
+}
 
-  if (release && f->zs.pressed != Z_NONE)
+static void files_mouse(struct desk_win_s *w, int x, int y, uint8_t buttons)
+{
+  struct files_s *f = w->priv;
+
+  if (f != NULL)
     {
-      int id = f->zs.pressed;
-      int g = ui_zone_group(&f->zs, id);
-
-      f->zs.pressed = Z_NONE;
-      if (z != NULL && z->id == id)
-        {
-          zone_action(w, id);
-        }
-      else if (g >= 0)
-        {
-          group_draw(w, g);
-        }
+      kit_mouse(&f->kit, x, y, buttons);
     }
 }
 
 static void files_key(struct desk_win_s *w, const uint8_t *ch, int n)
 {
   struct files_s *f = w->priv;
-  int keys[16];
-  int nk = ui_keys(&f->keys, ch, n, keys, 16);
-  int i;
 
-  for (i = 0; i < nk; i++)
+  if (f != NULL)
     {
-      int k = keys[i];
-      struct lay_s l;
-      int page;
-
-      layout(w, &l);
-      page = l.lh / ROW_H - 1;
-      page = page < 1 ? 1 : page;
-
-      if (f->prompt != P_NONE)
-        {
-          if (k == '\r' || k == '\n')
-            {
-              prompt_end(w, true);
-            }
-          else if (k == KEY_ESC)
-            {
-              prompt_end(w, false);
-            }
-          else if (f->prompt != P_DELETE && ui_field_key(&f->field, k))
-            {
-              group_draw(w, ZG_BAR);
-            }
-
-          continue;
-        }
-
-      switch (k & ~KEY_SHIFT)
-        {
-          case KEY_UP:
-            select_row(w, f->sel < 0 ? f->n - 1 : f->sel > 0 ? f->sel - 1 :
-                       0);
-            break;
-
-          case KEY_DOWN:
-            select_row(w, f->sel + 1 < f->n ? f->sel + 1 : f->sel);
-            break;
-
-          case KEY_PGUP:
-            select_row(w, f->sel - page < 0 ? 0 : f->sel - page);
-            break;
-
-          case KEY_PGDN:
-            select_row(w, f->sel + page);
-            break;
-
-          case KEY_HOME:
-            select_row(w, 0);
-            break;
-
-          case KEY_END:
-            select_row(w, f->n - 1);
-            break;
-
-          case '\r':
-          case '\n':
-            files_open_sel(w);
-            break;
-
-          case 0x7f:
-          case 0x08:
-          case KEY_LEFT | KEY_CTRL:
-            files_up(w);
-            break;
-
-          case KEY_DEL:
-            prompt_start(w, P_DELETE);
-            break;
-
-          case KEY_F2:
-            prompt_start(w, P_RENAME);
-            break;
-
-          case KEY_F5:
-          case KEY_CTL('r'):
-            files_reload(w);
-            break;
-
-          case KEY_CTL('n'):
-            prompt_start(w, P_NEWDIR);
-            break;
-
-          case KEY_CTL('c'):
-            if (f->sel >= 0)
-              {
-                path_join(f->tmp, f->path, f->ent[f->sel].name);
-                desk_clip_set(f->tmp, strlen(f->tmp));
-                set_msg(f, false, "Copied the path of \"%s\"",
-                        f->ent[f->sel].name);
-                group_draw(w, ZG_BAR);
-              }
-            break;
-
-          case KEY_ESC:
-            select_row(w, -1);
-            break;
-
-          default:
-
-            /* A letter: the next name that starts with it */
-
-            if (k > ' ' && k < 0x7f && f->n > 0)
-              {
-                int j;
-
-                for (j = 1; j <= f->n; j++)
-                  {
-                    int e = (f->sel + j + f->n) % f->n;
-
-                    if (tolower((uint8_t)f->ent[e].name[0]) == tolower(k))
-                      {
-                        select_row(w, e);
-                        break;
-                      }
-                  }
-              }
-            break;
-        }
+      kit_key(&f->kit, ch, n);
     }
 }
 
@@ -2425,7 +1727,13 @@ static void files_tick(struct desk_win_s *w)
   uint32_t sig;
   int count;
 
-  if (f == NULL || f->prompt != P_NONE || f->dragthumb || f->buttons != 0)
+  if (f == NULL)
+    {
+      return;
+    }
+
+  kit_tick(&f->kit);
+  if (kit_dialog_open(&f->kit) || f->kit.down != KIT_NONE)
     {
       return;
     }
@@ -2434,6 +1742,48 @@ static void files_tick(struct desk_win_s *w)
   if (count != f->n || sig != f->sig)
     {
       files_reload(w);
+      kit_flush(&f->kit);
+    }
+}
+
+static void files_draw(struct desk_win_s *w)
+{
+  struct files_s *f = w->priv;
+
+  if (f != NULL)
+    {
+      files_sync(f);
+      kit_redraw(&f->kit);
+    }
+}
+
+static void files_expose(struct desk_win_s *w, int x, int y, int cw, int ch)
+{
+  struct files_s *f = w->priv;
+
+  if (f != NULL)
+    {
+      kit_expose(&f->kit, x, y, cw, ch);
+    }
+}
+
+static void files_resize(struct desk_win_s *w)
+{
+  struct files_s *f = w->priv;
+
+  if (f != NULL)
+    {
+      kit_resize(&f->kit);
+    }
+}
+
+static void files_focus(struct desk_win_s *w)
+{
+  struct files_s *f = w->priv;
+
+  if (f != NULL)
+    {
+      kit_activate(&f->kit);
     }
 }
 
@@ -2469,6 +1819,75 @@ static void files_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
             (uint8_t)(a * 230 / 255));
 }
 
+/* The window's widgets */
+
+static void files_build(struct desk_win_s *w, struct files_s *f)
+{
+  struct kit_s *k = &f->kit;
+  struct kit_widget_s *wg;
+
+  kit_init(k, w, f->wg, NWG, files_event);
+  k->priv = f;
+
+  f->list.sel     = -1;
+  f->list.ncols   = 3;
+  f->list.cols    = g_cols;
+  f->list.text    = row_text;
+  f->list.icon    = row_icon;
+  f->list.empty   = "Folder is empty";
+  f->places.sel   = -1;
+  f->places.n     = f->nplaces;
+  f->places.text  = place_text;
+  f->places.icon  = place_icon;
+  f->places.sortcol = -1;
+
+  kit_col(k, KIT_BOX_WINDOW);
+    kit_row(k, KIT_BOX_BAR);
+      kit_button(k, F_BACK, NULL, KIT_ICON_BACK, KIT_BTN_NORMAL);
+      kit_tip(k, "Back");
+      kit_button(k, F_UP, NULL, KIT_ICON_UP, KIT_BTN_NORMAL);
+      kit_tip(k, "The folder it is in");
+      kit_crumbs(k, F_PATH, f->crumbp, 0);
+      kit_grow(k, 1);
+      kit_button(k, F_REFRESH, NULL, KIT_ICON_REFRESH, KIT_BTN_NORMAL);
+      kit_tip(k, "Read the folder again");
+    kit_end(k);
+
+    wg = kit_row(k, KIT_BOX_NONE);
+    wg->gap = 0;
+    kit_grow(k, 1);
+      wg = kit_col(k, KIT_BOX_SIDEBAR);
+      wg->gap = 6;
+      kit_size(k, SIDE_W, 0);
+        kit_label(k, 0, "Places", KIT_TEXT_SMALL | KIT_TEXT_DIM);
+        kit_list(k, F_PLACES, &f->places, KIT_LIST_SIDEBAR)->flags |=
+          KIT_F_NOFOCUS;
+        kit_grow(k, 1);
+      kit_end(k);
+
+      wg = kit_col(k, KIT_BOX_NONE);
+      wg->gap = 0;
+      kit_grow(k, 1);
+        kit_list(k, F_LIST, &f->list, KIT_LIST_TABLE);
+        kit_grow(k, 1);
+        wg = kit_row(k, KIT_BOX_STATUS);
+        wg->ph = BAR_H;
+        wg->gap = 8;
+          kit_label(k, F_STATUS, f->status, KIT_TEXT_DIM);
+          kit_grow(k, 1);
+          kit_button(k, F_NEWDIR, "New Folder", KIT_ICON_NONE,
+                     KIT_BTN_NORMAL);
+          kit_button(k, F_RENAME, "Rename", KIT_ICON_NONE, KIT_BTN_NORMAL);
+          kit_button(k, F_DELETE, "Delete", KIT_ICON_NONE, KIT_BTN_NORMAL);
+        kit_end(k);
+      kit_end(k);
+    kit_end(k);
+  kit_end(k);
+
+  kit_focus(k, F_LIST);
+  kit_layout(k);
+}
+
 static struct desk_win_s *files_open(void)
 {
   struct desk_win_s *w;
@@ -2488,10 +1907,7 @@ static struct desk_win_s *files_open(void)
       return NULL;
     }
 
-  w->priv     = f;
-  f->sel      = -1;
-  f->hover    = -1;
-  f->clickrow = -1;
+  w->priv = f;
 
 #ifdef CONFIG_LIBC_HOMEDIR
   if (home == NULL)
@@ -2506,11 +1922,13 @@ static struct desk_win_s *files_open(void)
   place_add(f, "Computer", "/");
   place_add(f, "Temporary", "/tmp");
 
+  files_build(w, f);
   if (f->nplaces == 0 || files_go(w, f->place[0].path, false, NULL) < 0)
     {
       files_go(w, "/", false, NULL);
     }
 
+  kit_flush(&f->kit);
   return w;
 }
 
@@ -2539,13 +1957,16 @@ static void files_close(struct desk_win_s *w)
 
 const struct desk_app_s g_app_files =
 {
-  .name  = "Files",
-  .icon  = files_icon,
-  .open  = files_open,
-  .draw  = files_draw,
-  .tick  = files_tick,
-  .mouse = files_mouse,
-  .key   = files_key,
-  .close = files_close,
+  .name   = "Files",
+  .icon   = files_icon,
+  .open   = files_open,
+  .draw   = files_draw,
+  .expose = files_expose,
+  .resize = files_resize,
+  .tick   = files_tick,
+  .mouse  = files_mouse,
+  .key    = files_key,
+  .focus  = files_focus,
+  .close  = files_close,
   .single = true,
 };

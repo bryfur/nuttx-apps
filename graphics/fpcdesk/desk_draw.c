@@ -44,6 +44,21 @@ struct atlas_font_s
 
 static struct atlas_font_s g_afont[NFONTS];
 
+/* Small round shapes kept in the atlas beside the glyphs (A8 coverage),
+ * drawn like a character (ops_disc_atlas()): discs of any size the shape
+ * tables do not have (theirs are 6, 12 and 24 pixels across, and the
+ * client slots are all taken)
+ */
+
+static const uint8_t g_discd[] =
+{
+  6, 8, 14, 16, 18, 20, 22
+};
+
+#define NDISCS         (sizeof(g_discd) / sizeof(g_discd[0]))
+
+static struct nxgl_point_s g_discpos[NDISCS];
+
 static const struct desk_font_s * const g_fonts[NFONTS] =
 {
   &g_desk_font_ui, &g_desk_font_uib, &g_desk_font_small,
@@ -774,7 +789,85 @@ static int atlas_pack(bool record)
         }
     }
 
+  for (i = 0; i < NDISCS; i++)
+    {
+      if (x + g_discd[i] > ATLAS_W)
+        {
+          x = 0;
+          y += shelf + 1;
+          shelf = 0;
+        }
+
+      if (record)
+        {
+          g_discpos[i].x = x;
+          g_discpos[i].y = y;
+        }
+
+      x += g_discd[i] + 1;
+      shelf = g_discd[i] > shelf ? g_discd[i] : shelf;
+    }
+
   return y + shelf;
+}
+
+/* A disc's coverage, d pixels across: 8 x 8 samples a pixel */
+
+static void disc_coverage(uint16_t *pix, int d)
+{
+  int r2 = d * 8 * d * 8;
+  int i;
+  int j;
+
+  for (j = 0; j < d; j++)
+    {
+      for (i = 0; i < d; i++)
+        {
+          int n = 0;
+          int si;
+          int sj;
+
+          for (sj = 0; sj < 8; sj++)
+            {
+              for (si = 0; si < 8; si++)
+                {
+                  /* Sample offsets from the centre, in 1/16 pixel */
+
+                  int u = i * 16 + si * 2 + 1 - d * 8;
+                  int v = j * 16 + sj * 2 + 1 - d * 8;
+
+                  n += u * u + v * v <= r2;
+                }
+            }
+
+          pix[j * d + i] = (uint16_t)((n * 255 + 32) / 64);
+        }
+    }
+}
+
+bool ops_disc_atlas(struct desk_ops_s *o, int x, int y, int d, uint16_t c,
+                    uint8_t alpha)
+{
+  struct nx_gpuop_s *op;
+  int i;
+
+  for (i = 0; i < NDISCS && g_discd[i] != d; i++)
+    {
+    }
+
+  if (i == NDISCS || g_desk.atlas == NULL)
+    {
+      return false;
+    }
+
+  op = ops_rect(o, NX_GPUOP_BLEND, x, y, d, d);
+  op->src    = g_desk.atlas;
+  op->sx     = g_discpos[i].x;
+  op->sy     = g_discpos[i].y;
+  op->colour = c;
+  op->alpha  = alpha;
+  op->mode   = NX_BLEND_SRC_A8;
+  return true;
 }
 
 int desk_atlas_init(void)
@@ -829,6 +922,17 @@ int desk_atlas_init(void)
           src[0]     = pix;
           nx_bitmap(g_desk.atlas, &dest, src, &origin, g->w * 2);
         }
+    }
+
+  for (i = 0; i < NDISCS; i++)
+    {
+      disc_coverage(pix, g_discd[i]);
+      dest.pt1   = g_discpos[i];
+      dest.pt2.x = dest.pt1.x + g_discd[i] - 1;
+      dest.pt2.y = dest.pt1.y + g_discd[i] - 1;
+      origin     = dest.pt1;
+      src[0]     = pix;
+      nx_bitmap(g_desk.atlas, &dest, src, &origin, g_discd[i] * 2);
     }
 
   return 0;

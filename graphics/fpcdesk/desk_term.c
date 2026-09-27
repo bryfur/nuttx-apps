@@ -16,7 +16,8 @@
  *     one background, a BLEND a character from the glyph atlas.
  *   - Input: keys go to the pty's master (NSH echoes them).
  *   - Tabs: the title bar's "+" opens one; with two or more, a strip of
- *     them below the title bar, each with its close button.
+ *     them below the title bar, each with its close button: the widget
+ *     kit's tabs (desk_kit.h), in a kit of their own for that strip.
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -35,6 +36,7 @@
 
 #include "nshlib/nshlib.h"
 #include "desk.h"
+#include "desk_kit.h"
 #include "desk_vt.h"
 
 /****************************************************************************
@@ -50,9 +52,8 @@
 #define PAD_TOP        4
 #define PAD_BOTTOM     6               /* Above the round corners */
 #define SBAR_W         10              /* The scrollbar, at the right */
-#define TAB_H          30              /* The tab strip */
-#define TAB_MAXW       240
-#define TAB_CLOSE      18              /* A tab's close button */
+#define TAB_H          KIT_TAB_H       /* The tab strip */
+#define T_TABS         1               /* The strip's widget */
 #define MAX_TABS       8
 #define RING           2048            /* Output waiting to be shown */
 #define WAKE_BYTES     8192            /* Most output shown at a time */
@@ -124,9 +125,13 @@ struct term_s
   /* The pointer */
 
   uint8_t buttons;
-  int hovertab;                    /* Tab under it, -1, -2: scrollbar */
-  bool hoverclose;                 /* ... over its close button */
-  int pressclose;                  /* Close button pressed, -1 */
+  int hovertab;                    /* -2: over the scrollbar, else -1 */
+
+  /* The tab strip: the kit's */
+
+  struct kit_s kit;
+  struct kit_widget_s wg[2];
+  const char *titles[MAX_TABS];
   bool sbdrag;                     /* Dragging the scrollbar's thumb */
   int sbgrab;                      /* Pointer y within the thumb */
 };
@@ -373,123 +378,36 @@ static void draw_span(struct term_s *t, struct vt_line_s *l, int r, int x0,
     }
 }
 
-/* The tab strip: the tabs (the current one lit), their titles, their
- * close buttons
+/* The tab strip: the kit's tabs, the tabs' titles; drawn again (all of
+ * it, or what changed)
  */
 
-static int tab_width(struct desk_win_s *w, struct term_s *t)
+static void strip_sync(struct desk_win_s *w, struct term_s *t)
 {
-  int tw = (w->csize.w - 2 * PAD_X) / (t->ntabs > 0 ? t->ntabs : 1);
-
-  return tw > TAB_MAXW ? TAB_MAXW : tw;
-}
-
-static int tab_x(struct desk_win_s *w, struct term_s *t, int i)
-{
-  int tw = tab_width(w, t);
-
-  return (w->csize.w - tw * t->ntabs) / 2 + i * tw;
-}
-
-static void draw_strip(struct desk_win_s *w, struct term_s *t)
-{
-  const struct desk_font_s *f = &g_desk_font_ui;
-  int tw = tab_width(w, t);
-  int ty = TITLE_H;
   int i;
-
-  if (t->striph == 0)
-    {
-      return;
-    }
-
-  g_hwnd = (NXWINDOW)w->hwnd;
-  need(2);
-  ops_fill(&g_o, 0, ty, w->csize.w, TAB_H,
-           w->active ? C_TITLE_ACTIVE : C_TITLE_INACTIVE);
-  ops_blend(&g_o, 0, ty + TAB_H - 1, w->csize.w, 1, C_SHADE,
-            THEMED(120, 36));
 
   for (i = 0; i < t->ntabs; i++)
     {
-      struct term_tab_s *tab = t->tab[i];
-      int x = tab_x(w, t, i);
-      int cx = x + tw - 8 - TAB_CLOSE;
-      int cy = ty + (TAB_H - 1 - TAB_CLOSE) / 2;
-      int room = tw - 2 * (TAB_CLOSE + 12);
-      char label[sizeof(tab->title) + 4];
-      bool hover = t->hovertab == i;
-      int len;
-
-      need(2);
-      if (i == t->cur)
-        {
-          ops_rrect(&g_o, x + 3, ty + 3, tw - 6, TAB_H - 7, LUT_R6, 6,
-                    C_TITLE_HILITE, 255);
-        }
-      else if (hover)
-        {
-          ops_rrect(&g_o, x + 3, ty + 3, tw - 6, TAB_H - 7, LUT_R6, 6,
-                    C_HILITE, THEMED(14, 10));
-        }
-      else if (i + 1 != t->cur && i + 1 < t->ntabs &&
-               t->hovertab != i + 1)
-        {
-          ops_blend(&g_o, x + tw - 1, ty + 8, 1, TAB_H - 17, C_HILITE,
-                    THEMED(30, 40));
-        }
-
-      /* The title, shortened to fit */
-
-      snprintf(label, sizeof(label), "%s", tab->title);
-      len = strlen(label);
-      if (text_width(f, label) > room)
-        {
-          while (len > 0 && text_width(f, label) +
-                            text_width(f, DESK_CH_ELLIPSIS) > room)
-            {
-              label[--len] = '\0';
-            }
-
-          strcat(label, DESK_CH_ELLIPSIS);
-        }
-
-      need(sizeof(label));
-      ops_text_centre(&g_o, f, x + tw / 2,
-                      ty + (TAB_H - 1 - text_height(f)) / 2, label,
-                      i == t->cur && w->active ? C_TITLE_TEXT : C_TITLE_DIM,
-                      255);
-
-      /* The close button: on the current tab and the one under the
-       * pointer
-       */
-
-      if (i == t->cur || hover)
-        {
-          need(2);
-          if (hover && t->hoverclose)
-            {
-              ops_rrect(&g_o, cx, cy, TAB_CLOSE, TAB_CLOSE, LUT_R6, 6,
-                        C_HILITE, THEMED(t->pressclose == i ? 60 : 30,
-                                         t->pressclose == i ? 36 : 18));
-            }
-
-          ops_text_centre(&g_o, &g_desk_font_uib, cx + TAB_CLOSE / 2,
-                          cy + (TAB_CLOSE -
-                                text_height(&g_desk_font_uib)) / 2,
-                          DESK_CH_TIMES,
-                          i == t->cur ? C_TITLE_TEXT : C_TITLE_DIM, 255);
-        }
+      t->titles[i] = t->tab[i]->title;
     }
+
+  kit_set_items(&t->kit, T_TABS, t->titles, t->ntabs);
+  kit_set_value(&t->kit, T_TABS, t->cur);
 }
 
-static void strip_redraw(struct desk_win_s *w, struct term_s *t)
+static void strip_redraw(struct desk_win_s *w, struct term_s *t, bool all)
 {
   if (t->striph > 0)
     {
-      ops_reset(&g_o);
-      draw_strip(w, t);
-      ops_draw(g_hwnd, &g_o);
+      strip_sync(w, t);
+      if (all)
+        {
+          kit_redraw(&t->kit);
+        }
+      else
+        {
+          kit_flush(&t->kit);
+        }
     }
 }
 
@@ -666,7 +584,7 @@ static void term_render(struct desk_win_s *w)
       need(1);
       ops_fill(&g_o, 0, TITLE_H + t->striph, w->csize.w,
                w->csize.h - t->striph, C_TERM_BG);
-      draw_strip(w, t);
+      strip_redraw(w, t, true);
       memset(t->shown, 0, t->rows * sizeof(t->shown[0]));
       t->curline = NULL;
       t->sbty    = -1;
@@ -761,6 +679,7 @@ static void term_layout(struct desk_win_s *w)
   int i;
 
   t->striph = t->ntabs > 1 ? TAB_H : 0;
+  kit_place(&t->kit, 0, TITLE_H, w->csize.w, t->striph);
   t->gx     = PAD_X;
   t->gy     = TITLE_H + t->striph + PAD_TOP;
   cols = (w->csize.w - PAD_X - SBAR_W - 2) / CELL_W;
@@ -810,6 +729,7 @@ static void tab_select(struct desk_win_s *w, int i)
 
   t->cur  = i;
   t->full = true;
+  kit_set_value(&t->kit, T_TABS, i);
   term_title(w);
   term_render(w);
 }
@@ -1073,8 +993,7 @@ static void tab_close(struct desk_win_s *w, int i)
   memmove(&t->tab[i], &t->tab[i + 1],
           (t->ntabs - i - 1) * sizeof(t->tab[0]));
   t->ntabs--;
-  t->hovertab   = -1;
-  t->pressclose = -1;
+  t->hovertab = -1;
 
   if (t->ntabs == 0)
     {
@@ -1098,6 +1017,22 @@ static void tab_close(struct desk_win_s *w, int i)
 /****************************************************************************
  * Private Functions: the application
  ****************************************************************************/
+
+/* The tab strip's events */
+
+static void term_event(struct kit_s *k, struct kit_widget_s *wg, int ev)
+{
+  struct term_s *t = k->w->priv;
+
+  if (ev == KIT_EV_CHANGE && wg->value != t->cur)
+    {
+      tab_select(k->w, wg->value);
+    }
+  else if (ev == KIT_EV_CLOSE && k->arg >= 0 && k->arg < t->ntabs)
+    {
+      tab_close(k->w, k->arg);
+    }
+}
 
 static void term_icon(struct desk_ops_s *o, int x, int y, int s,
                           uint8_t a)
@@ -1131,11 +1066,16 @@ static struct desk_win_s *term_open(void)
       return NULL;
     }
 
-  w->priv       = t;
-  w->button     = "+";
-  t->hovertab   = -1;
-  t->pressclose = -1;
-  t->blink      = true;
+  w->priv     = t;
+  w->button   = "+";
+  t->hovertab = -1;
+  t->blink    = true;
+  kit_init(&t->kit, w, t->wg, 2, term_event);
+  kit_row(&t->kit, KIT_BOX_NONE);
+    kit_tabs(&t->kit, T_TABS, t->titles, 0, 0, KIT_TABS_STRIP)->flags |=
+      KIT_F_CLOSABLE | KIT_F_NOFOCUS;
+    kit_grow(&t->kit, 1);
+  kit_end(&t->kit);
   desk_win_sync(w);
   term_layout(w);
   tab_open(w);
@@ -1238,8 +1178,8 @@ static void term_wake(struct desk_win_s *w)
               term_title(w);
             }
 
-          g_hwnd = (NXWINDOW)w->hwnd;
-          strip_redraw(w, t);
+          kit_invalidate(&t->kit, T_TABS);
+          strip_redraw(w, t, false);
         }
 
       if (eof)
@@ -1331,8 +1271,7 @@ static void term_focus(struct desk_win_s *w)
   if (t != NULL && t->ntabs > 0)
     {
       t->blink = true;
-      g_hwnd   = (NXWINDOW)w->hwnd;
-      strip_redraw(w, t);
+      kit_activate(&t->kit);           /* The strip's colours */
       term_render(w);
     }
 }
@@ -1369,10 +1308,9 @@ static void term_expose(struct desk_win_s *w, int x, int y, int cw, int ch)
         }
     }
 
-  g_hwnd = (NXWINDOW)w->hwnd;
   if (y < t->striph)
     {
-      strip_redraw(w, t);
+      kit_expose(&t->kit, x, y, cw, ch);
     }
 
   term_render(w);
@@ -1408,13 +1346,12 @@ static void term_button(struct desk_win_s *w)
     }
 }
 
-/* The pointer: tabs, their close buttons, the scrollbar */
+/* The pointer: the tab strip, the scrollbar */
 
 static void term_mouse(struct desk_win_s *w, int x, int y, uint8_t buttons)
 {
   struct term_s *t = w->priv;
   struct term_tab_s *tab;
-  bool hclose = false;
   bool release;
   bool press;
   int hover = -1;
@@ -1425,6 +1362,21 @@ static void term_mouse(struct desk_win_s *w, int x, int y, uint8_t buttons)
   if (t == NULL || t->ntabs == 0)
     {
       return;
+    }
+
+  /* The tab strip is the kit's (and so is the pointer while a button
+   * pressed there is held)
+   */
+
+  if ((x < 0 && y < 0) || t->kit.down != KIT_NONE ||
+      (t->striph > 0 && y >= 0 && y < t->striph && !t->sbdrag))
+    {
+      kit_mouse(&t->kit, x, y, buttons);
+      if (w->closing || t->ntabs == 0 || !(x < 0 && y < 0))
+        {
+          t->buttons = buttons;
+          return;
+        }
     }
 
   tab     = t->tab[t->cur];
@@ -1465,71 +1417,19 @@ static void term_mouse(struct desk_win_s *w, int x, int y, uint8_t buttons)
 
   /* What is under the pointer */
 
-  if (t->striph > 0 && y >= 0 && y < t->striph)
-    {
-      int tw = tab_width(w, t);
-      int i;
-
-      for (i = 0; i < t->ntabs; i++)
-        {
-          int tx = tab_x(w, t, i);
-
-          if (x >= tx && x < tx + tw)
-            {
-              int cx = tx + tw - 8 - TAB_CLOSE;
-
-              hover  = i;
-              hclose = x >= cx && x < cx + TAB_CLOSE;
-            }
-        }
-    }
-  else if (x >= w->csize.w - SBAR_W - 4 && y >= top &&
-           y < top + t->rows * CELL_H && th > 0)
+  if (x >= w->csize.w - SBAR_W - 4 && y >= top &&
+      y < top + t->rows * CELL_H && th > 0)
     {
       hover = -2;                             /* The scrollbar */
     }
 
-  if (hover != t->hovertab || hclose != t->hoverclose)
+  if (hover != t->hovertab)
     {
-      bool strip = hover >= 0 || t->hovertab >= 0;
-
-      t->hovertab   = hover;
-      t->hoverclose = hclose;
-      if (strip)
-        {
-          strip_redraw(w, t);
-        }
-
+      t->hovertab = hover;
       term_render(w);                         /* The scrollbar lights up */
     }
 
-  if (press && hover >= 0)
-    {
-      if (hclose)
-        {
-          t->pressclose = hover;
-          strip_redraw(w, t);
-        }
-      else if (hover != t->cur)
-        {
-          tab_select(w, hover);
-        }
-    }
-  else if (release && t->pressclose >= 0)
-    {
-      int which = t->pressclose;
-
-      t->pressclose = -1;
-      if (hclose && hover == which)
-        {
-          tab_close(w, which);
-        }
-      else
-        {
-          strip_redraw(w, t);
-        }
-    }
-  else if (press && hover == -2)
+  if (press && hover == -2)
     {
       if (y >= ty && y < ty + th)
         {

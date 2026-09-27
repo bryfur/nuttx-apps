@@ -16,9 +16,11 @@ MAINSRC   = desk_main.c
 CSRCS     = desk_gputest.c desk_draw.c desk_panel.c desk_apps.c desk_fonts.c
 CSRCS    += desk_term.c desk_vt.c desk_files.c desk_edit.c desk_monitor.c
 CSRCS    += desk_calc.c desk_tetris.c desk_solitaire.c desk_breakout.c
-CSRCS    += desk_ui.c desk_theme.c desk_widgets.c desk_settings.c desk_log.c
+CSRCS    += desk_ui.c desk_theme.c desk_settings.c desk_log.c
 CSRCS    += desk_game.c
 CSRCS    += desk_image.c desk_viewer.c desk_paint.c
+CSRCS    += desk_kit.c desk_kit_paint.c desk_kit_dialog.c desk_kit_surface.c
+CSRCS    += desk_kitdemo.c
 
 ifeq ($(CONFIG_FPCDESK_SOUND),y)
 CSRCS    += desk_sound.c desk_volume.c

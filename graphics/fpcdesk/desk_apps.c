@@ -187,6 +187,9 @@ const struct desk_app_s * const g_apps[APP_COUNT] =
   [APP_SETTINGS] = &g_app_settings,
   [APP_ABOUT]    = &g_app_about,
   [APP_LOG]      = &g_app_log,
+#ifdef CONFIG_FPCDESK_WIDGETS
+  [APP_WIDGETS]  = &g_app_widgets,
+#endif
 };
 
 /****************************************************************************

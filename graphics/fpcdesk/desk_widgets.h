@@ -3,96 +3,143 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Controls drawn into a list of operations, in the theme's colours:
- * switches, segmented controls, sliders, check boxes, steppers, colour
- * swatches, sidebar rows, cards with rows of settings.  Each is a drawing
- * function and, where a control has parts, a function that says which
- * part a point is on; the caller keeps where it put them and what they
- * mean (Settings, the System Log's toolbar).
+ * The first controls of Settings (switches, segmented controls, sliders,
+ * check boxes, steppers, colour swatches, sidebar rows, cards of rows,
+ * level meters, speakers),
+ * kept by these names for code that draws them itself.  They are the
+ * widget kit's (desk_kit.h, kit_paint_*()): new code builds its window
+ * with the kit instead, which also finds the pointer, moves the focus and
+ * draws only what changed.
  ****************************************************************************/
 
 #ifndef __APPS_GRAPHICS_FPCDESK_DESK_WIDGETS_H
 #define __APPS_GRAPHICS_FPCDESK_DESK_WIDGETS_H
 
-#include "desk.h"
+#include "desk_kit.h"
 
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
 
-#define WG_SWITCH_W     48
-#define WG_SWITCH_H     28
-#define WG_SLIDER_H     24              /* The knob's size */
-#define WG_CHECK        18
-#define WG_STEP         24              /* A stepper's buttons */
-#define WG_SWATCH_R     12
-#define WG_ROW_H        44              /* A row of a card */
+#define WG_SWITCH_W     KIT_SWITCH_W
+#define WG_SWITCH_H     KIT_SWITCH_H
+#define WG_SLIDER_H     KIT_SLIDER_H
+#define WG_CHECK        KIT_CHECK
+#define WG_STEP         KIT_STEP
+#define WG_SWATCH_R     KIT_SWATCH_R
+#define WG_ROW_H        KIT_CARD_ROW_H
 
 /****************************************************************************
- * Public Function Prototypes
+ * Inline Functions
  ****************************************************************************/
 
-/* A switch, WG_SWITCH_W x WG_SWITCH_H */
+static inline int wg_look(bool hot)
+{
+  return hot ? KIT_LOOK_HOT : KIT_LOOK_NORMAL;
+}
 
-void wg_switch(struct desk_ops_s *o, int x, int y, bool on, bool hot);
+static inline void wg_switch(struct desk_ops_s *o, int x, int y, bool on,
+                             bool hot)
+{
+  kit_paint_switch(o, x, y, on, wg_look(hot));
+}
 
-/* A segmented control of n labels across w; sel lit, hot under the
- * pointer (-1: none); which segment x is on
- */
+static inline void wg_segments(struct desk_ops_s *o, int x, int y, int w,
+                               int h, const char * const *labels, int n,
+                               int sel, int hot)
+{
+  kit_paint_segments(o, x, y, w, h, labels, n, sel, hot, false, false);
+}
 
-void wg_segments(struct desk_ops_s *o, int x, int y, int w, int h,
-                 const char * const *labels, int n, int sel, int hot);
-int  wg_segment_at(int x, int w, int n, int px);
+static inline int wg_segment_at(int x, int w, int n, int px)
+{
+  return kit_segment_at(x, w, n, px);
+}
 
-/* A slider of width w for v in [min, max]; the value at px */
+static inline void wg_slider(struct desk_ops_s *o, int x, int y, int w,
+                             int v, int min, int max, bool hot)
+{
+  kit_paint_slider(o, x, y, w, v, min, max, wg_look(hot));
+}
 
-void wg_slider(struct desk_ops_s *o, int x, int y, int w, int v, int min,
-               int max, bool hot);
-int  wg_slider_value(int x, int w, int min, int max, int px);
+static inline int wg_slider_value(int x, int w, int min, int max, int px)
+{
+  return kit_slider_value(x, w, min, max, px);
+}
 
-/* A check box, WG_CHECK square */
+static inline void wg_check(struct desk_ops_s *o, int x, int y, bool on,
+                            bool hot)
+{
+  kit_paint_check(o, x, y, on, wg_look(hot));
+}
 
-void wg_check(struct desk_ops_s *o, int x, int y, bool on, bool hot);
+static inline void wg_stepper(struct desk_ops_s *o, int x, int y, int w,
+                              const char *value, int hot)
+{
+  kit_paint_stepper(o, x, y, w, value, hot);
+}
 
-/* A stepper: [-] value [+] across w; hot: -1 minus, 1 plus, 0 none; which
- * button px is on (-1, 1, or 0)
- */
+static inline int wg_stepper_at(int x, int w, int px)
+{
+  return kit_stepper_at(x, w, px);
+}
 
-void wg_stepper(struct desk_ops_s *o, int x, int y, int w,
-                const char *value, int hot);
-int  wg_stepper_at(int x, int w, int px);
+static inline void wg_swatch(struct desk_ops_s *o, int cx, int cy,
+                             uint16_t c, bool sel, bool hot)
+{
+  kit_paint_swatch(o, cx, cy, c, sel, hot);
+}
 
-/* A colour swatch centred at (cx, cy), a dot in it when selected */
+static inline void wg_sidebar_row(struct desk_ops_s *o, int x, int y, int w,
+                                  int h, const char *label, uint16_t tile,
+                                  bool sel, bool hot)
+{
+  kit_paint_sidebar_row(o, x, y, w, h, label, tile, sel, hot);
+}
 
-void wg_swatch(struct desk_ops_s *o, int cx, int cy, uint16_t c, bool sel,
-               bool hot);
+static inline void wg_card(struct desk_ops_s *o, int x, int y, int w,
+                           int nrows)
+{
+  int i;
 
-/* A row of a sidebar: a small coloured tile, the label */
+  kit_paint_card(o, x, y, w, nrows * WG_ROW_H);
+  for (i = 1; i < nrows; i++)
+    {
+      kit_paint_card_lines(o, x, y + i * WG_ROW_H, w);
+    }
+}
 
-void wg_sidebar_row(struct desk_ops_s *o, int x, int y, int w, int h,
-                    const char *label, uint16_t tile, bool sel, bool hot);
-
-/* A card of nrows rows of WG_ROW_H, hairlines between them; a row's label
- * (and a caption under it, or NULL)
- */
-
-void wg_card(struct desk_ops_s *o, int x, int y, int w, int nrows);
-void wg_row_label(struct desk_ops_s *o, int x, int y, const char *label,
-                  const char *caption);
+static inline void wg_row_label(struct desk_ops_s *o, int x, int y,
+                                const char *label, const char *caption)
+{
+  kit_paint_row_label(o, x, y, WG_ROW_H, label, caption);
+}
 
 /* A level meter: a bar w x h whose lit part shows peak (0..32767) on a
  * 48 dB scale, green, then amber, then red near full scale
  */
 
-void wg_meter(struct desk_ops_s *o, int x, int y, int w, int h, int peak);
+static inline void wg_meter(struct desk_ops_s *o, int x, int y, int w,
+                            int h, int peak)
+{
+  kit_paint_meter(o, x, y, w, h, peak);
+}
 
 /* A speaker of size s (its height) at (x, y) in colour c: waves 0..3, or
  * muted (a cross); returns its width.  wg_speaker_waves(): the waves for
  * a volume of 0..1000.
  */
 
-int  wg_speaker(struct desk_ops_s *o, int x, int y, int s, int waves,
-                bool muted, uint16_t c, uint8_t alpha);
-int  wg_speaker_waves(int volume);
+static inline int wg_speaker(struct desk_ops_s *o, int x, int y, int s,
+                             int waves, bool muted, uint16_t c,
+                             uint8_t alpha)
+{
+  return kit_paint_speaker(o, x, y, s, waves, muted, c, alpha);
+}
+
+static inline int wg_speaker_waves(int volume)
+{
+  return kit_speaker_waves(volume);
+}
 
 #endif /* __APPS_GRAPHICS_FPCDESK_DESK_WIDGETS_H */
