@@ -91,7 +91,9 @@ config FPCDESK_DESKCTL
 		deskctl c X Y [N]        click (N times)
 		deskctl k TEXT           type
 		deskctl shot FILE        screenshot (simulator)
-		deskctl freeze [SECONDS] stop the clock and the cursors' blink
+		deskctl freeze [SECONDS] stop the clock, the blinking, the games
+		deskctl dock APP [r]     click an application's dock icon
+		deskctl wins             the windows, top first
 		For testing the desktop without a mouse and keyboard.
 
 endif

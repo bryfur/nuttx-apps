@@ -24,9 +24,16 @@
  *                                 check: the result must not change)
  *   deskctl freeze [SECONDS|off]  stop the desktop's clock at SECONDS
  *                                 since 1970 (default 2026-01-02 09:41
- *                                 UTC) and the cursors' blinking, for
- *                                 screenshots that do not depend on when
- *                                 they are taken; off: let them run
+ *                                 UTC), the cursors' blinking and the
+ *                                 games' clocks, and seed the games the
+ *                                 same way every time, for screenshots
+ *                                 that do not depend on when they are
+ *                                 taken; off: let them run
+ *   deskctl dock APP [r]          click APP's icon in the dock (r: with
+ *                                 the right button), wherever the dock
+ *                                 has it; APP: a part of its name
+ *   deskctl wins                  the windows, the top one first: the
+ *                                 application, position, size, state
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -40,8 +47,12 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <strings.h>
+
 #include <nuttx/nx/nx.h>
 #include <nuttx/nx/nxcompose.h>
+
+#include "desk.h"
 
 /* The GPU's cursor and the simulator's screenshot are kernel functions of
  * the board (a flat build)
@@ -65,7 +76,6 @@ void fpc_gpu_stats(struct fpc_gpu_stats_s *st, bool clear);
 int fpc_simgpu_screenshot(FAR const char *path);
 #endif
 int desk_gputest(void);
-void desk_freeze(time_t t);
 
 /****************************************************************************
  * Private Functions
@@ -243,12 +253,56 @@ static void deskctl_stats(FAR const char *arg)
 }
 #endif
 
+/* The desktop's state is read from here, another task of the flat build,
+ * without a lock: for tests, once the desktop has settled
+ */
+
+static int deskctl_app(FAR const char *name)
+{
+  int i;
+
+  for (i = 0; i < APP_COUNT; i++)
+    {
+      FAR const char *n = g_apps[i]->name;
+      size_t len = strlen(name);
+
+      for (; *n != '\0'; n++)
+        {
+          if (strncasecmp(n, name, len) == 0)
+            {
+              return i;
+            }
+        }
+    }
+
+  return -1;
+}
+
+static void deskctl_wins(void)
+{
+  FAR struct desk_win_s *w;
+
+  for (w = g_desk.wins; w != NULL; w = w->next)
+    {
+      if (w->closing)
+        {
+          continue;
+        }
+
+      printf("%-14s %4d,%-4d %4dx%-4d %s%s%s\"%s\"\n", g_apps[w->app]->name,
+             w->pos.x, w->pos.y, w->size.w, w->size.h,
+             w->active ? "active " : "", w->minimized ? "minimized " : "",
+             w->maximized ? "maximized " : "", w->title);
+    }
+}
+
 static void deskctl_usage(void)
 {
   fprintf(stderr,
           "usage: deskctl m X Y [BUTTONS] | c X Y | d X0 Y0 X1 Y1 [N] |\n"
           "               k TEXT | shot FILE | stats [clear|N] | mode [N] |\n"
-          "               redraw | test | freeze [SECONDS|off]\n");
+          "               redraw | test | freeze [SECONDS|off] | dock APP [r] |\n"
+          "               wins\n");
 }
 
 /****************************************************************************
@@ -289,6 +343,12 @@ int main(int argc, FAR char *argv[])
         }
 
       desk_freeze(t);
+      return EXIT_SUCCESS;
+    }
+
+  if (strcmp(argv[1], "wins") == 0)
+    {
+      deskctl_wins();
       return EXIT_SUCCESS;
     }
 
@@ -384,17 +444,39 @@ int main(int argc, FAR char *argv[])
                  size.w, size.h);
         }
     }
+  else if (strcmp(argv[1], "dock") == 0 && argc >= 3)
+    {
+      int app = deskctl_app(argv[2]);
+      int button = argc >= 4 && argv[3][0] == 'r' ? NX_MOUSE_RIGHTBUTTON :
+                                                    NX_MOUSE_LEFTBUTTON;
+      int x;
+      int y;
+
+      if (app < 0 || !desk_dock_where(app, &x, &y))
+        {
+          fprintf(stderr, "deskctl: %s is not in the dock\n", argv[2]);
+          ret = EXIT_FAILURE;
+        }
+      else
+        {
+          deskctl_pointer(h, x, y, 0);
+          usleep(30000);
+          deskctl_pointer(h, x, y, button);
+          usleep(30000);
+          deskctl_pointer(h, x, y, 0);
+        }
+    }
   else if (strcmp(argv[1], "redraw") == 0)
     {
       /* A new background colour damages all of the display (the
-       * wallpaper hides it); then back to black
+       * wallpaper hides it); then back to the theme's
        */
 
-      nxgl_mxpixel_t c = 0x0841;
+      nxgl_mxpixel_t c = g_theme.desktop ^ 0x0841;
 
       nx_setbgcolor(h, &c);
       usleep(50000);
-      c = 0;
+      c = g_theme.desktop;
       nx_setbgcolor(h, &c);
     }
   else if (strcmp(argv[1], "k") == 0 && argc >= 3)

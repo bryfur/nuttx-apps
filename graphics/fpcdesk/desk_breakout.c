@@ -1244,7 +1244,7 @@ static struct desk_win_s *brk_open(void)
     }
 
   w->priv = b;
-  b->seed = desk_ms() * 2654435761u;
+  b->seed = desk_seed() * 2654435761u;
   brk_layout(w);
   brk_new(b);
   brk_step(b, 0);
