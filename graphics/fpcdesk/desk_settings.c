@@ -4,18 +4,21 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Settings: a sidebar of pages (Appearance, Display, Dock, Mouse &
- * Keyboard, Date & Time, About this computer), each a function that draws
- * it and says where its controls are (ctl_add()), and one that acts on a
- * control (a press, a slider's drag).  Everything set is kept in g_prefs
- * and saved at once (desk_prefs_save()).
+ * Keyboard, Date & Time, Sound, About this computer), built with the widget kit
+ * (desk_kit.h): each page a column of cards of rows, all of them built
+ * when the window opens and the one chosen shown.  Everything set is kept
+ * in g_prefs and saved at once (desk_prefs_save()); settings_sync() puts
+ * what g_prefs says into the widgets, and only those that change are
+ * drawn again.
  *
- * A new section goes into its page's draw function (its controls with ids
- * of their own in the enum below) and into settings_act().
+ * A new setting goes into its page's function (a widget with an id of
+ * its own in the enum below), settings_sync() and settings_event().
  ****************************************************************************/
 
 #include <nuttx/config.h>
 
 #include <fcntl.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,8 +26,10 @@
 #include <unistd.h>
 
 #include "desk.h"
-#include "desk_ui.h"
-#include "desk_widgets.h"
+#include "desk_kit.h"
+#ifdef CONFIG_FPCDESK_SOUND
+#  include "desk_sound.h"
+#endif
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -35,106 +40,168 @@
 #define SIDE_W         188             /* The sidebar */
 #define SIDE_ROW       32
 #define PAD            24              /* Around a page */
-#define MAX_CTL        64
-#define SWATCH_GAP     14              /* Between wallpapers' previews */
+#define NWG            150             /* Widgets */
+#define SWATCH_W       98              /* A wallpaper's preview: four */
+#define SWATCH_H       64              /* across the page */
 #define NWALLS         4               /* The drawn ones, then the image */
 #define THEME_W        132             /* A theme's preview */
 #define THEME_H        80
 #define RES_MAX        4
+#define APPLEVELS      3               /* Sound: applications' levels */
 
-/* Controls: what each is (for drawing its hover and acting on it) */
-
-enum
-{
-  K_BUTTON = 0,                        /* Acts on a press */
-  K_SEGMENTS,                          /* n parts across */
-  K_SLIDER,                            /* Follows a drag */
-  K_STEPPER,                           /* - and + */
-  K_FIELD                              /* Takes the keys */
-};
-
-/* Their ids */
+/* The widgets' ids */
 
 enum
 {
   S_NONE = 0,
-  S_PAGE,                              /* + page */
+  S_SIDEBAR,
+  S_PAGE,                              /* + page: its column */
   S_THEME = S_PAGE + SETTINGS_PAGES,   /* + theme */
-  S_ACCENT = S_THEME + THEME_COUNT,    /* + accent */
-  S_SHADOW = S_ACCENT + ACCENT_COUNT,
+  S_ACCENT = S_THEME + THEME_COUNT,
+  S_ACCENTLBL,
+  S_SHADOW,
   S_BORDER,
   S_CLOCK24,
   S_CLOCKDATE,
   S_CLOCKSECS,
   S_MODE,
   S_WALL,                              /* + wallpaper */
-  S_DOCKSIZE = S_WALL + 8,
+  S_DOCKSIZE = S_WALL + NWALLS,
+  S_DOCKSIZEV,
   S_DOCKPOS,
   S_DOCKHIDE,
   S_REPEAT,
   S_REPDELAY,
+  S_REPDELAYV,
   S_REPRATE,
-  S_PTRSPEED,
+  S_REPRATEV,
   S_TEST,
+  S_PTRSPEED,
+  S_PTRSPEEDV,
+  S_NOINPUT,
+  S_CLOCK,
+  S_DATE,
   S_YEAR,
   S_MONTH,
   S_DAY,
   S_HOUR,
   S_MINUTE,
   S_TZ,
-  S_PIN                                /* + app */
+  S_ABOUT,
+  S_VOLUME,                            /* Sound */
+  S_VOLUMEV,
+  S_MUTE,
+  S_ALERTS,
+  S_ALERTSV,
+  S_ALERTTEST,
+  S_EFFECTS,
+  S_OUTPUT,
+  S_SNDCARD,
+  S_ALERTCARD,
+  S_APPSLBL,
+  S_NOAPPS,
+  S_APPCARD,
+  S_APPROW,                            /* + application */
+  S_APPNAME = S_APPROW + APPLEVELS,    /* + application */
+  S_APPLEVEL = S_APPNAME + APPLEVELS,  /* + 2 x application: the slider,
+                                        * its value */
+  S_PIN = S_APPLEVEL + 2 * APPLEVELS   /* + app */
 };
 
 /****************************************************************************
  * Private Types
  ****************************************************************************/
 
-struct ctl_s
-{
-  int16_t x;                           /* Frame coordinates */
-  int16_t y;
-  int16_t w;
-  int16_t h;
-  uint8_t id;
-  uint8_t kind;
-  uint8_t n;                           /* K_SEGMENTS: how many */
-};
-
 struct settings_s
 {
-  struct desk_win_s *w;
-  int page;
-  int hot;                             /* Control under the pointer */
-  int hotpart;                         /* ... which part of it */
-  int drag;                            /* Slider being dragged */
-  uint8_t buttons;
-  struct ctl_s ctl[MAX_CTL];
-  int nctl;
+  struct kit_s kit;
+  struct kit_widget_s wg[NWG];
+  struct kit_list_s pages;             /* The sidebar */
   struct ui_field_s test;              /* Mouse & Keyboard: try the keys */
-  struct ui_keys_s keys;
   bool input;                          /* /dev/desktop is there */
+  uint32_t pinned;                     /* Pinned apps as drawn, a bit each */
+  uint16_t accents[ACCENT_COUNT];
+  int nmodes;
+  char modes[RES_MAX][16];
+  const char *modep[RES_MAX];
+
+  /* The texts the widgets show */
+
+  char accentcap[48];
+  char docksize[8];
+  char repdelay[16];
+  char reprate[16];
+  char ptrspeed[8];
+  char clock[24];
+  char date[40];
+  char year[8];
+  char month[8];
+  char day[8];
+  char hour[8];
+  char minute[8];
+  char tz[16];
+
+#ifdef CONFIG_FPCDESK_SOUND
+  /* Sound: the applications whose levels the page shows (the mixer's
+   * levels but the system sounds')
+   */
+
+  struct fpcmix_levels_s levels;
+  int napps;
+  uint8_t app[APPLEVELS];
+  char output[80];
+  char volume[8];
+  char alerts[8];
+  char appname[APPLEVELS][40];
+  char applevel[APPLEVELS][8];
+#endif
 };
 
 /****************************************************************************
  * Private Data
  ****************************************************************************/
 
-/* The operations being built: from the heap while a window is open */
-
-static struct desk_ops_s *g_op;
-static NXWINDOW g_hwnd;
-static struct settings_s g_st;
+static struct settings_s *g_st;        /* While the window is open */
+static int g_page;
 
 static const char * const g_pages[SETTINGS_PAGES] =
 {
   "Appearance", "Display", "Dock", "Mouse & Keyboard", "Date & Time",
+#ifdef CONFIG_FPCDESK_SOUND
+  "Sound",
+#endif
   "About this computer"
 };
 
 static const uint16_t g_pagetile[SETTINGS_PAGES] =
 {
   RGB(0x0a, 0x84, 0xff), RGB(0x5e, 0x5c, 0xe6), RGB(0x8e, 0x8e, 0x93),
-  RGB(0x34, 0xc7, 0x59), RGB(0xff, 0x95, 0x00), RGB(0x64, 0x7a, 0x96)
+  RGB(0x34, 0xc7, 0x59), RGB(0xff, 0x95, 0x00),
+#ifdef CONFIG_FPCDESK_SOUND
+  RGB(0xff, 0x2d, 0x55),
+#endif
+  RGB(0x64, 0x7a, 0x96)
+};
+
+static const char * const g_shadows[4] =
+{
+  "Off", "Light", "Normal", "Strong"
+};
+
+static const char * const g_where[3] =
+{
+  "Left", "Bottom", "Right"
+};
+
+static const uint8_t g_whereorder[3] =
+{
+  DOCK_LEFT, DOCK_BOTTOM, DOCK_RIGHT
+};
+
+static const char * const g_months[12] =
+{
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct",
+  "Nov", "Dec"
 };
 
 #ifdef CONFIG_FPCDESK_WALLPAPER
@@ -145,532 +212,674 @@ static const char * const g_wallnames[NWALLS] =
 #endif
 
 /****************************************************************************
- * Private Functions: drawing
+ * Private Functions: drawing what is the application's own
  ****************************************************************************/
-
-static void need(int n)
-{
-  ui_flush(g_hwnd, g_op, n);
-}
-
-static void ctl_add(int id, int kind, int x, int y, int w, int h, int n)
-{
-  struct ctl_s *c;
-
-  if (g_st.nctl == MAX_CTL)
-    {
-      return;
-    }
-
-  c       = &g_st.ctl[g_st.nctl++];
-  c->x    = x;
-  c->y    = y;
-  c->w    = w;
-  c->h    = h;
-  c->id   = id;
-  c->kind = kind;
-  c->n    = n;
-}
-
-/* Text, with room made for it in the list first */
-
-static void text(const struct desk_font_s *f, int x, int y, const char *str,
-                 uint16_t c)
-{
-  need(strlen(str) + 1);
-  ops_text(g_op, f, x, y, str, c, 255);
-}
-
-static void text_centre(const struct desk_font_s *f, int cx, int y,
-                        const char *str, uint16_t c)
-{
-  need(strlen(str) + 1);
-  ops_text_centre(g_op, f, cx, y, str, c, 255);
-}
-
-static bool hot(int id)
-{
-  return g_st.hot == id;
-}
-
-static void heading(int x, int *y, const char *s)
-{
-  text(&g_desk_font_title, x, *y, s, g_theme.text);
-  *y += 40;
-}
-
-static void caption(int x, int *y, const char *s)
-{
-  text(&g_desk_font_uib, x + 2, *y, s, g_theme.text);
-  *y += 22;
-}
-
-/* A switch at the right of a card's row */
-
-static void row_switch(int id, int x, int y, int w, const char *label,
-                       const char *cap, bool on)
-{
-  int sx = x + w - 14 - WG_SWITCH_W;
-  int sy = y + (WG_ROW_H - WG_SWITCH_H) / 2;
-
-  need(80);
-  wg_row_label(g_op, x, y, label, cap);
-  wg_switch(g_op, sx, sy, on, hot(id));
-  ctl_add(id, K_BUTTON, sx, sy, WG_SWITCH_W, WG_SWITCH_H, 0);
-}
-
-static void row_segments(int id, int x, int y, int w, int sw,
-                         const char *label, const char * const *labels,
-                         int n, int sel)
-{
-  int sx = x + w - 14 - sw;
-  int sy = y + (WG_ROW_H - 28) / 2;
-
-  need(90);
-  wg_row_label(g_op, x, y, label, NULL);
-  wg_segments(g_op, sx, sy, sw, 28, labels, n, sel,
-              hot(id) ? g_st.hotpart : -1);
-  ctl_add(id, K_SEGMENTS, sx, sy, sw, 28, n);
-}
-
-/* A slider with its value's text left of it */
-
-static void row_slider(int id, int x, int y, int w, const char *label,
-                       const char *cap, int v, int min, int max,
-                       const char *value)
-{
-  int sw = 200;
-  int sx = x + w - 14 - sw;
-  int sy = y + (WG_ROW_H - WG_SLIDER_H) / 2;
-
-  need(90);
-  wg_row_label(g_op, x, y, label, cap);
-  text(&g_desk_font_ui, sx - 12 -
-           text_width(&g_desk_font_ui, value),
-           y + (WG_ROW_H - text_height(&g_desk_font_ui)) / 2, value,
-           g_theme.text_dim);
-  wg_slider(g_op, sx, sy, sw, v, min, max, hot(id) || g_st.drag == id);
-  ctl_add(id, K_SLIDER, sx, sy, sw, WG_SLIDER_H, 0);
-}
-
-static void stepper(int id, int x, int y, int w, const char *value)
-{
-  need(12);
-  wg_stepper(g_op, x, y, w, value, hot(id) ? g_st.hotpart : 0);
-  ctl_add(id, K_STEPPER, x, y, w, WG_STEP, 0);
-}
 
 /* A small picture of a theme: a desktop with a window on it */
 
-static void theme_preview(int t, int x, int y)
+static void theme_preview(struct desk_ops_s *o, int t, int x, int y,
+                          bool sel, bool hot)
 {
   const struct desk_theme_s *th = desk_theme_get(t);
-  bool sel = g_prefs.theme == t;
   uint16_t accent = desk_accent_colour(g_prefs.accent);
   int wx = x + 16;
   int wy = y + 14;
   int ww = THEME_W - 32;
   int wh = THEME_H - 24;
 
-  need(24);
-  if (sel || hot(S_THEME + t))
+  ops_fill(o, x - 4, y - 4, THEME_W + 8, THEME_H + 32, g_theme.window_bg);
+  if (sel || hot)
     {
-      ops_rrect(g_op, x - 4, y - 4, THEME_W + 8, THEME_H + 8, LUT_R12, 12,
+      ops_rrect(o, x - 4, y - 4, THEME_W + 8, THEME_H + 8, LUT_R12, 12,
                 sel ? C_ACCENT : g_theme.control_hover, 255);
     }
 
-  ops_rrect(g_op, x, y, THEME_W, THEME_H, LUT_R6, 6,
+  ops_rrect(o, x, y, THEME_W, THEME_H, LUT_R6, 6,
             t == THEME_DARK ? RGB(0x2c, 0x30, 0x48) : RGB(0x9c, 0xa6, 0xb6),
             255);
-  ops_rrect(g_op, x, y, THEME_W, 8, LUT_R6, 4, th->panel_tint,
+  ops_rrect(o, x, y, THEME_W, 8, LUT_R6, 4, th->panel_tint,
             th->panel_alpha);
-  ops_rrect(g_op, wx, wy, ww, wh, LUT_R6, 6, th->title_active, 255);
-  ops_rrect(g_op, wx, wy + 12, ww, wh - 12, LUT_R6, 6, th->window_bg, 255);
-  ops_fill(g_op, wx, wy + 12, ww, 6, th->window_bg);
-  ops_disc(g_op, wx + 7, wy + 6, LUT_R3, 2, C_CLOSE, 255);
-  ops_disc(g_op, wx + 13, wy + 6, LUT_R3, 2, C_MINIMIZE, 255);
-  ops_disc(g_op, wx + 19, wy + 6, LUT_R3, 2, C_MAXIMIZE, 255);
-  ops_fill(g_op, wx + 8, wy + 20, ww - 30, 3, th->text);
-  ops_fill(g_op, wx + 8, wy + 27, ww - 44, 3, th->text_dim);
-  ops_fill(g_op, wx + 8, wy + 34, ww - 36, 3, th->text_dim);
-  ops_rrect(g_op, wx + ww - 30, wy + wh - 14, 24, 9, LUT_R3, 3, accent,
-            255);
-  text_centre(sel ? &g_desk_font_uib : &g_desk_font_ui,
-                  x + THEME_W / 2, y + THEME_H + 8,
-                  t == THEME_DARK ? "Dark" : "Light",
-                  sel ? g_theme.text : g_theme.text_dim);
-  ctl_add(S_THEME + t, K_BUTTON, x, y, THEME_W, THEME_H + 24, 0);
+  ops_rrect(o, wx, wy, ww, wh, LUT_R6, 6, th->title_active, 255);
+  ops_rrect(o, wx, wy + 12, ww, wh - 12, LUT_R6, 6, th->window_bg, 255);
+  ops_fill(o, wx, wy + 12, ww, 6, th->window_bg);
+  ops_disc(o, wx + 7, wy + 6, LUT_R3, 2, C_CLOSE, 255);
+  ops_disc(o, wx + 13, wy + 6, LUT_R3, 2, C_MINIMIZE, 255);
+  ops_disc(o, wx + 19, wy + 6, LUT_R3, 2, C_MAXIMIZE, 255);
+  ops_fill(o, wx + 8, wy + 20, ww - 30, 3, th->text);
+  ops_fill(o, wx + 8, wy + 27, ww - 44, 3, th->text_dim);
+  ops_fill(o, wx + 8, wy + 34, ww - 36, 3, th->text_dim);
+  ops_rrect(o, wx + ww - 30, wy + wh - 14, 24, 9, LUT_R3, 3, accent, 255);
+  ops_text_centre(o, sel ? KIT_FONT_BOLD : KIT_FONT, x + THEME_W / 2,
+                  y + THEME_H + 8, t == THEME_DARK ? "Dark" : "Light",
+                  sel ? g_theme.text : g_theme.text_dim, 255);
+}
+
+/* The kit's draw function: previews, the apps to pin, About */
+
+static void settings_paint(struct kit_s *k, struct kit_widget_s *wg, int x0,
+                           int y0, int x1, int y1)
+{
+  int look = kit_look(k, wg);
+  bool hot = (look & KIT_LOOK_MASK) != KIT_LOOK_NORMAL;
+  struct desk_ops_s *o;
+  int id = wg->id;
+
+  if (id >= S_THEME && id < S_THEME + THEME_COUNT)
+    {
+      o = kit_ops(k, 40);
+      theme_preview(o, id - S_THEME, wg->x + 4, wg->y + 4, wg->value != 0,
+                    hot);
+    }
+#ifdef CONFIG_FPCDESK_WALLPAPER
+  else if (id >= S_WALL && id < S_WALL + NWALLS)
+    {
+      int i = id - S_WALL;
+      int x = wg->x + 4;
+      int y = wg->y + 4;
+
+      o = kit_ops(k, 80);
+      ops_fill(o, wg->x, wg->y, wg->w, wg->h, g_theme.window_bg);
+      if (wg->value || hot)
+        {
+          ops_rrect(o, x - 4, y - 4, SWATCH_W + 8, SWATCH_H + 8, LUT_R12, 12,
+                    wg->value ? C_ACCENT : g_theme.control_hover, 255);
+        }
+
+      desk_wallpaper_preview(o, i, x, y, SWATCH_W, SWATCH_H);
+      o = kit_ops(k, 20);
+      ops_text_centre(o, wg->value ? KIT_FONT_BOLD : KIT_FONT,
+                      x + SWATCH_W / 2, y + SWATCH_H + 10, g_wallnames[i],
+                      wg->value ? g_theme.text : g_theme.text_dim, 255);
+    }
+#endif
+  else if (id >= S_PIN && id < S_PIN + APP_COUNT)
+    {
+      int app = id - S_PIN;
+
+      o = kit_ops(k, 80 + strlen(g_apps[app]->name));
+      ops_fill(o, wg->x, wg->y, wg->w, wg->h, g_theme.window_bg);
+      if (hot)
+        {
+          ops_rrect(o, wg->x, wg->y, wg->w, wg->h, LUT_R6, 6, C_HILITE,
+                    THEMED(18, 12));
+        }
+
+      if (look & KIT_LOOK_FOCUS)
+        {
+          kit_paint_ring(o, wg->x + 8, wg->y + 7, KIT_CHECK, KIT_CHECK,
+                         KIT_R_CONTROL, g_theme.window_bg);
+        }
+
+      kit_paint_check(o, wg->x + 8, wg->y + 7, desk_dock_pinned(app),
+                      KIT_LOOK_NORMAL);
+      if (g_apps[app]->icon != NULL)
+        {
+          g_apps[app]->icon(o, wg->x + 36, wg->y + 2, 28, 255);
+        }
+
+      o = kit_ops(k, strlen(g_apps[app]->name) + 2);
+      ops_text(o, KIT_FONT, wg->x + 74,
+               wg->y + (wg->h - text_height(KIT_FONT)) / 2,
+               g_apps[app]->name, g_theme.text, 255);
+    }
+  else if (id == S_ABOUT)
+    {
+      o = kit_ops(k, 1);
+      ops_fill(o, wg->x, wg->y, wg->w, wg->h, g_theme.window_bg);
+      ops_draw((NXWINDOW)k->w->hwnd, o);
+      desk_about_draw((NXWINDOW)k->w->hwnd, wg->x, wg->y, wg->w);
+    }
+}
+
+/* The sidebar's rows: a small coloured tile */
+
+static const char *page_text(struct kit_s *k, struct kit_widget_s *wg,
+                             int row, int col, char *buf, int size)
+{
+  return g_pages[row];
+}
+
+static void page_icon(struct kit_s *k, struct kit_widget_s *wg,
+                      struct desk_ops_s *o, int row, int x, int y,
+                      uint16_t fg, uint16_t bg)
+{
+  ops_rrect(o, x - 2, y - 2, 20, 20, LUT_R6, 6, g_pagetile[row], 255);
+  ops_blend(o, x + 2, y - 2, 12, 1, C_WHITE, 70);
 }
 
 /****************************************************************************
  * Private Functions: the pages
  ****************************************************************************/
 
-static void page_appearance(int x, int y, int w)
+static struct kit_widget_s *page_begin(struct kit_s *k, int page,
+                                       const char *heading)
 {
-  static const char * const shadows[4] =
-  {
-    "Off", "Light", "Normal", "Strong"
-  };
+  struct kit_widget_s *wg = kit_col(k, KIT_BOX_NONE);
 
-  char cap[40];
-  int i;
-
-  heading(x, &y, "Appearance");
-  theme_preview(THEME_DARK, x + 4, y + 4);
-  theme_preview(THEME_LIGHT, x + 4 + THEME_W + 24, y + 4);
-  y += THEME_H + 44;
-
-  need(40);
-  wg_card(g_op, x, y, w, 3);
-  snprintf(cap, sizeof(cap), "%s", desk_accent_name(g_prefs.accent));
-  wg_row_label(g_op, x, y, "Accent colour", cap);
-  for (i = 0; i < ACCENT_COUNT; i++)
+  wg->id   = S_PAGE + page;
+  wg->flags |= KIT_F_SCROLL;           /* Taller than the window: it
+                                        * scrolls (800 x 600) */
+  wg->padx = PAD;
+  wg->pady = 18;
+  wg->gap  = 12;
+  kit_grow(k, 1);
+  if (page != g_page)
     {
-      int cx = x + w - 14 - WG_SWATCH_R - (ACCENT_COUNT - 1 - i) * 30;
-      int cy = y + WG_ROW_H / 2;
-
-      need(4);
-      wg_swatch(g_op, cx, cy, desk_accent_colour(i), g_prefs.accent == i,
-                hot(S_ACCENT + i));
-      ctl_add(S_ACCENT + i, K_BUTTON, cx - 14, cy - 14, 28, 28, 0);
+      wg->flags |= KIT_F_HIDDEN;
     }
 
-  row_segments(S_SHADOW, x, y + WG_ROW_H, w, 260, "Window shadows",
-               shadows, 4, g_prefs.shadow);
-  row_switch(S_BORDER, x, y + 2 * WG_ROW_H, w, "Window edges",
-             "A hairline around each window", g_prefs.border);
-  y += 3 * WG_ROW_H + 16;
+  if (heading != NULL)
+    {
+      kit_label(k, 0, heading, KIT_TEXT_HEADING);
+    }
 
-  need(8);
-  need(12);
-  wg_card(g_op, x, y, w, 3);
-  row_switch(S_CLOCK24, x, y, w, "24-hour clock", NULL, g_prefs.clock24);
-  row_switch(S_CLOCKDATE, x, y + WG_ROW_H, w, "Show the date",
-             "In the top bar", g_prefs.clockdate);
-  row_switch(S_CLOCKSECS, x, y + 2 * WG_ROW_H, w, "Show seconds", NULL,
-             g_prefs.clocksecs);
+  return wg;
 }
 
-static void page_display(int x, int y, int w)
+/* A row of a card: a label, a value's text, a slider */
+
+static void row_slider(struct kit_s *k, int id, const char *label,
+                       char *value, int min, int max)
 {
-  static char labels[RES_MAX][16];
-  static const char *lp[RES_MAX];
-  struct nxgl_size_s size;
-  int n;
+  kit_card_row(k, 0, label);
+    kit_label(k, id + 1, value, KIT_TEXT_DIM);
+    kit_slider(k, id, min, min, max);
+    kit_size(k, 200, 0);
+  kit_end(k);
+}
 
-  heading(x, &y, "Display");
-  caption(x, &y, "Resolution");
+static void row_switch(struct kit_s *k, int id, const char *label)
+{
+  kit_card_row(k, 0, label);
+    kit_switch(k, id, false);
+  kit_end(k);
+}
 
-  for (n = 0; n < RES_MAX && nx_getdisplaymode(g_desk.hnx, n, &size) >= 0;
-       n++)
-    {
-      snprintf(labels[n], sizeof(labels[n]), "%d x %d", size.w, size.h);
-      lp[n] = labels[n];
-    }
+static void page_appearance(struct settings_s *st)
+{
+  struct kit_s *k = &st->kit;
+  struct kit_widget_s *wg;
+  int t;
 
-  if (n > 0)
-    {
-      need(40);
-      wg_segments(g_op, x, y, w, 30, lp, n,
-                  nx_getdisplaymode(g_desk.hnx, -1, NULL),
-                  hot(S_MODE) ? g_st.hotpart : -1);
-      ctl_add(S_MODE, K_SEGMENTS, x, y, w, 30, n);
-    }
-  else
-    {
-      text(&g_desk_font_ui, x + 2, y, "This display has one mode",
-               g_theme.text_dim);
-    }
+  page_begin(k, SETTINGS_APPEARANCE, "Appearance");
+    wg = kit_row(k, KIT_BOX_NONE);
+    wg->gap = 16;
+      for (t = 0; t < THEME_COUNT; t++)
+        {
+          kit_button(k, S_THEME + t, NULL, KIT_ICON_NONE, KIT_BTN_CUSTOM);
+          kit_size(k, THEME_W + 8, THEME_H + 32);
+        }
+    kit_end(k);
 
-  y += 50;
+    kit_card(k);
+      kit_card_row(k, S_ACCENTLBL, st->accentcap);
+        kit_swatches(k, S_ACCENT, st->accents, ACCENT_COUNT, 0);
+      kit_end(k);
+      kit_card_row(k, 0, "Window shadows");
+        kit_tabs(k, S_SHADOW, g_shadows, 4, 0, KIT_TABS_SEGMENTS);
+        kit_size(k, 260, 28);
+      kit_end(k);
+      row_switch(k, S_BORDER, "Window edges\nA hairline around each window");
+    kit_end(k);
 
-#ifdef CONFIG_FPCDESK_WALLPAPER
-  {
-    int i;
+    kit_card(k);
+      row_switch(k, S_CLOCK24, "24-hour clock");
+      row_switch(k, S_CLOCKDATE, "Show the date\nIn the top bar");
+      row_switch(k, S_CLOCKSECS, "Show seconds");
+    kit_end(k);
+  kit_end(k);
+}
 
-    /* Four previews across the page: the three drawn ones and the image
-     * (wallpaper.bmp at home, shown in BC1 by a v6 GPU)
-     */
+static void page_display(struct settings_s *st)
+{
+  struct kit_s *k = &st->kit;
 
-    int sw = (w - 8 - (NWALLS - 1) * SWATCH_GAP) / NWALLS;
-    int sh = sw * 2 / 3;
-
-    caption(x, &y, "Wallpaper");
-    text(&g_desk_font_ui, x + 2, y,
-             "Drawn by the GPU, or an image from your home folder",
-             g_theme.text_dim);
-    y += 28;
-
-    for (i = 0; i < NWALLS; i++)
+  page_begin(k, SETTINGS_DISPLAY, "Display");
+    kit_label(k, 0, "Resolution", KIT_TEXT_BOLD);
+    if (st->nmodes > 0)
       {
-        int sx = x + 4 + i * (sw + SWATCH_GAP);
-
-        need(24);
-        if (g_desk.wallstyle == i || hot(S_WALL + i))
-          {
-            ops_rrect(g_op, sx - 4, y - 4, sw + 8, sh + 8,
-                      LUT_R12, 12, g_desk.wallstyle == i ? C_ACCENT :
-                      g_theme.control_hover, 255);
-          }
-
-        desk_wallpaper_preview(g_op, i, sx, y, sw, sh);
-        text_centre(g_desk.wallstyle == i ? &g_desk_font_uib :
-                        &g_desk_font_ui, sx + sw / 2,
-                        y + sh + 10, g_wallnames[i],
-                        g_desk.wallstyle == i ? g_theme.text :
-                        g_theme.text_dim);
-        ctl_add(S_WALL + i, K_BUTTON, sx, y, sw, sh + 26, 0);
+        kit_tabs(k, S_MODE, st->modep, st->nmodes, 0, KIT_TABS_SEGMENTS);
+        kit_size(k, 0, 30);
       }
-  }
+    else
+      {
+        kit_label(k, 0, "This display has one mode", KIT_TEXT_DIM);
+      }
+
+    kit_spacer(k, 0);
+    kit_label(k, 0, "Wallpaper", KIT_TEXT_BOLD);
+#ifdef CONFIG_FPCDESK_WALLPAPER
+    {
+      struct kit_widget_s *wg;
+      int i;
+
+      kit_label(k, 0, "Drawn by the GPU, or an image from your home folder",
+                KIT_TEXT_DIM);
+      wg = kit_row(k, KIT_BOX_NONE);
+      wg->gap = 10;
+        for (i = 0; i < NWALLS; i++)
+          {
+            kit_button(k, S_WALL + i, NULL, KIT_ICON_NONE, KIT_BTN_CUSTOM);
+            kit_size(k, SWATCH_W + 8, SWATCH_H + 34);
+          }
+      kit_end(k);
+    }
 #else
-  text(&g_desk_font_ui, x + 2, y,
-           "No wallpaper in this build (CONFIG_FPCDESK_WALLPAPER).",
-           g_theme.text_dim);
+    kit_label(k, 0, "No wallpaper in this build (CONFIG_FPCDESK_WALLPAPER).",
+              KIT_TEXT_DIM);
 #endif
+  kit_end(k);
 }
 
-static void page_dock(int x, int y, int w)
+static void page_dock(struct settings_s *st)
 {
-  static const char * const where[3] =
-  {
-    "Left", "Bottom", "Right"
-  };
-
-  static const uint8_t order[3] =
-  {
-    DOCK_LEFT, DOCK_BOTTOM, DOCK_RIGHT
-  };
-
-  char value[16];
-  int sel = 1;
+  struct kit_s *k = &st->kit;
+  struct kit_widget_s *wg;
   int col;
-  int k = 0;
   int i;
 
-  for (i = 0; i < 3; i++)
-    {
-      sel = order[i] == g_prefs.dockpos ? i : sel;
-    }
+  page_begin(k, SETTINGS_DOCK, "Dock");
+    kit_card(k);
+      row_slider(k, S_DOCKSIZE, "Size\nOf its icons", st->docksize,
+                 DOCK_ICON_MIN, DOCK_ICON_MAX);
+      kit_card_row(k, 0, "Position on screen");
+        kit_tabs(k, S_DOCKPOS, g_where, 3, 1, KIT_TABS_SEGMENTS);
+        kit_size(k, 240, 28);
+      kit_end(k);
+      row_switch(k, S_DOCKHIDE, "Hide automatically\nIt comes back when the "
+                 "pointer touches the edge");
+    kit_end(k);
 
-  heading(x, &y, "Dock");
-  need(12);
-  wg_card(g_op, x, y, w, 3);
-  snprintf(value, sizeof(value), "%d", g_prefs.dockicon);
-  row_slider(S_DOCKSIZE, x, y, w, "Size", "Of its icons", g_prefs.dockicon,
-             DOCK_ICON_MIN, DOCK_ICON_MAX, value);
-  row_segments(S_DOCKPOS, x, y + WG_ROW_H, w, 240, "Position on screen",
-               where, 3, sel);
-  row_switch(S_DOCKHIDE, x, y + 2 * WG_ROW_H, w, "Hide automatically",
-             "It comes back when the pointer touches the edge",
-             g_prefs.dockhide);
-  y += 3 * WG_ROW_H + 18;
+    kit_label(k, 0, "In the Dock\nOr: the right button on an icon in the "
+              "Dock or the launcher", KIT_TEXT_BOLD);
 
-  caption(x, &y, "In the Dock");
-  text(&g_desk_font_small, x + 2, y - 2,
-           "Or: the right button on an icon in the Dock or the launcher",
-           g_theme.text_dim);
-  y += 20;
+    /* The applications, in two columns */
 
-  /* The applications, in two columns */
-
-  col = (w - 8) / 2;
-  for (i = 1; i < APP_COUNT; i++)
-    {
-      int cx = x + (k % 2) * (col + 8);
-      int cy = y + (k / 2) * 34;
-      bool pinned = desk_dock_pinned(i);
-
-      need(40);
-      if (hot(S_PIN + i))
+    wg = kit_row(k, KIT_BOX_NONE);
+    wg->gap = 8;
+      for (col = 0; col < 2; col++)
         {
-          ops_rrect(g_op, cx, cy, col, 32, LUT_R6, 6, C_HILITE,
-                    THEMED(18, 12));
+          kit_col(k, KIT_BOX_NONE)->gap = 2;
+          kit_grow(k, 1);
+            for (i = 1 + col; i < APP_COUNT; i += 2)
+              {
+                kit_button(k, S_PIN + i, NULL, KIT_ICON_NONE,
+                           KIT_BTN_CUSTOM)->align = KIT_A_FILL;
+                kit_size(k, 0, 32);
+              }
+          kit_end(k);
         }
-
-      wg_check(g_op, cx + 8, cy + 7, pinned, false);
-      if (g_apps[i]->icon != NULL)
-        {
-          g_apps[i]->icon(g_op, cx + 36, cy + 2, 28, 255);
-        }
-
-      text(&g_desk_font_ui, cx + 74,
-               cy + (32 - text_height(&g_desk_font_ui)) / 2,
-               g_apps[i]->name, g_theme.text);
-      ctl_add(S_PIN + i, K_BUTTON, cx, cy, col, 32, 0);
-      k++;
-    }
+    kit_end(k);
+  kit_end(k);
 }
 
-static void page_input(int x, int y, int w)
+static void page_input(struct settings_s *st)
 {
-  char value[24];
+  struct kit_s *k = &st->kit;
 
-  heading(x, &y, "Mouse & Keyboard");
-  need(12);
-  wg_card(g_op, x, y, w, 4);
-  row_switch(S_REPEAT, x, y, w, "Key repeat", "A key held down repeats",
-             g_prefs.repdelay > 0);
-  snprintf(value, sizeof(value), "%d ms",
-           g_prefs.repdelay > 0 ? g_prefs.repdelay : 500);
-  row_slider(S_REPDELAY, x, y + WG_ROW_H, w, "Delay until repeat", NULL,
-             g_prefs.repdelay > 0 ? g_prefs.repdelay : 500, 150, 1000,
-             value);
-  snprintf(value, sizeof(value), "%d a second", 1000 / g_prefs.reprate);
-  row_slider(S_REPRATE, x, y + 2 * WG_ROW_H, w, "Repeat rate", NULL,
-             1000 / g_prefs.reprate, 5, 50, value);
+  page_begin(k, SETTINGS_INPUT, "Mouse & Keyboard");
+    kit_card(k);
+      row_switch(k, S_REPEAT, "Key repeat\nA key held down repeats");
+      row_slider(k, S_REPDELAY, "Delay until repeat", st->repdelay, 150,
+                 1000);
+      row_slider(k, S_REPRATE, "Repeat rate", st->reprate, 5, 50);
+      kit_card_row(k, 0, "Try it");
+        kit_field(k, S_TEST, &st->test, "Type here");
+        kit_size(k, 240, 0);
+      kit_end(k);
+    kit_end(k);
 
-  need(30 + UI_FIELD_MAX / 4);
-  wg_row_label(g_op, x, y + 3 * WG_ROW_H, "Try it", NULL);
-  ui_field_draw(g_op, &g_st.test, x + w - 14 - 240, y + 3 * WG_ROW_H + 8,
-                240, 28, true);
-  ctl_add(S_TEST, K_FIELD, x + w - 14 - 240, y + 3 * WG_ROW_H + 8, 240, 28,
-          0);
-  y += 4 * WG_ROW_H + 16;
+    kit_card(k);
+      row_slider(k, S_PTRSPEED, "Pointer speed\nHow far it goes for the "
+                 "mouse", st->ptrspeed, 25, 300);
+    kit_end(k);
 
-  need(12);
-  wg_card(g_op, x, y, w, 1);
-  snprintf(value, sizeof(value), "%d%%", g_prefs.ptrspeed);
-  row_slider(S_PTRSPEED, x, y, w, "Pointer speed", "How far it goes for "
-             "the mouse", g_prefs.ptrspeed, 25, 300, value);
-  y += WG_ROW_H + 16;
-
-  if (!g_st.input)
-    {
-      text(&g_desk_font_small, x + 2, y,
-               "No desktop session (/dev/desktop): these have no effect.",
-               g_theme.text_dim);
-    }
+    kit_label(k, S_NOINPUT, "No desktop session (/dev/desktop): these have "
+              "no effect.", KIT_TEXT_SMALL | KIT_TEXT_DIM);
+  kit_end(k);
 }
 
-static void page_datetime(int x, int y, int w)
+static void page_datetime(struct settings_s *st)
 {
-  static const char * const months[12] =
-  {
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct",
-    "Nov", "Dec"
-  };
+  struct kit_s *k = &st->kit;
 
-  char buf[40];
-  struct tm tm;
-  int off = g_prefs.tzoff < 0 ? -g_prefs.tzoff : g_prefs.tzoff;
-  int sx;
+  page_begin(k, SETTINGS_DATETIME, "Date & Time");
+    kit_label(k, S_CLOCK, st->clock, KIT_TEXT_DISPLAY | KIT_TEXT_CENTRE);
+    kit_label(k, S_DATE, st->date, KIT_TEXT_DIM | KIT_TEXT_CENTRE);
+    kit_card(k);
+      kit_card_row(k, 0, "Date");
+        kit_stepper(k, S_YEAR, st->year);
+        kit_stepper(k, S_MONTH, st->month);
+        kit_stepper(k, S_DAY, st->day);
+      kit_end(k);
+      kit_card_row(k, 0, "Time\nSeconds start again at 0");
+        kit_stepper(k, S_HOUR, st->hour);
+        kit_stepper(k, S_MINUTE, st->minute);
+      kit_end(k);
+      kit_card_row(k, 0, "Time zone\nOffset from UTC");
+        kit_stepper(k, S_TZ, st->tz);
+        kit_size(k, 150, 0);
+      kit_end(k);
+    kit_end(k);
 
-  desk_localtime(&tm);
-  heading(x, &y, "Date & Time");
+    kit_label(k, 0, "There is no battery-backed clock: the time starts "
+              "again at each boot.", KIT_TEXT_SMALL | KIT_TEXT_DIM);
+  kit_end(k);
+}
 
-  strftime(buf, sizeof(buf), g_prefs.clock24 ? "%H:%M:%S" : "%l:%M:%S %p",
-           &tm);
-  text_centre(&g_desk_font_big, x + w / 2, y, buf, g_theme.text);
-  strftime(buf, sizeof(buf), "%A, %e %B %Y", &tm);
-  text_centre(&g_desk_font_ui, x + w / 2, y + 58, buf,
-                  g_theme.text_dim);
-  y += 92;
+#ifdef CONFIG_FPCDESK_SOUND
+/* Sound: where it goes, the volume and mute; the alert volume, a test,
+ * interface sounds; the levels of the applications that have played
+ */
 
-  need(60);
-  wg_card(g_op, x, y, w, 3);
-  wg_row_label(g_op, x, y, "Date", NULL);
-  sx = x + w - 14 - 3 * 96 - 16;
-  snprintf(buf, sizeof(buf), "%d", tm.tm_year + 1900);
-  stepper(S_YEAR, sx, y + 10, 96, buf);
-  stepper(S_MONTH, sx + 104, y + 10, 96, months[tm.tm_mon % 12]);
-  snprintf(buf, sizeof(buf), "%d", tm.tm_mday);
-  stepper(S_DAY, sx + 208, y + 10, 96, buf);
+static void page_sound(struct settings_s *st)
+{
+  struct kit_s *k = &st->kit;
+  int i;
 
-  y += WG_ROW_H;
-  need(40);
-  wg_row_label(g_op, x, y, "Time", "Seconds start again at 0");
-  sx = x + w - 14 - 2 * 96 - 8;
-  snprintf(buf, sizeof(buf), "%02d", tm.tm_hour);
-  stepper(S_HOUR, sx, y + 10, 96, buf);
-  snprintf(buf, sizeof(buf), "%02d", tm.tm_min);
-  stepper(S_MINUTE, sx + 104, y + 10, 96, buf);
+  page_begin(k, SETTINGS_SOUND, "Sound");
+    kit_label(k, S_OUTPUT, st->output, KIT_TEXT_SMALL | KIT_TEXT_DIM);
+    kit_card(k)->id = S_SNDCARD;
+      row_slider(k, S_VOLUME, "Volume", st->volume, 0, FPCMIX_VOLUME_MAX);
+      row_switch(k, S_MUTE, "Mute");
+    kit_end(k);
 
-  y += WG_ROW_H;
-  need(40);
-  wg_row_label(g_op, x, y, "Time zone", "Offset from UTC");
-  snprintf(buf, sizeof(buf), "UTC%c%02d:%02d",
-           g_prefs.tzoff < 0 ? '-' : '+', off / 60, off % 60);
-  stepper(S_TZ, x + w - 14 - 150, y + 10, 150, buf);
-  y += WG_ROW_H + 16;
+    kit_card(k)->id = S_ALERTCARD;
+      row_slider(k, S_ALERTS, "Alert volume\nThe system's sounds",
+                 st->alerts, 0, FPCMIX_VOLUME_MAX);
+      kit_card_row(k, 0, "Alert sound");
+        kit_button(k, S_ALERTTEST, "Play", KIT_ICON_NONE, KIT_BTN_NORMAL);
+        kit_size(k, 96, 0);
+      kit_end(k);
+      row_switch(k, S_EFFECTS, "Interface sounds\nWindows opening, closing");
+    kit_end(k);
 
-  text(&g_desk_font_small, x + 2, y,
-           "There is no battery-backed clock: the time starts again at "
-           "each boot.", g_theme.text_dim);
+    kit_label(k, S_APPSLBL, "Applications", KIT_TEXT_BOLD);
+    kit_label(k, S_NOAPPS, "None has played yet", KIT_TEXT_DIM);
+    kit_card(k)->id = S_APPCARD;
+      for (i = 0; i < APPLEVELS; i++)
+        {
+          kit_card_row(k, S_APPNAME + i, st->appname[i])->id = S_APPROW + i;
+            kit_label(k, S_APPLEVEL + 2 * i + 1, st->applevel[i],
+                      KIT_TEXT_DIM);
+            kit_slider(k, S_APPLEVEL + 2 * i, 0, 0, FPCMIX_VOLUME_MAX);
+            kit_size(k, 200, 0);
+          kit_end(k);
+        }
+    kit_end(k);
+  kit_end(k);
+}
+
+static bool sound_playing(const struct fpcmix_info_s *info, const char *name)
+{
+  int i;
+
+  for (i = 0; i < info->nchan && i < FPCMIX_NCHAN_MAX; i++)
+    {
+      if (info->chan[i].state == FPCMIX_PLAYING &&
+          strcmp(info->chan[i].name, name) == 0)
+        {
+          return true;
+        }
+    }
+
+  return false;
+}
+#endif
+
+static void page_about(struct settings_s *st)
+{
+  struct kit_s *k = &st->kit;
+
+  page_begin(k, SETTINGS_ABOUT, NULL)->pady = 0;
+    kit_custom(k, S_ABOUT)->flags |= KIT_F_NOFOCUS;
+    kit_grow(k, 1);
+  kit_end(k);
 }
 
 /****************************************************************************
- * Private Functions: the window
+ * Private Functions: keeping the widgets up to date
  ****************************************************************************/
 
-static void settings_draw(struct desk_win_s *w)
+/* A text: changed only if it is different (then drawn again) */
+
+static void set_text(struct settings_s *st, int id, char *buf, size_t size,
+                     const char *fmt, ...)
 {
-  int x = SIDE_W + PAD;
-  int cw = w->csize.w - x - PAD;
-  int y = TITLE_H + 20;
+  char tmp[64];
+  va_list ap;
+
+  va_start(ap, fmt);
+  vsnprintf(tmp, sizeof(tmp), fmt, ap);
+  va_end(ap);
+  if (strcmp(tmp, buf) != 0)
+    {
+      strlcpy(buf, tmp, size);
+      kit_set_text(&st->kit, id, buf);
+    }
+}
+
+#ifdef CONFIG_FPCDESK_SOUND
+static void sound_sync(struct settings_s *st);
+#endif
+
+static void settings_sync(struct settings_s *st)
+{
+  struct kit_s *k = &st->kit;
+  struct nxgl_size_s size;
+  struct tm tm;
+  int off = g_prefs.tzoff < 0 ? -g_prefs.tzoff : g_prefs.tzoff;
+  uint32_t pinned = 0;
   int i;
 
-  if (g_op == NULL)
+  /* Appearance */
+
+  for (i = 0; i < THEME_COUNT; i++)
     {
+      kit_set_value(k, S_THEME + i, g_prefs.theme == i);
+    }
+
+  for (i = 0; i < ACCENT_COUNT; i++)
+    {
+      if (st->accents[i] != desk_accent_colour(i))
+        {
+          st->accents[i] = desk_accent_colour(i);
+          kit_invalidate(k, S_ACCENT);
+        }
+    }
+
+  kit_set_value(k, S_ACCENT, g_prefs.accent);
+  set_text(st, S_ACCENTLBL, st->accentcap, sizeof(st->accentcap),
+           "Accent colour\n%s", desk_accent_name(g_prefs.accent));
+  kit_set_value(k, S_SHADOW, g_prefs.shadow);
+  kit_set_value(k, S_BORDER, g_prefs.border);
+  kit_set_value(k, S_CLOCK24, g_prefs.clock24);
+  kit_set_value(k, S_CLOCKDATE, g_prefs.clockdate);
+  kit_set_value(k, S_CLOCKSECS, g_prefs.clocksecs);
+
+  /* Display */
+
+  for (i = 0; i < st->nmodes && nx_getdisplaymode(g_desk.hnx, i, &size) >= 0;
+       i++)
+    {
+      snprintf(st->modes[i], sizeof(st->modes[i]), "%d x %d", size.w,
+               size.h);
+    }
+
+  kit_set_value(k, S_MODE, nx_getdisplaymode(g_desk.hnx, -1, NULL));
+#ifdef CONFIG_FPCDESK_WALLPAPER
+  for (i = 0; i < NWALLS; i++)
+    {
+      kit_set_value(k, S_WALL + i, g_desk.wallstyle == i);
+    }
+#endif
+
+  /* Dock */
+
+  kit_set_value(k, S_DOCKSIZE, g_prefs.dockicon);
+  set_text(st, S_DOCKSIZEV, st->docksize, sizeof(st->docksize), "%d",
+           g_prefs.dockicon);
+  for (i = 0; i < 3; i++)
+    {
+      if (g_whereorder[i] == g_prefs.dockpos)
+        {
+          kit_set_value(k, S_DOCKPOS, i);
+        }
+    }
+
+  kit_set_value(k, S_DOCKHIDE, g_prefs.dockhide);
+  for (i = 1; i < APP_COUNT && i < 32; i++)
+    {
+      pinned |= desk_dock_pinned(i) ? 1u << i : 0;
+      if (((st->pinned ^ pinned) >> i) & 1)
+        {
+          kit_invalidate(k, S_PIN + i);
+        }
+    }
+
+  st->pinned = pinned;
+
+  /* Mouse & Keyboard */
+
+  kit_set_value(k, S_REPEAT, g_prefs.repdelay > 0);
+  kit_set_value(k, S_REPDELAY, g_prefs.repdelay > 0 ? g_prefs.repdelay :
+                500);
+  set_text(st, S_REPDELAYV, st->repdelay, sizeof(st->repdelay), "%d ms",
+           g_prefs.repdelay > 0 ? g_prefs.repdelay : 500);
+  kit_enable(k, S_REPDELAY, g_prefs.repdelay > 0);
+  kit_enable(k, S_REPRATE, g_prefs.repdelay > 0);
+  kit_set_value(k, S_REPRATE, 1000 / g_prefs.reprate);
+  set_text(st, S_REPRATEV, st->reprate, sizeof(st->reprate), "%d a second",
+           1000 / g_prefs.reprate);
+  kit_set_value(k, S_PTRSPEED, g_prefs.ptrspeed);
+  set_text(st, S_PTRSPEEDV, st->ptrspeed, sizeof(st->ptrspeed), "%d%%",
+           g_prefs.ptrspeed);
+  kit_show(k, S_NOINPUT, !st->input);
+
+  /* Date & Time */
+
+  desk_localtime(&tm);
+  {
+    char buf[40];
+
+    strftime(buf, sizeof(buf), g_prefs.clock24 ? "%H:%M:%S" :
+             "%l:%M:%S %p", &tm);
+    set_text(st, S_CLOCK, st->clock, sizeof(st->clock), "%s", buf);
+    strftime(buf, sizeof(buf), "%A, %e %B %Y", &tm);
+    set_text(st, S_DATE, st->date, sizeof(st->date), "%s", buf);
+  }
+
+  set_text(st, S_YEAR, st->year, sizeof(st->year), "%d",
+           tm.tm_year + 1900);
+  set_text(st, S_MONTH, st->month, sizeof(st->month), "%s",
+           g_months[tm.tm_mon % 12]);
+  set_text(st, S_DAY, st->day, sizeof(st->day), "%d", tm.tm_mday);
+  set_text(st, S_HOUR, st->hour, sizeof(st->hour), "%02d", tm.tm_hour);
+  set_text(st, S_MINUTE, st->minute, sizeof(st->minute), "%02d",
+           tm.tm_min);
+  set_text(st, S_TZ, st->tz, sizeof(st->tz), "UTC%c%02d:%02d",
+           g_prefs.tzoff < 0 ? '-' : '+', off / 60, off % 60);
+
+#ifdef CONFIG_FPCDESK_SOUND
+  if (g_page == SETTINGS_SOUND)
+    {
+      sound_sync(st);                  /* It reads the mixer */
+    }
+#endif
+}
+
+#ifdef CONFIG_FPCDESK_SOUND
+static void sound_sync(struct settings_s *st)
+{
+  struct kit_s *k = &st->kit;
+  const struct fpcmix_info_s *info = desk_sound_refresh();
+  int v;
+  int i;
+
+  kit_show(k, S_SNDCARD, info != NULL);
+  kit_show(k, S_ALERTCARD, info != NULL);
+  kit_show(k, S_APPSLBL, info != NULL);
+  if (info == NULL)
+    {
+      set_text(st, S_OUTPUT, st->output, sizeof(st->output), "%s",
+               "No audio (/dev/mixer)");
+      kit_show(k, S_NOAPPS, false);
+      kit_show(k, S_APPCARD, false);
       return;
     }
 
-  g_st.w    = w;
-  g_hwnd    = (NXWINDOW)w->hwnd;
-  g_st.nctl = 0;
+  set_text(st, S_OUTPUT, st->output, sizeof(st->output), "%s", info->gpu ?
+           "Output: HDMI, played by the GPU" :
+           "No audio in the GPU (a bitstream before v7): sound is "
+           "discarded");
+  kit_set_value(k, S_VOLUME, info->master);
+  set_text(st, S_VOLUMEV, st->volume, sizeof(st->volume), "%d%%",
+           (info->master + 5) / 10);
+  kit_set_value(k, S_MUTE, info->mute);
+  v = desk_sound_getlevel(DESK_SOUND_ALERTS);
+  kit_set_value(k, S_ALERTS, v);
+  set_text(st, S_ALERTSV, st->alerts, sizeof(st->alerts), "%d%%",
+           (v + 5) / 10);
+  kit_set_value(k, S_EFFECTS, desk_sound_effects());
 
-  ops_reset(g_op);
+  st->napps = 0;
+  if (desk_sound_levels(&st->levels) >= 0)
+    {
+      for (i = 0; i < st->levels.n && st->napps < APPLEVELS; i++)
+        {
+          if (strcmp(st->levels.l[i].name, DESK_SOUND_ALERTS) != 0)
+            {
+              st->app[st->napps++] = i;
+            }
+        }
+    }
 
-  /* The sidebar */
+  kit_show(k, S_NOAPPS, st->napps == 0);
+  kit_show(k, S_APPCARD, st->napps > 0);
+  for (i = 0; i < APPLEVELS; i++)
+    {
+      kit_show(k, S_APPROW + i, i < st->napps);
+      if (i < st->napps)
+        {
+          const struct fpcmix_level_s *l = &st->levels.l[st->app[i]];
 
-  ops_fill(g_op, 0, TITLE_H, SIDE_W, w->csize.h, g_theme.sidebar);
-  ops_fill(g_op, SIDE_W, TITLE_H, 1, w->csize.h, g_theme.separator);
+          set_text(st, S_APPNAME + i, st->appname[i], sizeof(st->appname[i]),
+                   "%s%s", l->name, sound_playing(info, l->name) ?
+                   "\nPlaying" : "");
+          kit_set_value(k, S_APPLEVEL + 2 * i, l->level);
+          set_text(st, S_APPLEVEL + 2 * i + 1, st->applevel[i],
+                   sizeof(st->applevel[i]), "%d%%", (l->level + 5) / 10);
+        }
+    }
+}
+#endif
+
+static void show_page(struct settings_s *st, int page)
+{
+  int i;
+
+  g_page = page;
   for (i = 0; i < SETTINGS_PAGES; i++)
     {
-      int ry = TITLE_H + 12 + i * (SIDE_ROW + 2);
-
-      need(12);
-      wg_sidebar_row(g_op, 10, ry, SIDE_W - 20, SIDE_ROW, g_pages[i],
-                     g_pagetile[i], g_st.page == i, hot(S_PAGE + i));
-      ctl_add(S_PAGE + i, K_BUTTON, 10, ry, SIDE_W - 20, SIDE_ROW, 0);
+      kit_show(&st->kit, S_PAGE + i, i == page);
     }
 
-  /* The page */
-
-  need(4);
-  ops_fill(g_op, SIDE_W + 1, TITLE_H, w->csize.w - SIDE_W - 1, w->csize.h,
-           C_WINDOW_BG);
-
-  switch (g_st.page)
+  if (st->pages.sel != page)
     {
-      case SETTINGS_APPEARANCE:
-        page_appearance(x, y, cw);
-        break;
-
-      case SETTINGS_DISPLAY:
-        page_display(x, y, cw);
-        break;
-
-      case SETTINGS_DOCK:
-        page_dock(x, y, cw);
-        break;
-
-      case SETTINGS_INPUT:
-        page_input(x, y, cw);
-        break;
-
-      case SETTINGS_DATETIME:
-        page_datetime(x, y, cw);
-        break;
-
-      default:
-        ops_draw(g_hwnd, g_op);
-        desk_about_draw(g_hwnd, x, TITLE_H, cw);
-        break;
+      kit_list_select(&st->kit, S_SIDEBAR, page);
     }
 
-  ops_draw(g_hwnd, g_op);
+  if (page == SETTINGS_ABOUT)
+    {
+      kit_invalidate(&st->kit, S_ABOUT);         /* The display's size */
+    }
+
+  settings_sync(st);                           /* A page's own (Sound) */
 }
+
+/****************************************************************************
+ * Private Functions: acting
+ ****************************************************************************/
 
 /* Set the clock: one field of the date or time up or down, within its
  * range (it wraps, as a watch's crown does)
@@ -726,76 +935,98 @@ static void time_step(int id, int d)
   desk_topbar_draw();
 }
 
-/* Act on control c: pressed at (x, y), or dragged there (a slider) */
-
-static void settings_act(struct ctl_s *c, int x, int y, bool done)
+static void settings_event(struct kit_s *k, struct kit_widget_s *wg, int ev)
 {
-  int id = c->id;
-  int part = c->kind == K_SEGMENTS ? wg_segment_at(c->x, c->w, c->n, x) :
-             c->kind == K_STEPPER ? wg_stepper_at(c->x, c->w, x) : 0;
-  int v;
+  struct settings_s *st = k->priv;
+  int id = wg != NULL ? wg->id : 0;
+  int v = wg != NULL ? wg->value : 0;
 
-  if (id >= S_PAGE && id < S_PAGE + SETTINGS_PAGES)
+  if (ev == KIT_EV_KEY)
     {
-      g_st.page = id - S_PAGE;
-      return;
-    }
+      /* Up and down go through the pages (but in the field) */
 
-  if (id >= S_THEME && id < S_THEME + THEME_COUNT)
-    {
-      g_prefs.theme = id - S_THEME;
-      desk_theme_set(g_prefs.theme, g_prefs.accent);
-      desk_theme_changed();
-      desk_prefs_save();
-      return;
-    }
+      int key = k->key & KEY_MASK;
 
-  if (id >= S_ACCENT && id < S_ACCENT + ACCENT_COUNT)
-    {
-      g_prefs.accent = id - S_ACCENT;
-      desk_theme_set(g_prefs.theme, g_prefs.accent);
-      desk_theme_changed();
-      desk_prefs_save();
-      return;
-    }
-
-#ifdef CONFIG_FPCDESK_WALLPAPER
-  if (id >= S_WALL && id < S_WALL + NWALLS)
-    {
-      if (g_desk.wallstyle != id - S_WALL)
+      if (key == KEY_UP && g_page > 0)
         {
-          /* The image may not be there (or the GPU cannot show it): the
-           * first drawn one then (desk_wallpaper_draw())
-           */
-
-          g_desk.wallstyle = id - S_WALL;
-          desk_wallpaper_draw();
-          desk_prefs_save();
+          show_page(st, g_page - 1);
+          k->key = 0;
+        }
+      else if (key == KEY_DOWN && g_page < SETTINGS_PAGES - 1)
+        {
+          show_page(st, g_page + 1);
+          k->key = 0;
         }
 
       return;
     }
+
+  if (ev == KIT_EV_CLICK)
+    {
+      if (id >= S_THEME && id < S_THEME + THEME_COUNT)
+        {
+          g_prefs.theme = id - S_THEME;
+          desk_theme_set(g_prefs.theme, g_prefs.accent);
+          settings_sync(st);
+          desk_theme_changed();                /* Settings too */
+          desk_prefs_save();
+        }
+#ifdef CONFIG_FPCDESK_WALLPAPER
+      else if (id >= S_WALL && id < S_WALL + NWALLS &&
+               g_desk.wallstyle != id - S_WALL)
+        {
+          /* The image may not be there (or the GPU cannot show it,
+           * without BC1): the first drawn one then, as it says
+           */
+
+          g_desk.wallstyle = id - S_WALL;
+          desk_wallpaper_draw();
+          settings_sync(st);
+          desk_prefs_save();
+        }
+#endif
+      else if (id >= S_PIN && id < S_PIN + APP_COUNT)
+        {
+          desk_dock_pin(id - S_PIN, !desk_dock_pinned(id - S_PIN));
+        }
+#ifdef CONFIG_FPCDESK_SOUND
+      else if (id == S_ALERTTEST)
+        {
+          desk_sound_play(SND_NOTIFY);
+        }
 #endif
 
-  if (id >= S_PIN && id < S_PIN + APP_COUNT)
+      settings_sync(st);
+      return;
+    }
+
+  if (ev != KIT_EV_CHANGE && ev != KIT_EV_ACTIVATE)
     {
-      desk_dock_pin(id - S_PIN, !desk_dock_pinned(id - S_PIN));
       return;
     }
 
   switch (id)
     {
+      case S_SIDEBAR:
+        show_page(st, st->pages.sel >= 0 ? st->pages.sel : 0);
+        break;
+
+      case S_ACCENT:
+        g_prefs.accent = v;
+        desk_theme_set(g_prefs.theme, g_prefs.accent);
+        settings_sync(st);
+        desk_theme_changed();
+        desk_prefs_save();
+        break;
+
       case S_SHADOW:
-        if (part >= 0)
-          {
-            g_prefs.shadow = part;
-            desk_theme_changed();
-            desk_prefs_save();
-          }
+        g_prefs.shadow = v;
+        desk_theme_changed();
+        desk_prefs_save();
         break;
 
       case S_BORDER:
-        g_prefs.border = !g_prefs.border;
+        g_prefs.border = v;
         desk_theme_changed();
         desk_prefs_save();
         break;
@@ -803,19 +1034,8 @@ static void settings_act(struct ctl_s *c, int x, int y, bool done)
       case S_CLOCK24:
       case S_CLOCKDATE:
       case S_CLOCKSECS:
-        if (id == S_CLOCK24)
-          {
-            g_prefs.clock24 = !g_prefs.clock24;
-          }
-        else if (id == S_CLOCKDATE)
-          {
-            g_prefs.clockdate = !g_prefs.clockdate;
-          }
-        else
-          {
-            g_prefs.clocksecs = !g_prefs.clocksecs;
-          }
-
+        *(id == S_CLOCK24 ? &g_prefs.clock24 : id == S_CLOCKDATE ?
+          &g_prefs.clockdate : &g_prefs.clocksecs) = v;
         desk_topbar_draw();
         desk_prefs_save();
         break;
@@ -825,22 +1045,21 @@ static void settings_act(struct ctl_s *c, int x, int y, bool done)
        */
 
       case S_MODE:
-        if (part >= 0 && part != nx_getdisplaymode(g_desk.hnx, -1, NULL) &&
-            nx_setdisplaymode(g_desk.hnx, part) >= 0)
+        if (v != nx_getdisplaymode(g_desk.hnx, -1, NULL) &&
+            nx_setdisplaymode(g_desk.hnx, v) >= 0)
           {
             desk_prefs_save();
           }
         break;
 
       case S_DOCKSIZE:
-        v = wg_slider_value(c->x, c->w, DOCK_ICON_MIN, DOCK_ICON_MAX, x);
         if (v != g_prefs.dockicon)
           {
             g_prefs.dockicon = v;
             desk_dock_draw();                  /* The dock follows */
           }
 
-        if (done)
+        if (ev == KIT_EV_ACTIVATE)
           {
             desk_relayout();                   /* And the windows */
             desk_prefs_save();
@@ -848,54 +1067,40 @@ static void settings_act(struct ctl_s *c, int x, int y, bool done)
         break;
 
       case S_DOCKPOS:
-        if (part >= 0)
-          {
-            static const uint8_t order[3] =
-            {
-              DOCK_LEFT, DOCK_BOTTOM, DOCK_RIGHT
-            };
-
-            g_prefs.dockpos = order[part];
-            desk_relayout();
-            desk_prefs_save();
-          }
+        g_prefs.dockpos = g_whereorder[v];
+        desk_relayout();
+        desk_prefs_save();
         break;
 
       case S_DOCKHIDE:
-        g_prefs.dockhide = !g_prefs.dockhide;
+        g_prefs.dockhide = v;
         desk_relayout();
         desk_prefs_save();
         break;
 
       case S_REPEAT:
-        g_prefs.repdelay = g_prefs.repdelay > 0 ? 0 : 500;
+        g_prefs.repdelay = v ? 500 : 0;
         desk_input_apply();
         desk_prefs_save();
         break;
 
       case S_REPDELAY:
-        g_prefs.repdelay = wg_slider_value(c->x, c->w, 150, 1000, x) / 10 *
-                           10;
-        if (done)
-          {
-            desk_input_apply();
-            desk_prefs_save();
-          }
-        break;
-
       case S_REPRATE:
-        v = wg_slider_value(c->x, c->w, 5, 50, x);
-        g_prefs.reprate = 1000 / v;
-        if (done)
-          {
-            desk_input_apply();
-            desk_prefs_save();
-          }
-        break;
-
       case S_PTRSPEED:
-        g_prefs.ptrspeed = wg_slider_value(c->x, c->w, 25, 300, x) / 5 * 5;
-        if (done)
+        if (id == S_REPDELAY)
+          {
+            g_prefs.repdelay = v / 10 * 10;
+          }
+        else if (id == S_REPRATE)
+          {
+            g_prefs.reprate = 1000 / v;
+          }
+        else
+          {
+            g_prefs.ptrspeed = v / 5 * 5;
+          }
+
+        if (ev == KIT_EV_ACTIVATE)
           {
             desk_input_apply();
             desk_prefs_save();
@@ -907,179 +1112,209 @@ static void settings_act(struct ctl_s *c, int x, int y, bool done)
       case S_DAY:
       case S_HOUR:
       case S_MINUTE:
-        if (part != 0)
+        time_step(id, k->arg);
+        break;
+
+#ifdef CONFIG_FPCDESK_SOUND
+      case S_VOLUME:
+        desk_sound_master(v);
+        desk_topbar_draw();
+        if (ev == KIT_EV_ACTIVATE)
           {
-            time_step(id, part);
+            desk_sound_play(SND_VOLUME);       /* How loud it is now */
+            desk_prefs_save();
           }
         break;
 
-      case S_TZ:
-        if (part != 0)
+      case S_MUTE:
+        desk_sound_mute(v ? 1 : 0);
+        desk_topbar_draw();
+        desk_prefs_save();
+        break;
+
+      case S_ALERTS:
+        desk_sound_level(DESK_SOUND_ALERTS, v);
+        if (ev == KIT_EV_ACTIVATE)
           {
-            v = g_prefs.tzoff + part * 30;
-            g_prefs.tzoff = v < -12 * 60 ? -12 * 60 : v > 14 * 60 ?
-                            14 * 60 : v;
-            desk_topbar_draw();
+            desk_sound_play(SND_ALERT);
             desk_prefs_save();
           }
+        break;
+
+      case S_EFFECTS:
+        desk_sound_set_effects(v);
+        desk_prefs_save();
+        break;
+
+      case S_APPLEVEL:
+      case S_APPLEVEL + 2:
+      case S_APPLEVEL + 4:
+        if ((id - S_APPLEVEL) / 2 < st->napps)
+          {
+            desk_sound_level(st->levels.l[st->app[(id - S_APPLEVEL) / 2]].name,
+                             v);
+            if (ev == KIT_EV_ACTIVATE)
+              {
+                desk_prefs_save();
+              }
+          }
+        break;
+#endif
+
+      case S_TZ:
+        v = g_prefs.tzoff + k->arg * 30;
+        g_prefs.tzoff = v < -12 * 60 ? -12 * 60 : v > 14 * 60 ? 14 * 60 : v;
+        desk_topbar_draw();
+        desk_prefs_save();
         break;
 
       default:
         break;
     }
+
+  settings_sync(st);
 }
 
-static struct ctl_s *ctl_at(int x, int y)
+/****************************************************************************
+ * Private Functions: the window
+ ****************************************************************************/
+
+static void settings_build(struct settings_s *st, struct desk_win_s *w)
 {
-  int i;
+  struct kit_s *k = &st->kit;
+  struct kit_widget_s *wg;
+  struct nxgl_size_s size;
 
-  for (i = g_st.nctl - 1; i >= 0; i--)
+  kit_init(k, w, st->wg, NWG, settings_event);
+  k->priv = st;
+  k->draw = settings_paint;
+
+  for (st->nmodes = 0; st->nmodes < RES_MAX &&
+       nx_getdisplaymode(g_desk.hnx, st->nmodes, &size) >= 0; st->nmodes++)
     {
-      struct ctl_s *c = &g_st.ctl[i];
-
-      if (x >= c->x && x < c->x + c->w && y >= c->y && y < c->y + c->h)
-        {
-          return c;
-        }
+      st->modep[st->nmodes] = st->modes[st->nmodes];
     }
 
-  return NULL;
+  st->pages.n       = SETTINGS_PAGES;
+  st->pages.sel     = g_page;
+  st->pages.rowh    = SIDE_ROW;
+  st->pages.sortcol = -1;
+  st->pages.text    = page_text;
+  st->pages.icon    = page_icon;
+
+  kit_row(k, KIT_BOX_WINDOW);
+    wg = kit_col(k, KIT_BOX_SIDEBAR);
+    wg->padx = 10;
+    wg->pady = 12;
+    kit_size(k, SIDE_W, 0);
+      kit_list(k, S_SIDEBAR, &st->pages, KIT_LIST_SIDEBAR);
+      kit_grow(k, 1);
+    kit_end(k);
+
+    page_appearance(st);
+    page_display(st);
+    page_dock(st);
+    page_input(st);
+    page_datetime(st);
+#ifdef CONFIG_FPCDESK_SOUND
+    page_sound(st);
+#endif
+    page_about(st);
+  kit_end(k);
 }
 
-static struct ctl_s *ctl_find(int id)
+static void settings_draw(struct desk_win_s *w)
 {
-  int i;
+  struct settings_s *st = w->priv;
 
-  for (i = 0; i < g_st.nctl; i++)
+  if (st != NULL)
     {
-      if (g_st.ctl[i].id == id)
-        {
-          return &g_st.ctl[i];
-        }
+      settings_sync(st);
+      kit_flush(&st->kit);
     }
+}
 
-  return NULL;
+static void settings_expose(struct desk_win_s *w, int x, int y, int cw,
+                            int ch)
+{
+  struct settings_s *st = w->priv;
+
+  if (st != NULL)
+    {
+      settings_sync(st);
+      kit_expose(&st->kit, x, y, cw, ch);
+    }
+}
+
+static void settings_resize(struct desk_win_s *w)
+{
+  struct settings_s *st = w->priv;
+
+  if (st != NULL)
+    {
+      kit_resize(&st->kit);
+    }
 }
 
 static void settings_mouse(struct desk_win_s *w, int x, int y,
                            uint8_t buttons)
 {
-  bool press = (buttons & NX_MOUSE_LEFTBUTTON) &&
-               !(g_st.buttons & NX_MOUSE_LEFTBUTTON);
-  bool release = !(buttons & NX_MOUSE_LEFTBUTTON) &&
-                 (g_st.buttons & NX_MOUSE_LEFTBUTTON);
-  struct ctl_s *c;
-  int hotid = 0;
-  int part = 0;
+  struct settings_s *st = w->priv;
 
-  g_st.buttons = buttons;
-  y += TITLE_H;
-
-  /* A slider follows the pointer until the button goes up */
-
-  if (g_st.drag != 0)
+  if (st != NULL)
     {
-      c = ctl_find(g_st.drag);
-      if (c != NULL)
-        {
-          settings_act(c, x, y, release);
-        }
-
-      if (release)
-        {
-          g_st.drag = 0;
-        }
-
-      settings_draw(w);
-      return;
-    }
-
-  c = x >= 0 ? ctl_at(x, y) : NULL;
-  if (c != NULL)
-    {
-      hotid = c->id;
-      part  = c->kind == K_SEGMENTS ? wg_segment_at(c->x, c->w, c->n, x) :
-              c->kind == K_STEPPER ? wg_stepper_at(c->x, c->w, x) : 0;
-    }
-
-  if (hotid != g_st.hot || part != g_st.hotpart)
-    {
-      g_st.hot     = hotid;
-      g_st.hotpart = part;
-      if (!press)
-        {
-          settings_draw(w);
-        }
-    }
-
-  if (press && c != NULL && c->kind != K_FIELD)
-    {
-      if (c->kind == K_SLIDER)
-        {
-          g_st.drag = c->id;
-        }
-
-      settings_act(c, x, y, false);
-      settings_draw(w);
-    }
-  else if (press)
-    {
-      settings_draw(w);
+      kit_mouse(&st->kit, x, y, buttons);
     }
 }
 
-/* Keys: into the field to try them (Mouse & Keyboard); else up and down
- * the pages
- */
-
 static void settings_key(struct desk_win_s *w, const uint8_t *ch, int n)
 {
-  int keys[16];
-  int nk = ui_keys(&g_st.keys, ch, n, keys, 16);
-  int i;
+  struct settings_s *st = w->priv;
 
-  for (i = 0; i < nk; i++)
+  if (st != NULL)
     {
-      if (g_st.page == SETTINGS_INPUT && ui_field_key(&g_st.test, keys[i]))
-        {
-          continue;
-        }
-
-      if ((keys[i] & KEY_MASK) == KEY_UP && g_st.page > 0)
-        {
-          g_st.page--;
-        }
-      else if ((keys[i] & KEY_MASK) == KEY_DOWN &&
-               g_st.page < SETTINGS_PAGES - 1)
-        {
-          g_st.page++;
-        }
+      kit_key(&st->kit, ch, n);
     }
-
-  settings_draw(w);
 }
 
 static void settings_tick(struct desk_win_s *w)
 {
-  if (g_st.page == SETTINGS_DATETIME && g_st.drag == 0)
+  struct settings_s *st = w->priv;
+
+  if (st != NULL)
     {
-      settings_draw(w);
+      if (g_page == SETTINGS_DATETIME)
+        {
+          settings_sync(st);                   /* The clock's labels */
+        }
+
+      kit_tick(&st->kit);
+    }
+}
+
+static void settings_focus(struct desk_win_s *w)
+{
+  struct settings_s *st = w->priv;
+
+  if (st != NULL)
+    {
+      kit_activate(&st->kit);
     }
 }
 
 static void settings_close(struct desk_win_s *w)
 {
-  free(g_op);
-  g_op = NULL;
+  g_st = NULL;                                 /* w->priv goes after */
 }
 
 static struct desk_win_s *settings_open(void)
 {
+  struct settings_s *st;
   struct desk_win_s *w;
   int fd;
 
-  g_op = malloc(sizeof(*g_op));
-  if (g_op == NULL)
+  st = calloc(1, sizeof(*st));
+  if (st == NULL)
     {
       return NULL;
     }
@@ -1087,22 +1322,24 @@ static struct desk_win_s *settings_open(void)
   w = desk_win_open(APP_SETTINGS, "Settings", SET_W, SET_H);
   if (w == NULL)
     {
-      settings_close(NULL);
+      free(st);
+      return NULL;
     }
-  else
+
+  w->priv = st;
+  g_st    = st;
+  fd = open("/dev/desktop", O_RDONLY);
+  st->input = fd >= 0;
+  if (fd >= 0)
     {
-      g_st.hot  = 0;
-      g_st.drag = 0;
-      fd = open("/dev/desktop", O_RDONLY);
-      g_st.input = fd >= 0;
-      if (fd >= 0)
-        {
-          close(fd);
-        }
-
-      settings_draw(w);
+      close(fd);
     }
 
+  settings_build(st, w);
+  settings_sync(st);
+  kit_focus(&st->kit, S_SIDEBAR);
+  kit_layout(&st->kit);
+  kit_flush(&st->kit);
   return w;
 }
 
@@ -1141,9 +1378,12 @@ const struct desk_app_s g_app_settings =
   .icon   = icon_settings,
   .open   = settings_open,
   .draw   = settings_draw,
+  .expose = settings_expose,
+  .resize = settings_resize,
   .mouse  = settings_mouse,
   .key    = settings_key,
   .tick   = settings_tick,
+  .focus  = settings_focus,
   .close  = settings_close,
   .single = true,
 };
@@ -1152,17 +1392,28 @@ const struct desk_app_s g_app_settings =
  * Public Functions
  ****************************************************************************/
 
+/* What a page shows has changed (the mixer's state): what changed drawn
+ * again if it is showing and nothing is being dragged
+ */
+
+void desk_settings_changed(int page)
+{
+  if (g_st != NULL && g_page == page && g_st->kit.down == KIT_NONE)
+    {
+      settings_sync(g_st);
+      kit_flush(&g_st->kit);
+    }
+}
+
 /* Settings at a page (the dock's menu: Dock Settings...) */
 
 void desk_settings_show(int page)
 {
-  struct desk_win_s *w;
-
-  g_st.page = page >= 0 && page < SETTINGS_PAGES ? page : 0;
+  g_page = page >= 0 && page < SETTINGS_PAGES ? page : 0;
   desk_launch(APP_SETTINGS);
-  w = desk_app_window(APP_SETTINGS);
-  if (w != NULL)
+  if (g_st != NULL)
     {
-      settings_draw(w);
+      show_page(g_st, g_page);
+      kit_flush(&g_st->kit);
     }
 }

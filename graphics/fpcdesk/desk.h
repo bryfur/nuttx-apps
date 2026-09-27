@@ -147,6 +147,14 @@ enum desk_app_e
   APP_SETTINGS,
   APP_ABOUT,
   APP_LOG,
+#ifdef CONFIG_FPCDESK_WIDGETS
+  APP_WIDGETS,
+#endif
+#ifdef CONFIG_FPCDESK_MUSIC
+  APP_MUSIC,                       /* (Last: the icons' places in their
+                                    * window, and so their dither, stay
+                                    * as they were) */
+#endif
   APP_COUNT
 };
 
@@ -159,7 +167,8 @@ enum desk_evtype_e
   EV_POSITION,
   EV_BLOCKED,
   EV_REDRAW,
-  EV_MODE                          /* The display mode has changed */
+  EV_MODE,                         /* The display mode has changed */
+  EV_SOUND                         /* The mixer's state has changed */
 };
 
 enum desk_part_e
@@ -172,7 +181,8 @@ enum desk_part_e
   PART_WALLPAPER,
   PART_TIP,
   PART_MENU,                       /* A pop-up menu */
-  PART_EDGE                        /* Where the hidden dock comes out */
+  PART_EDGE,                       /* Where the hidden dock comes out */
+  PART_SOUND                       /* The volume popover */
 };
 
 /****************************************************************************
@@ -400,12 +410,16 @@ extern const struct desk_app_s g_app_solitaire;  /* desk_solitaire.c */
 extern const struct desk_app_s g_app_breakout;   /* desk_breakout.c */
 extern const struct desk_app_s g_app_settings;   /* desk_settings.c */
 extern const struct desk_app_s g_app_log;        /* desk_log.c */
+#ifdef CONFIG_FPCDESK_MUSIC
+extern const struct desk_app_s g_app_music;      /* desk_music.c */
+#endif
 #ifdef CONFIG_GAMES_NXDOOM_DESKTOP
 extern const struct desk_app_s g_app_doom;       /* desk_game.c */
 #endif
 
 extern const struct desk_app_s g_app_viewer;     /* desk_viewer.c */
 extern const struct desk_app_s g_app_paint;      /* desk_paint.c */
+extern const struct desk_app_s g_app_widgets;    /* desk_kitdemo.c */
 
 /****************************************************************************
  * Public Function Prototypes
@@ -450,6 +464,14 @@ typedef bool (*ops_inside_t)(void *arg, int x, int y);
 void ops_shape(NXWINDOW hwnd, struct desk_ops_s *o, int x, int y, int w,
                int h, uint16_t c, uint8_t alpha, ops_inside_t inside,
                void *arg);
+
+/* A disc d pixels across at (x, y), from the glyph atlas like a character
+ * (one BLEND): false if the atlas has none of that size (6, 8, 14, 16,
+ * 18, 20, 22)
+ */
+
+bool ops_disc_atlas(struct desk_ops_s *o, int x, int y, int d, uint16_t c,
+                    uint8_t alpha);
 
 int  desk_atlas_init(void);
 void desk_luts_init(void);
@@ -498,6 +520,10 @@ void desk_win_sync(struct desk_win_s *w);
  */
 
 void desk_wake(struct desk_win_s *w);
+
+/* From any thread: an event (EV_*) for the main thread */
+
+void desk_post(uint8_t type);
 struct desk_win_s *desk_app_window(int app);
 void desk_launch(int app);
 void desk_app_quit(int app);                /* Close all of its windows */
@@ -605,10 +631,19 @@ void icon_tile(struct desk_ops_s *o, int x, int y, int s, uint16_t top,
 #define SETTINGS_DOCK       2
 #define SETTINGS_INPUT      3               /* Mouse & Keyboard */
 #define SETTINGS_DATETIME   4
-#define SETTINGS_ABOUT      5
-#define SETTINGS_PAGES      6
+#ifdef CONFIG_FPCDESK_SOUND
+#  define SETTINGS_SOUND    5
+#  define SETTINGS_ABOUT    6
+#  define SETTINGS_PAGES    7
+#else
+#  define SETTINGS_ABOUT    5
+#  define SETTINGS_PAGES    6
+#endif
 
 void desk_settings_show(int page);
+void desk_settings_changed(int page);       /* What the page shows has
+                                             * changed: drawn again if it
+                                             * is showing */
 
 /* desk_edit.c: open a file in a new editor window (NULL: a new file) */
 

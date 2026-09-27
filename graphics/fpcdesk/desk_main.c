@@ -38,6 +38,9 @@
 #include <nuttx/nx/nxbe.h>
 
 #include "desk.h"
+#ifdef CONFIG_FPCDESK_SOUND
+#  include "desk_sound.h"
+#endif
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -633,6 +636,15 @@ void desk_wake(struct desk_win_s *w)
     }
 }
 
+void desk_post(uint8_t type)
+{
+  struct desk_event_s ev;
+
+  memset(&ev, 0, sizeof(ev));
+  ev.type = type;
+  q_push(&ev);
+}
+
 struct desk_win_s *desk_win_open(int app, const char *title, int cw, int ch)
 {
   struct desk_win_s *w;
@@ -734,6 +746,9 @@ void desk_win_sync(struct desk_win_s *w)
 
 static void win_show(struct desk_win_s *w)
 {
+#ifdef CONFIG_FPCDESK_SOUND
+  desk_sound_play(SND_OPEN);
+#endif
   desk_win_title(w);
   nxtk_setvisibility(w->hwnd, false);
   desk_win_activate(w);
@@ -832,6 +847,9 @@ void desk_win_close(struct desk_win_s *w)
     }
 
   w->closing = true;
+#ifdef CONFIG_FPCDESK_SOUND
+  desk_sound_play(SND_CLOSE);
+#endif
   if (g_apps[w->app]->close != NULL)
     {
       g_apps[w->app]->close(w);
@@ -894,6 +912,9 @@ void desk_win_minimize(struct desk_win_s *w)
 
   /* It fades out, then hides (animate()) */
 
+#ifdef CONFIG_FPCDESK_SOUND
+  desk_sound_play(SND_MINIMIZE);
+#endif
   w->minimizing = true;
   w->fade       = 0;
   w->fadeout    = FADE_STEPS;
@@ -1360,9 +1381,18 @@ static void on_mouse(struct desk_event_s *ev)
     }
 
   desk_panels_mouse(ev->part, ev->pos.x, ev->pos.y, ev->buttons);
+#ifdef CONFIG_FPCDESK_SOUND
+  desk_volume_mouse_any(ev->part, ev->buttons);
+#endif
 
   switch (ev->part)
     {
+#ifdef CONFIG_FPCDESK_SOUND
+      case PART_SOUND:
+        desk_volume_popover_mouse(ev->pos.x, ev->pos.y, ev->buttons);
+        break;
+#endif
+
       case PART_TITLE:
         if (!w->closing)
           {
@@ -1499,6 +1529,17 @@ static void on_kbd(struct desk_event_s *ev)
       kbd_bytes(w, bytes, nb);
       nb = 0;
 
+#ifdef CONFIG_FPCDESK_SOUND
+      /* The volume keys (the desktop session takes a keyboard's; these
+       * come from elsewhere: deskctl key vol+)
+       */
+
+      if (desk_sound_key(&key))
+        {
+          continue;
+        }
+#endif
+
       if (g_desk.menu == NULL && g_desk.launcher == NULL && w != NULL &&
           !w->closing && g_apps[w->app]->keyev != NULL)
         {
@@ -1534,6 +1575,12 @@ static void on_event(struct desk_event_s *ev)
       case EV_MODE:
         on_mode();
         break;
+
+#ifdef CONFIG_FPCDESK_SOUND
+      case EV_SOUND:
+        desk_sound_changed();
+        break;
+#endif
 
       case EV_REDRAW:
         if (!ev->win->closing && ev->part == PART_TITLE)
@@ -1602,6 +1649,9 @@ static bool animate(void)
     }
 
   more |= desk_panels_animate();
+#ifdef CONFIG_FPCDESK_SOUND
+  more |= desk_volume_animate();
+#endif
   return more;
 }
 
@@ -1764,6 +1814,12 @@ int main(int argc, FAR char *argv[])
     }
 
   desk_panels_init();
+#ifdef CONFIG_FPCDESK_SOUND
+  if (desk_sound_init() == 0)
+    {
+      desk_topbar_draw();
+    }
+#endif
 
   /* Start with a terminal */
 

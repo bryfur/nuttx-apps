@@ -27,6 +27,9 @@
 
 #include "nshlib/nshlib.h"
 #include "desk.h"
+#ifdef CONFIG_FPCDESK_SOUND
+#  include "desk_sound.h"
+#endif
 
 static struct desk_ops_s g_o;
 
@@ -173,6 +176,9 @@ const struct desk_app_s * const g_apps[APP_COUNT] =
   [APP_EDITOR]   = &g_app_editor,
   [APP_VIEWER]   = &g_app_viewer,
   [APP_PAINT]    = &g_app_paint,
+#ifdef CONFIG_FPCDESK_MUSIC
+  [APP_MUSIC]    = &g_app_music,
+#endif
   [APP_MONITOR]  = &g_app_monitor,
   [APP_CALC]     = &g_app_calc,
   [APP_TETRIS]   = &g_app_tetris,
@@ -184,6 +190,9 @@ const struct desk_app_s * const g_apps[APP_COUNT] =
   [APP_SETTINGS] = &g_app_settings,
   [APP_ABOUT]    = &g_app_about,
   [APP_LOG]      = &g_app_log,
+#ifdef CONFIG_FPCDESK_WIDGETS
+  [APP_WIDGETS]  = &g_app_widgets,
+#endif
 };
 
 /****************************************************************************
@@ -377,6 +386,12 @@ int desk_prefs_load(void)
           g_prefs.npinned = 0;
           pins = true;
         }
+#ifdef CONFIG_FPCDESK_SOUND
+      else if (strcmp(line, "sound") == 0)
+        {
+          desk_sound_prefs_line(v);
+        }
+#endif
     }
 
   fclose(f);
@@ -430,6 +445,9 @@ void desk_prefs_save(void)
       fprintf(f, "dock %s\n", g_apps[g_prefs.pinned[i]]->name);
     }
 
+#ifdef CONFIG_FPCDESK_SOUND
+  desk_sound_prefs_write(f);
+#endif
   fclose(f);
 }
 

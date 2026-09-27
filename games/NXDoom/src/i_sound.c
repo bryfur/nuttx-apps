@@ -112,6 +112,9 @@ static int snd_mport = 0;
 
 static const sound_module_t *sound_modules[] =
 {
+#ifdef CONFIG_GAMES_NXDOOM_FPCSOUND
+  &sound_fpc_module,
+#endif
   &sound_pcsound_module,
   NULL,
 };
