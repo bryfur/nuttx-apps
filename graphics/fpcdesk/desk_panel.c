@@ -244,7 +244,7 @@ void desk_wallpaper_preview(struct desk_ops_s *o, int style, int x, int y,
 void desk_topbar_draw(void)
 {
   char buf[48];
-  time_t now = time(NULL);
+  time_t now = desk_time();
   struct tm tm;
   const struct desk_font_s *f = &g_desk_font_uib;
   int ty;
@@ -467,7 +467,7 @@ static void tile_pos(int i, int *x, int *y)
 void desk_launcher_draw(void)
 {
   char buf[48];
-  time_t now = time(NULL);
+  time_t now = desk_time();
   struct tm tm;
   uint8_t a = (uint8_t)g_launcher_alpha;
   int i;

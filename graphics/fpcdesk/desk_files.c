@@ -738,7 +738,7 @@ static void fmt_date(time_t t, char *buf, int n)
 {
   struct tm tm;
   struct tm now;
-  time_t tn = time(NULL);
+  time_t tn = desk_time();
 
   buf[0] = '\0';
   if (t <= 0 || localtime_r(&t, &tm) == NULL ||

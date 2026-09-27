@@ -480,6 +480,27 @@ static void win_client_redraw(struct desk_win_s *w)
  * Public Functions: windows
  ****************************************************************************/
 
+/* deskctl freeze: another task sets it (a flat build) */
+
+static volatile time_t g_frozen;
+
+time_t desk_time(void)
+{
+  time_t t = g_frozen;
+
+  return t != 0 ? t : time(NULL);
+}
+
+bool desk_frozen(void)
+{
+  return g_frozen != 0;
+}
+
+void desk_freeze(time_t t)
+{
+  g_frozen = t;
+}
+
 uint32_t desk_ms(void)
 {
   struct timespec ts;

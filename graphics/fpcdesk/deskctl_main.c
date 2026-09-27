@@ -10,7 +10,7 @@
  *
  *   deskctl m X Y [BUTTONS]       move the pointer (buttons: 1 left, 2
  *                                 middle, 4 right; default none)
- *   deskctl c X Y                 click there
+ *   deskctl c X Y [N]             click there (N times: 2 a double click)
  *   deskctl d X0 Y0 X1 Y1 [N]     drag with the left button, in N steps
  *   deskctl k TEXT                type (\n Enter, \t Tab, \e Escape,
  *                                 \b Backspace, \xHH any byte)
@@ -22,6 +22,11 @@
  *   deskctl mode [N]              the display mode (N: change it)
  *   deskctl redraw                composite all of the display again (a
  *                                 check: the result must not change)
+ *   deskctl freeze [SECONDS|off]  stop the desktop's clock at SECONDS
+ *                                 since 1970 (default 2026-01-02 09:41
+ *                                 UTC) and the cursors' blinking, for
+ *                                 screenshots that do not depend on when
+ *                                 they are taken; off: let them run
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -32,6 +37,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <nuttx/nx/nx.h>
@@ -59,6 +65,7 @@ void fpc_gpu_stats(struct fpc_gpu_stats_s *st, bool clear);
 int fpc_simgpu_screenshot(FAR const char *path);
 #endif
 int desk_gputest(void);
+void desk_freeze(time_t t);
 
 /****************************************************************************
  * Private Functions
@@ -240,7 +247,8 @@ static void deskctl_usage(void)
 {
   fprintf(stderr,
           "usage: deskctl m X Y [BUTTONS] | c X Y | d X0 Y0 X1 Y1 [N] |\n"
-          "               k TEXT | shot FILE | stats [clear|N] | mode [N]\n");
+          "               k TEXT | shot FILE | stats [clear|N] | mode [N] |\n"
+          "               redraw | test | freeze [SECONDS|off]\n");
 }
 
 /****************************************************************************
@@ -270,6 +278,19 @@ int main(int argc, FAR char *argv[])
       return EXIT_SUCCESS;
     }
 #endif
+
+  if (strcmp(argv[1], "freeze") == 0)
+    {
+      time_t t = 1767346860;         /* Fri 2026-01-02 09:41 UTC */
+
+      if (argc >= 3)
+        {
+          t = strcmp(argv[2], "off") == 0 ? 0 : (time_t)atoll(argv[2]);
+        }
+
+      desk_freeze(t);
+      return EXIT_SUCCESS;
+    }
 
   if (strcmp(argv[1], "shot") == 0)
     {
@@ -302,12 +323,16 @@ int main(int argc, FAR char *argv[])
     {
       int x = atoi(argv[2]);
       int y = atoi(argv[3]);
+      int n = argc >= 5 ? atoi(argv[4]) : 1;
 
       deskctl_pointer(h, x, y, 0);
-      usleep(30000);
-      deskctl_pointer(h, x, y, NX_MOUSE_LEFTBUTTON);
-      usleep(30000);
-      deskctl_pointer(h, x, y, 0);
+      while (n-- > 0)
+        {
+          usleep(30000);
+          deskctl_pointer(h, x, y, NX_MOUSE_LEFTBUTTON);
+          usleep(30000);
+          deskctl_pointer(h, x, y, 0);
+        }
     }
   else if (strcmp(argv[1], "d") == 0 && argc >= 6)
     {

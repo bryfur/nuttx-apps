@@ -86,9 +86,10 @@ config FPCDESK_DESKCTL
 	default y
 	---help---
 		deskctl m X Y [BUTTONS]  move the pointer (and press buttons)
-		deskctl c X Y            click
+		deskctl c X Y [N]        click (N times)
 		deskctl k TEXT           type
 		deskctl shot FILE        screenshot (simulator)
+		deskctl freeze [SECONDS] stop the clock and the cursors' blink
 		For testing the desktop without a mouse and keyboard.
 
 endif

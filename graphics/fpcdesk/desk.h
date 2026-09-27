@@ -14,6 +14,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <sys/types.h>
+#include <time.h>
 #include <semaphore.h>
 
 #include <nuttx/nx/nx.h>
@@ -335,6 +336,15 @@ void desk_wake(struct desk_win_s *w);
 struct desk_win_s *desk_app_window(int app);
 void desk_launch(int app);
 uint32_t desk_ms(void);
+
+/* The wall clock the desktop shows.  Tests (deskctl freeze) stop it at a
+ * fixed time and stop the text cursors blinking (they stay on), so that
+ * screenshots do not depend on when they are taken.
+ */
+
+time_t desk_time(void);
+bool desk_frozen(void);
+void desk_freeze(time_t t);                /* 0: the clock runs again */
 
 /* desk_panel.c: the top bar, the dock, the launcher, the wallpaper */
 
