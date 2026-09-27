@@ -18,6 +18,11 @@
  * word), Home / End, Page Up / Down, Delete; Backspace, Enter (keeping the
  * indent), Tab; Ctrl-A select all, Ctrl-C / X / V copy / cut / paste (the
  * desktop's clipboard), Ctrl-S save, Ctrl-Z / Y undo / redo, Ctrl-N new.
+ *
+ * The tool bar, the scroll bar, the status bar and the questions (save
+ * before closing?, Save As: the kit's file dialog) are the widget kit's
+ * (desk_kit.h); the text is a custom widget of it that takes every key,
+ * drawn here.
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -33,7 +38,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
-#include "desk_ui.h"
+#include "desk_kit.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -42,9 +47,7 @@
 #define EDIT_W         680
 #define EDIT_H         460
 
-#define TB_H           42                /* Tool bar */
-#define ST_H           26                /* Status bar */
-#define SB_W           12                /* Scroll bar */
+#define NWG            16                /* The kit's widgets */
 #define LH             20                /* A line */
 #define CW             9                 /* A character (Plex Mono 15) */
 #define TABW           4
@@ -70,20 +73,19 @@
 #define LANG_C         1
 #define LANG_SHELL     2
 
-/* Zones */
+/* The widgets */
 
-#define ZG_TOOL        0
-#define ZG_CARD        1
+#define E_NEW          1
+#define E_SAVE         2
+#define E_UNDO         3
+#define E_REDO         4
+#define E_PATH         5
+#define E_TEXT         6
+#define E_SCROLL       7
+#define E_LEFT         8                 /* The status bar */
+#define E_RIGHT        9
 
-#define Z_NEW          1
-#define Z_SAVE         2
-#define Z_UNDO         3
-#define Z_REDO         4
-#define Z_DISCARD      5
-#define Z_CANCEL       6
-#define Z_OK           7
-
-/* Questions, on a card over the text */
+/* Questions, in dialogs (their ids) */
 
 #define P_NONE         0
 #define P_CLOSE        1                 /* Unsaved changes: save first? */
@@ -93,7 +95,6 @@
 
 #define D_NONE         0
 #define D_TEXT         1
-#define D_THUMB        2
 
 /****************************************************************************
  * Private Types
@@ -150,21 +151,25 @@ struct edit_s
   int dhi;
   bool full;                             /* Everything */
   int gw;                                /* Gutter width drawn with */
-  char status[200];                      /* The status bar as drawn */
   char title[40];
   uint8_t *cls;                          /* Syntax classes of a line */
   int clscap;
 
-  int prompt;
   bool closeafter;                       /* Save, then close */
-  struct ui_field_s field;
-  struct ui_keys_s keys;
-  struct ui_zones_s zs;
   bool lastcr;
+
+  /* The tool bar, the scroll bar, the status bar, the dialogs: the
+   * widget kit's; the text is a custom widget of it, drawn here
+   */
+
+  struct kit_s kit;
+  struct kit_widget_s wg[NWG];
+  char lefttext[96];                     /* The status bar's texts */
+  char right[64];
+  char pathlabel[PATH_MAX];
 
   uint8_t buttons;
   int drag;
-  int grab;
   uint32_t clickms;
   int clickl;
   int clickc;
@@ -188,7 +193,6 @@ struct lay_s
   int x0;                                /* Text */
   int xr;                                /* Right of the text area */
   int cols;
-  int sy;                                /* Status bar */
 };
 
 /****************************************************************************
@@ -1000,17 +1004,19 @@ static void layout(struct desk_win_s *w, struct lay_s *l)
   struct edit_s *e = w->priv;
   int d = digits(e->nl);
 
+  struct kit_widget_s *text = kit_get(&e->kit, E_TEXT);
+
+  /* The text area is the kit's custom widget (after kit_layout()) */
+
   l->cw   = w->csize.w;
-  l->ty   = TITLE_H + TB_H;
-  l->sy   = TITLE_H + w->csize.h - ST_H;
-  l->th   = l->sy - l->ty;
-  l->th   = l->th < 0 ? 0 : l->th;
+  l->ty   = text->y;
+  l->th   = text->h;
   l->rows = (l->th + LH - 1) / LH;
   l->full = l->th / LH;
   l->full = l->full < 1 ? 1 : l->full;
   l->gw   = (d < 3 ? 3 : d) * CW + 20;
   l->x0   = l->gw + 6;
-  l->xr   = l->cw - SB_W;
+  l->xr   = text->x + text->w;
   l->cols = (l->xr - l->x0 - 4) / CW;
   l->cols = l->cols < 1 ? 1 : l->cols;
 }
@@ -1160,7 +1166,8 @@ static void line_draw(struct desk_win_s *w, struct lay_s *l, int i)
 
       /* The cursor */
 
-      if (i == e->cl && e->blink && w->active && e->prompt == P_NONE)
+      if (i == e->cl && e->blink && w->active &&
+          !kit_dialog_open(&e->kit))
         {
           int cv = vcol(ln, e->cc) - e->left;
 
@@ -1175,23 +1182,17 @@ static void line_draw(struct desk_win_s *w, struct lay_s *l, int i)
   ui_clip(&g_o, start, 0, l->ty, l->xr, l->ty + l->th);
 }
 
-static void scrollbar_draw(struct desk_win_s *w, struct lay_s *l)
+/* The scroll bar, the status bar and the tool bar: what they show, into
+ * the kit's widgets (drawn at the kit's next flush, if they changed)
+ */
+
+static void scrollbar_sync(struct desk_win_s *w, struct lay_s *l)
 {
   struct edit_s *e = w->priv;
-  int total = e->nl + l->full - 1;      /* Can scroll the last to the top */
 
-  ui_flush((NXWINDOW)w->hwnd, &g_o, 4);
-  ops_fill(&g_o, l->xr, l->ty, SB_W, l->th, C_EDIT_BG);
-  if (e->nl > l->full && l->th > 0)
-    {
-      int th = l->th * l->full / total;
-      int ty;
+  /* The last line can scroll to the top */
 
-      th = th < 24 ? 24 : th;
-      ty = l->ty + (l->th - th) * e->top / (e->nl - 1);
-      ops_rrect(&g_o, l->xr + 3, ty + 2, 6, th - 4, LUT_R3, 3, C_THUMB,
-                e->drag == D_THUMB ? 255 : 170);
-    }
+  kit_scroll_set(&e->kit, E_SCROLL, e->top, l->full, e->nl + l->full - 1);
 }
 
 static const char *lang_name(int lang)
@@ -1199,17 +1200,11 @@ static const char *lang_name(int lang)
   return lang == LANG_C ? "C" : lang == LANG_SHELL ? "Shell" : "Plain Text";
 }
 
-static void status_draw(struct desk_win_s *w, struct lay_s *l, bool force)
+static void status_sync(struct desk_win_s *w)
 {
   struct edit_s *e = w->priv;
-  NXWINDOW hwnd = (NXWINDOW)w->hwnd;
-  const struct desk_font_s *font = &g_desk_font_ui;
-  int ty = l->sy + (ST_H - text_height(font)) / 2;
   char right[64];
   char left[96];
-  char fit[96];
-  char all[200];
-  int rw;
 
   snprintf(right, sizeof(right), "Ln %d, Col %d    %s", e->cl + 1,
            vcol(&e->ln[e->cl], e->cc) + 1, lang_name(e->lang));
@@ -1225,136 +1220,35 @@ static void status_draw(struct desk_win_s *w, struct lay_s *l, bool force)
                "  CR LF" : "");
     }
 
-  snprintf(all, sizeof(all), "%s|%s|%d", left, right, l->cw);
-  if (!force && strcmp(all, e->status) == 0)
+  if (strcmp(left, e->lefttext) != 0)
     {
-      return;
+      strlcpy(e->lefttext, left, sizeof(e->lefttext));
+      kit_invalidate(&e->kit, E_LEFT);
     }
 
-  strlcpy(e->status, all, sizeof(e->status));
-  ui_flush(hwnd, &g_o, 120);
-  ops_fill(&g_o, 0, l->sy, l->cw, ST_H, C_UI_BAR);
-  ops_fill(&g_o, 0, l->sy, l->cw, 1, C_UI_LINE);
-  rw = text_width(font, right);
-  ops_text(&g_o, font, l->cw - 14 - rw, ty, right, C_TEXT_DIM, 255);
-  ui_fit(font, left, l->cw - 44 - rw, fit, sizeof(fit));
-  ops_text(&g_o, font, 12, ty, fit, e->msg[0] != '\0' && e->msgerr ?
-           C_UI_ERROR : C_TEXT_DIM, 255);
-}
-
-static int tool_button(struct edit_s *e, int x, int y, int id,
-                       const char *label, bool enabled, bool accent)
-{
-  int bw = ui_button_width(label);
-  int lk = ui_look(&e->zs, id, enabled);
-
-  if (accent && lk == UI_NORMAL)
+  kit_set_style(&e->kit, E_LEFT, e->msg[0] != '\0' && e->msgerr ?
+                KIT_TEXT_ERROR : KIT_TEXT_DIM);
+  if (strcmp(right, e->right) != 0)
     {
-      lk = UI_DEFAULT;
+      strlcpy(e->right, right, sizeof(e->right));
+      kit_set_text(&e->kit, E_RIGHT, e->right);
     }
-
-  ui_button(&g_o, x, y, bw, 28, label, lk);
-  ui_zone_add(&e->zs, ZG_TOOL, id, x, y, bw, 28, enabled);
-  return x + bw + 6;
 }
 
-static void toolbar_draw(struct desk_win_s *w, struct lay_s *l)
+static void toolbar_sync(struct desk_win_s *w)
 {
   struct edit_s *e = w->priv;
-  NXWINDOW hwnd = (NXWINDOW)w->hwnd;
-  const struct desk_font_s *font = &g_desk_font_ui;
-  int y = TITLE_H + (TB_H - 28) / 2;
-  int x = 10;
-  char fit[PATH_MAX];
+  const char *path = e->path[0] != '\0' ? e->path : "Not saved yet";
 
-  ui_zones_clear(&e->zs, ZG_TOOL);
-  ui_flush(hwnd, &g_o, 200);
-  ops_fill(&g_o, 0, TITLE_H, l->cw, TB_H, C_UI_BAR);
-  ops_fill(&g_o, 0, TITLE_H + TB_H - 1, l->cw, 1, C_UI_LINE);
-  x = tool_button(e, x, y, Z_NEW, "New", true, false);
-  x = tool_button(e, x, y, Z_SAVE, "Save", true, e->modified);
-  x += 8;
-  x = tool_button(e, x, y, Z_UNDO, "Undo", e->nundo > 0, false);
-  x = tool_button(e, x, y, Z_REDO, "Redo", e->nredo > 0, false);
-  x += 8;
-  ui_fit(font, e->path[0] != '\0' ? e->path : "Not saved yet",
-         l->cw - x - 12, fit, sizeof(fit));
-  ops_text(&g_o, font, x, TITLE_H + (TB_H - text_height(font)) / 2, fit,
-           C_TEXT_DIM, 255);
-  ops_draw(hwnd, &g_o);
-}
-
-/* The question, on a card in the middle of the text */
-
-static void card_draw(struct desk_win_s *w, struct lay_s *l)
-{
-  struct edit_s *e = w->priv;
-  NXWINDOW hwnd = (NXWINDOW)w->hwnd;
-  int cw = 400 < l->cw - 24 ? 400 : l->cw - 24;
-  int ch = 136;
-  int x = (l->cw - cw) / 2;
-  int y = l->ty + (l->th - ch) / 2;
-  int by = y + ch - 44;
-  int bx = x + cw - 16;
-  char buf[96];
-  char fit[96];
-  int bw;
-
-  ui_zones_clear(&e->zs, ZG_CARD);
-  if (e->prompt == P_NONE)
+  kit_set_style(&e->kit, E_SAVE, e->modified ? KIT_BTN_DEFAULT :
+                KIT_BTN_NORMAL);
+  kit_enable(&e->kit, E_UNDO, e->nundo > 0);
+  kit_enable(&e->kit, E_REDO, e->nredo > 0);
+  if (strcmp(path, e->pathlabel) != 0)
     {
-      return;
+      strlcpy(e->pathlabel, path, sizeof(e->pathlabel));
+      kit_invalidate(&e->kit, E_PATH);
     }
-
-  y = y < l->ty + 4 ? l->ty + 4 : y;
-  ops_draw(hwnd, &g_o);
-  ops_rrect(&g_o, x - 1, y - 1, cw + 2, ch + 2, LUT_R12, 12, C_UI_LINE, 255);
-  ops_rrect(&g_o, x, y, cw, ch, LUT_R12, 12, C_CARD, 255);
-
-  if (e->prompt == P_CLOSE)
-    {
-      snprintf(buf, sizeof(buf), "Save changes to \"%s\"?", base_name(e));
-      ui_fit(&g_desk_font_uib, buf, cw - 36, fit, sizeof(fit));
-      ops_text(&g_o, &g_desk_font_uib, x + 18, y + 18, fit, C_TEXT, 255);
-      ops_text(&g_o, &g_desk_font_ui, x + 18, y + 44,
-               "If you don't save, the changes are lost.", C_TEXT_DIM, 255);
-
-      bw = ui_button_width("Save");
-      bx -= bw;
-      ui_button(&g_o, bx, by, bw, 28, "Save",
-                ui_look(&e->zs, Z_OK, true) == UI_PRESSED ? UI_PRESSED :
-                UI_DEFAULT);
-      ui_zone_add(&e->zs, ZG_CARD, Z_OK, bx, by, bw, 28, true);
-      bw = ui_button_width("Cancel");
-      bx -= bw + 8;
-      ui_button(&g_o, bx, by, bw, 28, "Cancel",
-                ui_look(&e->zs, Z_CANCEL, true));
-      ui_zone_add(&e->zs, ZG_CARD, Z_CANCEL, bx, by, bw, 28, true);
-      bw = ui_button_width("Don't Save");
-      ui_button(&g_o, x + 16, by, bw, 28, "Don't Save",
-                ui_look(&e->zs, Z_DISCARD, true) == UI_NORMAL ? UI_DANGER :
-                ui_look(&e->zs, Z_DISCARD, true));
-      ui_zone_add(&e->zs, ZG_CARD, Z_DISCARD, x + 16, by, bw, 28, true);
-    }
-  else
-    {
-      ops_text(&g_o, &g_desk_font_uib, x + 18, y + 16, "Save As", C_TEXT,
-               255);
-      ui_field_draw(&g_o, &e->field, x + 16, y + 44, cw - 32, 30, true);
-      bw = ui_button_width("Save");
-      bx -= bw;
-      ui_button(&g_o, bx, by, bw, 28, "Save", e->field.len == 0 ?
-                UI_DISABLED : ui_look(&e->zs, Z_OK, true) == UI_PRESSED ?
-                UI_PRESSED : UI_DEFAULT);
-      ui_zone_add(&e->zs, ZG_CARD, Z_OK, bx, by, bw, 28, e->field.len > 0);
-      bw = ui_button_width("Cancel");
-      bx -= bw + 8;
-      ui_button(&g_o, bx, by, bw, 28, "Cancel",
-                ui_look(&e->zs, Z_CANCEL, true));
-      ui_zone_add(&e->zs, ZG_CARD, Z_CANCEL, bx, by, bw, 28, true);
-    }
-
-  ops_draw(hwnd, &g_o);
 }
 
 static void text_draw(struct desk_win_s *w, struct lay_s *l)
@@ -1395,13 +1289,11 @@ static void edit_draw(struct desk_win_s *w)
 
   layout(w, &l);
   e->gw = l.gw;
-  ops_reset(&g_o);
-  toolbar_draw(w, &l);
-  text_draw(w, &l);
-  scrollbar_draw(w, &l);
-  status_draw(w, &l, true);
-  ops_draw((NXWINDOW)w->hwnd, &g_o);
-  card_draw(w, &l);
+  scrollbar_sync(w, &l);
+  status_sync(w);
+  toolbar_sync(w);
+  e->full = true;
+  kit_redraw(&e->kit);                   /* The text: edit_paint() */
   e->full = false;
   e->dlo = 1;
   e->dhi = 0;
@@ -1526,12 +1418,38 @@ static void shift_lines(struct desk_win_s *w, struct lay_s *l, int from,
  * in view)
  */
 
+/* The lines marked, or all of them */
+
+static void lines_draw(struct desk_win_s *w, struct lay_s *l)
+{
+  struct edit_s *e = w->priv;
+  int i;
+
+  if (e->full)
+    {
+      text_draw(w, l);
+    }
+  else if (e->dlo <= e->dhi)
+    {
+      int a = e->dlo < e->top ? e->top : e->dlo;
+      int b = e->dhi > e->top + l->rows ? e->top + l->rows : e->dhi;
+
+      for (i = a; i <= b; i++)
+        {
+          line_draw(w, l, i);
+        }
+    }
+
+  e->full = false;
+  e->dlo = 1;
+  e->dhi = 0;
+}
+
 static void refresh(struct desk_win_s *w, bool follow)
 {
   struct edit_s *e = w->priv;
   struct lay_s l;
   int v;
-  int i;
 
   layout(w, &l);
   if (l.gw != e->gw)
@@ -1563,32 +1481,18 @@ static void refresh(struct desk_win_s *w, bool follow)
       e->full = true;
     }
 
-  if (e->full)
-    {
-      text_draw(w, &l);
-    }
-  else if (e->dlo <= e->dhi)
-    {
-      int a = e->dlo < e->top ? e->top : e->dlo;
-      int b = e->dhi > e->top + l.rows ? e->top + l.rows : e->dhi;
-
-      for (i = a; i <= b; i++)
-        {
-          line_draw(w, &l, i);
-        }
-    }
-
-  scrollbar_draw(w, &l);
-  status_draw(w, &l, false);
+  lines_draw(w, &l);
   ops_draw((NXWINDOW)w->hwnd, &g_o);
-  if (e->full && e->prompt != P_NONE)
-    {
-      card_draw(w, &l);
-    }
 
-  e->full = false;
-  e->dlo = 1;
-  e->dhi = 0;
+  /* The kit's widgets; anything of it over the text (a tooltip, a
+   * dialog) again
+   */
+
+  scrollbar_sync(w, &l);
+  status_sync(w);
+  toolbar_sync(w);
+  kit_flush(&e->kit);
+  kit_touched(&e->kit, 0, l.ty, l.xr, l.th);
   set_title(w);
 }
 
@@ -1629,7 +1533,7 @@ static void changed(struct desk_win_s *w, int first, int oldn, int newn,
   e->msg[0] = '\0';
   if (!was)
     {
-      toolbar_draw(w, &l);
+      toolbar_sync(w);
     }
 }
 
@@ -1736,10 +1640,7 @@ static void record(struct desk_win_s *w, bool ins, int l, int c,
   e->typing = typing;
   if (redraw)
     {
-      struct lay_s lay;
-
-      layout(w, &lay);
-      toolbar_draw(w, &lay);
+      toolbar_sync(w);
     }
 }
 
@@ -1878,7 +1779,6 @@ static void ed_undo(struct desk_win_s *w, bool redo)
   struct undo_s *to = redo ? e->undo : e->redo;
   int *nto = redo ? &e->nundo : &e->nredo;
   struct undo_s u;
-  struct lay_s l;
   int el;
   int ec;
   int n;
@@ -1914,9 +1814,7 @@ static void ed_undo(struct desk_win_s *w, bool redo)
   /* Back where it was saved? */
 
   e->modified = state_id(e) != e->savedid;
-
-  layout(w, &l);
-  toolbar_draw(w, &l);
+  toolbar_sync(w);
 }
 
 static void copy_sel(struct edit_s *e)
@@ -1949,7 +1847,6 @@ static void copy_sel(struct edit_s *e)
 static void do_save(struct desk_win_s *w, const char *path)
 {
   struct edit_s *e = w->priv;
-  struct lay_s l;
   int ret;
 
   ret = ed_save(e, path);
@@ -1976,8 +1873,7 @@ static void do_save(struct desk_win_s *w, const char *path)
     }
 
   set_msg(e, false, "Saved", NULL);
-  layout(w, &l);
-  toolbar_draw(w, &l);
+  toolbar_sync(w);
   if (e->closeafter)
     {
       e->modified = false;
@@ -1987,82 +1883,88 @@ static void do_save(struct desk_win_s *w, const char *path)
 
 static void ask(struct desk_win_s *w, int prompt)
 {
-  struct edit_s *e = w->priv;
-  struct lay_s l;
+  static const char * const saving[3] =
+  {
+    "Save", "Cancel", "Don't Save"
+  };
 
-  e->prompt = prompt;
-  e->zs.hot = 0;
-  e->zs.pressed = 0;
-  if (prompt == P_SAVEAS)
+  struct edit_s *e = w->priv;
+  char title[96];
+
+  if (prompt == P_CLOSE)
+    {
+      snprintf(title, sizeof(title), "Save changes to \"%s\"?",
+               base_name(e));
+      kit_dialog(&e->kit, P_CLOSE, KIT_DLG_CONFIRM, title,
+                 "If you don't save, the changes are lost.", saving, 3);
+    }
+  else
     {
       const char *home = getenv("HOME");
       char *p = malloc(PATH_MAX);
 
-      if (p != NULL)
+      if (p == NULL)
         {
-          if (home == NULL || strcmp(home, "/") == 0)
-            {
-              home = access("/mnt/sd0", F_OK) == 0 ? "/mnt/sd0" : "/tmp";
-            }
-
-          snprintf(p, PATH_MAX, "%s/Untitled.txt", home);
-          ui_field_set(&e->field, p);
-          free(p);
+          return;
         }
+
+      if (home == NULL || strcmp(home, "/") == 0)
+        {
+          home = access("/mnt/sd0", F_OK) == 0 ? "/mnt/sd0" : "/tmp";
+        }
+
+      snprintf(p, PATH_MAX, "%s/Untitled.txt", home);
+      kit_dialog(&e->kit, P_SAVEAS, KIT_DLG_SAVE, "Save As", p, NULL, 0);
+      free(p);
     }
 
-  layout(w, &l);
-  dirty(e, e->cl, e->cl);                /* The cursor goes */
+  e->blink = false;                      /* The cursor goes */
+  dirty(e, e->cl, e->cl);
   refresh(w, false);
-  card_draw(w, &l);
 }
 
-static void answer(struct desk_win_s *w, int id)
+/* The dialog's answer (the dialog has gone: the text under it is drawn
+ * again by edit_paint())
+ */
+
+static void answer(struct desk_win_s *w, int prompt, int ans,
+                   const char *path)
 {
   struct edit_s *e = w->priv;
-  int prompt = e->prompt;
 
-  e->prompt = P_NONE;
-  ui_zones_clear(&e->zs, ZG_CARD);
-  e->full = true;
-  switch (id)
+  if (prompt == P_SAVEAS)
     {
-      case Z_OK:
-        if (prompt == P_SAVEAS)
-          {
-            if (e->field.len == 0)
-              {
-                e->prompt = prompt;
-                e->full = false;
-                return;
-              }
+      if (ans == KIT_ANS_OK && path[0] != '\0')
+        {
+          do_save(w, path);
+        }
+      else
+        {
+          e->closeafter = false;
+        }
+    }
+  else if (ans == KIT_ANS_ALT)
+    {
+      e->modified = false;
+      desk_win_close(w);                 /* Don't Save */
+      return;
+    }
+  else if (ans == KIT_ANS_OK)
+    {
+      e->closeafter = true;
+      if (e->path[0] == '\0')
+        {
+          ask(w, P_SAVEAS);
+          return;
+        }
 
-            do_save(w, e->field.text);
-          }
-        else if (e->path[0] == '\0')
-          {
-            e->closeafter = true;
-            ask(w, P_SAVEAS);
-            return;
-          }
-        else
-          {
-            e->closeafter = true;
-            do_save(w, e->path);
-          }
-        break;
-
-      case Z_DISCARD:
-        desk_win_close(w);
-        return;
-
-      default:
-        e->closeafter = false;
-        break;
+      do_save(w, e->path);
     }
 
   if (!w->closing)
     {
+      e->blink = true;
+      dirty(e, e->cl, e->cl);
       refresh(w, true);
     }
 }
@@ -2457,38 +2359,10 @@ static void edit_keyone(struct desk_win_s *w, int k)
 static void edit_key(struct desk_win_s *w, const uint8_t *ch, int n)
 {
   struct edit_s *e = w->priv;
-  int keys[16];
-  int nk = ui_keys(&e->keys, ch, n, keys, 16);
-  int i;
 
-  for (i = 0; i < nk && !w->closing; i++)
+  if (e != NULL)
     {
-      if (e->prompt != P_NONE)
-        {
-          if (keys[i] == '\r' || keys[i] == '\n')
-            {
-              answer(w, Z_OK);
-            }
-          else if (keys[i] == KEY_ESC)
-            {
-              answer(w, Z_CANCEL);
-            }
-          else if (e->prompt == P_SAVEAS && ui_field_key(&e->field, keys[i]))
-            {
-              struct lay_s l;
-
-              layout(w, &l);
-              card_draw(w, &l);
-            }
-
-          continue;
-        }
-
-      edit_keyone(w, keys[i]);
-      if (!w->closing && e->prompt == P_NONE)
-        {
-          refresh(w, true);
-        }
+      kit_key(&e->kit, ch, n);           /* The text's: KIT_EV_KEY */
     }
 }
 
@@ -2534,80 +2408,22 @@ static void select_word(struct edit_s *e)
     }
 }
 
-static void set_hot(struct desk_win_s *w, int id)
-{
-  struct edit_s *e = w->priv;
-  int old = e->zs.hot;
-  int g0 = ui_zone_group(&e->zs, old);
-  int g1 = ui_zone_group(&e->zs, id);
-  struct lay_s l;
+/* The pointer on the text (the kit hands it over while a button pressed
+ * there is held): the cursor goes there, a drag selects, two clicks
+ * select a word, three a line
+ */
 
-  if (id == old)
-    {
-      return;
-    }
-
-  e->zs.hot = id;
-  layout(w, &l);
-  if (g0 == ZG_TOOL || g1 == ZG_TOOL)
-    {
-      toolbar_draw(w, &l);
-    }
-
-  if (g0 == ZG_CARD || g1 == ZG_CARD)
-    {
-      card_draw(w, &l);
-    }
-}
-
-static void edit_mouse(struct desk_win_s *w, int x, int cy, uint8_t buttons)
+static void text_mouse(struct desk_win_s *w, int x, int y, uint8_t buttons)
 {
   struct edit_s *e = w->priv;
   bool press = (buttons & NX_MOUSE_LEFTBUTTON) &&
                !(e->buttons & NX_MOUSE_LEFTBUTTON);
-  bool release = !(buttons & NX_MOUSE_LEFTBUTTON) &&
-                 (e->buttons & NX_MOUSE_LEFTBUTTON);
-  struct ui_zone_s *z;
   struct lay_s l;
-  int y = cy + TITLE_H;
   int pl;
   int pc;
 
   e->buttons = buttons;
   layout(w, &l);
-
-  if (x < 0 && cy < 0 && buttons == 0)
-    {
-      set_hot(w, 0);
-      e->zs.pressed = 0;
-      e->drag = D_NONE;
-      return;
-    }
-
-  if (e->drag == D_THUMB)
-    {
-      if (buttons & NX_MOUSE_LEFTBUTTON)
-        {
-          int total = e->nl + l.full - 1;
-          int th = l.th * l.full / total;
-
-          th = th < 24 ? 24 : th;
-          if (l.th > th)
-            {
-              scroll_to(w, &l, (y - e->grab - l.ty) * (e->nl - 1) /
-                        (l.th - th));
-              refresh(w, false);
-            }
-        }
-      else
-        {
-          e->drag = D_NONE;
-          scrollbar_draw(w, &l);
-          ops_draw((NXWINDOW)w->hwnd, &g_o);
-        }
-
-      return;
-    }
 
   if (e->drag == D_TEXT)
     {
@@ -2642,138 +2458,146 @@ static void edit_mouse(struct desk_win_s *w, int x, int cy, uint8_t buttons)
       return;
     }
 
-  z = ui_zone_at(&e->zs, x, y);
-  if (e->prompt != P_NONE && z != NULL && z->group != ZG_CARD)
+  if (press && y >= l.ty && y < l.ty + l.th)
     {
-      z = NULL;
-    }
+      uint32_t now = desk_ms();
 
-  if (!(buttons & NX_MOUSE_LEFTBUTTON) || press)
-    {
-      set_hot(w, z != NULL && z->enabled ? z->id : 0);
-    }
-
-  if (press)
-    {
-      if (z != NULL)
+      pos_at(w, &l, x, y, &pl, &pc);
+      e->clicks = pl == e->clickl && pc == e->clickc &&
+                  now - e->clickms < DBLCLICK_MS ? e->clicks + 1 : 1;
+      e->clickms = now;
+      e->clickl = pl;
+      e->clickc = pc;
+      move(w, pl, pc, false);
+      e->want = vcol(&e->ln[e->cl], e->cc);
+      if (e->clicks == 2)
         {
-          if (z->enabled)
-            {
-              e->zs.pressed = z->id;
-              set_hot(w, 0);
-              set_hot(w, z->id);
-            }
+          select_word(e);
         }
-      else if (e->prompt != P_NONE)
+      else if (e->clicks >= 3)
         {
-          return;
-        }
-      else if (x >= l.xr && y >= l.ty && y < l.ty + l.th)
-        {
-          int total = e->nl + l.full - 1;
-          int th;
-          int ty;
-
-          if (e->nl <= l.full)
+          e->sel = true;
+          e->al = pl;
+          e->ac = 0;
+          if (pl < e->nl - 1)
             {
-              return;
-            }
-
-          th = l.th * l.full / total;
-          th = th < 24 ? 24 : th;
-          ty = l.ty + (l.th - th) * e->top / (e->nl - 1);
-          if (y >= ty && y < ty + th)
-            {
-              e->drag = D_THUMB;
-              e->grab = y - ty;
-              scrollbar_draw(w, &l);
-              ops_draw((NXWINDOW)w->hwnd, &g_o);
+              e->cl = pl + 1;
+              e->cc = 0;
             }
           else
             {
-              scroll_to(w, &l, e->top + (y < ty ? -l.full : l.full));
-              refresh(w, false);
-            }
-        }
-      else if (y >= l.ty && y < l.ty + l.th)
-        {
-          uint32_t now = desk_ms();
-
-          pos_at(w, &l, x, y, &pl, &pc);
-          e->clicks = pl == e->clickl && pc == e->clickc &&
-                      now - e->clickms < DBLCLICK_MS ? e->clicks + 1 : 1;
-          e->clickms = now;
-          e->clickl = pl;
-          e->clickc = pc;
-          move(w, pl, pc, false);
-          e->want = vcol(&e->ln[e->cl], e->cc);
-          if (e->clicks == 2)
-            {
-              select_word(e);
-            }
-          else if (e->clicks >= 3)
-            {
-              e->sel = true;
-              e->al = pl;
-              e->ac = 0;
-              if (pl < e->nl - 1)
-                {
-                  e->cl = pl + 1;
-                  e->cc = 0;
-                }
-              else
-                {
-                  e->cc = e->ln[pl].len;
-                }
-
-              dirty(e, pl, e->cl);
-            }
-          else
-            {
-              e->drag = D_TEXT;
+              e->cc = e->ln[pl].len;
             }
 
-          refresh(w, true);
-        }
-    }
-
-  if (release && e->zs.pressed != 0)
-    {
-      int id = e->zs.pressed;
-
-      e->zs.pressed = 0;
-      if (z != NULL && z->id == id)
-        {
-          set_hot(w, 0);
-          switch (id)
-            {
-              case Z_NEW:
-                desk_editor_open(NULL);
-                return;
-
-              case Z_SAVE:
-                save(w);
-                return;
-
-              case Z_UNDO:
-              case Z_REDO:
-                ed_undo(w, id == Z_REDO);
-                refresh(w, true);
-                break;
-
-              default:
-                answer(w, id);
-                return;
-            }
-
-          set_hot(w, id);
+          dirty(e, pl, e->cl);
         }
       else
         {
-          set_hot(w, z != NULL && z->enabled ? z->id : 0);
-          toolbar_draw(w, &l);
-          card_draw(w, &l);
+          e->drag = D_TEXT;
         }
+
+      refresh(w, true);
+    }
+}
+
+static void edit_event(struct kit_s *k, struct kit_widget_s *wg, int ev)
+{
+  struct desk_win_s *w = k->w;
+  int id = wg != NULL ? wg->id : 0;
+
+  switch (ev)
+    {
+      case KIT_EV_CLICK:
+        switch (id)
+          {
+            case E_NEW:
+              desk_editor_open(NULL);
+              break;
+
+            case E_SAVE:
+              save(w);
+              break;
+
+            case E_UNDO:
+            case E_REDO:
+              ed_undo(w, id == E_REDO);
+              refresh(w, true);
+              break;
+
+            default:
+              break;
+          }
+        break;
+
+      case KIT_EV_CHANGE:
+        if (id == E_SCROLL)
+          {
+            struct lay_s l;
+
+            layout(w, &l);
+            scroll_to(w, &l, wg->value);
+            refresh(w, false);
+          }
+        break;
+
+      case KIT_EV_MOUSE:
+        if (id == E_TEXT)
+          {
+            text_mouse(w, k->mx, k->my, k->mbuttons);
+          }
+        break;
+
+      case KIT_EV_KEY:
+        if (id == E_TEXT && !kit_dialog_open(k))
+          {
+            edit_keyone(w, k->key);
+            if (!w->closing && !kit_dialog_open(k))
+              {
+                refresh(w, true);
+              }
+          }
+
+        k->key = 0;
+        break;
+
+      case KIT_EV_DIALOG:
+        answer(w, k->key, k->arg, k->answer);
+        break;
+
+      default:
+        break;
+    }
+}
+
+/* The kit's draw function: the text, where the kit draws what is under
+ * it again (a dialog gone, an expose); its own operations, cut to the
+ * text area
+ */
+
+static void edit_paint(struct kit_s *k, struct kit_widget_s *wg, int x0,
+                       int y0, int x1, int y1)
+{
+  struct desk_win_s *w = k->w;
+  struct edit_s *e = w->priv;
+  struct lay_s l;
+
+  layout(w, &l);
+  if (!e->full)
+    {
+      dirty(e, e->top + (y0 - l.ty) / LH, e->top + (y1 - 1 - l.ty) / LH);
+    }
+
+  lines_draw(w, &l);
+  ops_draw((NXWINDOW)w->hwnd, &g_o);
+}
+
+static void edit_mouse(struct desk_win_s *w, int x, int y, uint8_t buttons)
+{
+  struct edit_s *e = w->priv;
+
+  if (e != NULL)
+    {
+      kit_mouse(&e->kit, x, y, buttons);
     }
 }
 
@@ -2783,7 +2607,7 @@ static void edit_tick(struct desk_win_s *w)
 {
   struct edit_s *e = w->priv;
   bool blink = w->active && (!e->blink || desk_frozen()) &&
-               e->prompt == P_NONE;
+               !kit_dialog_open(&e->kit);
 
   if (blink != e->blink)
     {
@@ -2791,6 +2615,8 @@ static void edit_tick(struct desk_win_s *w)
       dirty(e, e->cl, e->cl);
       refresh(w, false);
     }
+
+  kit_tick(&e->kit);
 }
 
 static void edit_resize(struct desk_win_s *w)
@@ -2798,6 +2624,8 @@ static void edit_resize(struct desk_win_s *w)
   struct edit_s *e = w->priv;
   struct lay_s l;
 
+  kit_layout(&e->kit);
+  kit_resize(&e->kit);                   /* A dialog stays in the middle */
   layout(w, &l);
   if (e->top > e->nl - 1)
     {
@@ -2805,6 +2633,29 @@ static void edit_resize(struct desk_win_s *w)
     }
 
   edit_draw(w);
+}
+
+static void edit_expose(struct desk_win_s *w, int x, int y, int cw, int ch)
+{
+  struct edit_s *e = w->priv;
+
+  if (e != NULL)
+    {
+      kit_expose(&e->kit, x, y, cw, ch);
+    }
+}
+
+static void edit_focus(struct desk_win_s *w)
+{
+  struct edit_s *e = w->priv;
+
+  if (e != NULL)
+    {
+      e->blink = w->active;
+      dirty(e, e->cl, e->cl);
+      kit_activate(&e->kit);
+      refresh(w, false);
+    }
 }
 
 static bool edit_canclose(struct desk_win_s *w)
@@ -2816,7 +2667,7 @@ static bool edit_canclose(struct desk_win_s *w)
       return true;
     }
 
-  if (e->prompt != P_CLOSE)
+  if (!kit_dialog_open(&e->kit))
     {
       desk_win_activate(w);
       ask(w, P_CLOSE);
@@ -2841,6 +2692,57 @@ static void edit_close(struct desk_win_s *w)
   e->nredo = 0;
   free(e->cls);
   e->cls = NULL;
+  kit_dialog_close(&e->kit);
+}
+
+/* The window's widgets: a tool bar, the text and its scroll bar, a status
+ * bar
+ */
+
+static void edit_build(struct desk_win_s *w, struct edit_s *e)
+{
+  struct kit_s *k = &e->kit;
+  struct kit_widget_s *wg;
+
+  kit_init(k, w, e->wg, NWG, edit_event);
+  k->priv = e;
+  k->draw = edit_paint;
+
+  kit_col(k, KIT_BOX_WINDOW);
+    kit_row(k, KIT_BOX_BAR);
+      kit_button(k, E_NEW, "New", KIT_ICON_NONE, KIT_BTN_NORMAL);
+      kit_tip(k, "A new document (Ctrl-N)");
+      kit_button(k, E_SAVE, "Save", KIT_ICON_NONE, KIT_BTN_NORMAL);
+      kit_tip(k, "Ctrl-S");
+      kit_spacer(k, 0);
+      kit_size(k, 4, 0);
+      kit_button(k, E_UNDO, "Undo", KIT_ICON_NONE, KIT_BTN_NORMAL);
+      kit_tip(k, "Ctrl-Z");
+      kit_button(k, E_REDO, "Redo", KIT_ICON_NONE, KIT_BTN_NORMAL);
+      kit_tip(k, "Ctrl-Y");
+      kit_spacer(k, 0);
+      kit_size(k, 4, 0);
+      kit_label(k, E_PATH, e->pathlabel, KIT_TEXT_DIM);
+      kit_grow(k, 1);
+    kit_end(k);
+
+    wg = kit_row(k, KIT_BOX_NONE);
+    wg->gap = 0;
+    kit_grow(k, 1);
+      kit_custom(k, E_TEXT)->flags |= KIT_F_KEYS;
+      kit_grow(k, 1);
+      kit_scroll(k, E_SCROLL);
+    kit_end(k);
+
+    kit_row(k, KIT_BOX_STATUS)->ph = 26;
+      kit_label(k, E_LEFT, e->lefttext, KIT_TEXT_DIM);
+      kit_grow(k, 1);
+      kit_label(k, E_RIGHT, e->right, KIT_TEXT_DIM);
+    kit_end(k);
+  kit_end(k);
+
+  kit_focus(k, E_TEXT);
+  kit_layout(k);
 }
 
 static void edit_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
@@ -2912,6 +2814,7 @@ static struct desk_win_s *edit_open(void)
   e->dhi   = 0;
   snprintf(e->title, sizeof(e->title), "%s", base_name(e));
   snprintf(w->title, sizeof(w->title), "%s", base_name(e));
+  edit_build(w, e);
   edit_draw(w);
   return w;
 }
@@ -2954,10 +2857,12 @@ const struct desk_app_s g_app_editor =
   .icon     = edit_icon,
   .open     = edit_open,
   .draw     = edit_draw,
+  .expose   = edit_expose,
   .resize   = edit_resize,
   .tick     = edit_tick,
   .mouse    = edit_mouse,
   .key      = edit_key,
+  .focus    = edit_focus,
   .close    = edit_close,
   .canclose = edit_canclose,
 };

@@ -74,6 +74,14 @@ config FPCDESK_WALLPAPER
 		display: a quarter of the GPU's memory at 1280 x 800.  Without
 		it the background is black.
 
+config FPCDESK_WIDGETS
+	bool "Widgets: the widget kit's gallery"
+	default y
+	---help---
+		An application that shows every control of the widget kit
+		(desk_kit.h, docs/uikit.md) in each of its states, with lists,
+		dialogs, menus and tooltips: the kit's demonstration and test.
+
 config FPCDESK_PREFS
 	string "Settings file"
 	default ""

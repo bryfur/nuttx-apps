@@ -148,6 +148,9 @@ enum desk_app_e
   APP_SETTINGS,
   APP_ABOUT,
   APP_LOG,
+#ifdef CONFIG_FPCDESK_WIDGETS
+  APP_WIDGETS,
+#endif
   APP_COUNT
 };
 
@@ -402,6 +405,7 @@ extern const struct desk_app_s g_app_doom;       /* desk_game.c */
 
 extern const struct desk_app_s g_app_viewer;     /* desk_viewer.c */
 extern const struct desk_app_s g_app_paint;      /* desk_paint.c */
+extern const struct desk_app_s g_app_widgets;    /* desk_kitdemo.c */
 
 /****************************************************************************
  * Public Function Prototypes
