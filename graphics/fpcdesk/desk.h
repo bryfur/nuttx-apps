@@ -16,7 +16,6 @@
 #include <sys/types.h>
 #include <time.h>
 #include <semaphore.h>
-#include <time.h>
 
 #include <nuttx/nx/nx.h>
 #include <nuttx/nx/nxtk.h>
@@ -340,7 +339,7 @@ struct desk_s
   int w;                           /* The display's size */
   int h;
   bool composited;
-  struct desk_win_s *wins;         /* Application windows */
+  struct desk_win_s *wins;         /* Application windows, top first */
   struct desk_win_s *active;
   NXWINDOW atlas;                  /* Hidden: the glyph atlas */
   NXWINDOW wallpaper;
@@ -528,6 +527,12 @@ time_t desk_time(void);
 bool desk_frozen(void);
 void desk_freeze(time_t t);                /* 0: the clock runs again */
 
+/* A seed for the games: fixed while the clock is frozen (the same deal,
+ * the same pieces), else desk_ms()
+ */
+
+uint32_t desk_seed(void);
+
 /* desk_panel.c: the top bar, the dock, the launcher, the wallpaper */
 
 void desk_layout(void);                     /* g_desk.work, the dock */
@@ -549,6 +554,7 @@ void desk_panels_mouse(int part, int x, int y, uint8_t buttons);
                                            /* Any pointer event (autohide) */
 bool desk_launcher_key(const uint8_t *ch, int n);
 bool desk_dock_pinned(int app);
+bool desk_dock_where(int app, int *x, int *y);   /* deskctl dock */
 void desk_dock_pin(int app, bool pin);
 
 /* Pop-up menus: items (a label of "-" is a separator) with ids; pick is

@@ -377,7 +377,7 @@ static void sol_deal(struct sol_s *s)
       deck[i] = CARD(i % 13, i / 13);
     }
 
-  s->seed ^= desk_ms();
+  s->seed ^= desk_seed();
   for (i = 51; i > 0; i--)
     {
       uint8_t t;
@@ -1709,14 +1709,16 @@ static void sol_key(struct desk_win_s *w, const uint8_t *ch, int n)
     }
 }
 
-/* The clock: a second of play */
+/* The clock: a second of play (not while the desktop's clock is frozen,
+ * for tests)
+ */
 
 static void sol_tick(struct desk_win_s *w)
 {
   struct sol_s *s = w->priv;
   char buf[48];
 
-  if (s->started && w->active)
+  if (s->started && w->active && !desk_frozen())
     {
       s->seconds++;
     }
@@ -1796,7 +1798,7 @@ static struct desk_win_s *sol_open(void)
 
   w->priv      = s;
   s->draw      = 1;
-  s->seed      = desk_ms() * 2654435761u;
+  s->seed      = desk_seed() * 2654435761u;
   s->clickpile = -1;
   s->presspile = -1;
   sol_deal(s);
