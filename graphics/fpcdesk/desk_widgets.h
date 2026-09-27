@@ -80,4 +80,19 @@ void wg_card(struct desk_ops_s *o, int x, int y, int w, int nrows);
 void wg_row_label(struct desk_ops_s *o, int x, int y, const char *label,
                   const char *caption);
 
+/* A level meter: a bar w x h whose lit part shows peak (0..32767) on a
+ * 48 dB scale, green, then amber, then red near full scale
+ */
+
+void wg_meter(struct desk_ops_s *o, int x, int y, int w, int h, int peak);
+
+/* A speaker of size s (its height) at (x, y) in colour c: waves 0..3, or
+ * muted (a cross); returns its width.  wg_speaker_waves(): the waves for
+ * a volume of 0..1000.
+ */
+
+int  wg_speaker(struct desk_ops_s *o, int x, int y, int s, int waves,
+                bool muted, uint16_t c, uint8_t alpha);
+int  wg_speaker_waves(int volume);
+
 #endif /* __APPS_GRAPHICS_FPCDESK_DESK_WIDGETS_H */

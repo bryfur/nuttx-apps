@@ -239,3 +239,112 @@ void wg_row_label(struct desk_ops_s *o, int x, int y, const char *label,
                caption, g_theme.text_dim, 255);
     }
 }
+
+/* 256 x log2(v) for v >= 1 (the fraction from the next bits, linearly) */
+
+static int log2_256(uint32_t v)
+{
+  int e = 0;
+
+  while (v >= 512)
+    {
+      v >>= 1;
+      e++;
+    }
+
+  while (v < 256)
+    {
+      v <<= 1;
+      e--;
+    }
+
+  return (e + 8) * 256 + (int)(v - 256);
+}
+
+void wg_meter(struct desk_ops_s *o, int x, int y, int w, int h, int peak)
+{
+  int lit = 0;
+  int ok = w * 36 / 48;                 /* -12 dB */
+  int hot = w * 45 / 48;                /* -3 dB */
+
+  ops_rrect(o, x, y, w, h, LUT_R3, h / 2 < 3 ? h / 2 : 3,
+            g_theme.control_hover, 255);
+  if (peak > 0)
+    {
+      /* dB = 6.02 log2(peak / 32767): the bar is 48 dB long */
+
+      int db256 = (log2_256(peak) - log2_256(32767)) * 602 / 100;
+
+      lit = w + db256 * w / (48 * 256);
+      lit = lit < 0 ? 0 : lit > w ? w : lit;
+    }
+
+  if (lit > 0)
+    {
+      ops_blend(o, x, y, lit < ok ? lit : ok, h, g_theme.success, 255);
+    }
+
+  if (lit > ok)
+    {
+      ops_blend(o, x + ok, y, (lit < hot ? lit : hot) - ok, h,
+                g_theme.warning, 255);
+    }
+
+  if (lit > hot)
+    {
+      ops_blend(o, x + hot, y, lit - hot, h, g_theme.destructive, 255);
+    }
+}
+
+int wg_speaker_waves(int volume)
+{
+  return volume <= 0 ? 0 : volume < 400 ? 1 : volume < 750 ? 2 : 3;
+}
+
+int wg_speaker(struct desk_ops_s *o, int x, int y, int s, int waves,
+               bool muted, uint16_t c, uint8_t alpha)
+{
+  static const struct desk_font_s * const wave[3] =
+  {
+    &g_desk_font_small, &g_desk_font_ui, &g_desk_font_title
+  };
+
+  int mw = s * 3 / 10;                  /* The magnet */
+  int mh = s * 4 / 10;
+  int cw = s * 3 / 10;                  /* The cone */
+  int cy = y + s / 2;
+  int wx;
+  int i;
+
+  ops_blend(o, x, cy - mh / 2, mw, mh, c, alpha);
+  for (i = 0; i < cw; i++)
+    {
+      int h = mh + (s * 9 / 10 - mh) * (i + 1) / cw;
+
+      ops_blend(o, x + mw + i, cy - h / 2, 1, h, c, alpha);
+    }
+
+  wx = x + mw + cw + s / 10;
+  if (muted)
+    {
+      const struct desk_font_s *f = s >= 20 ? &g_desk_font_title :
+                                              &g_desk_font_uib;
+
+      ops_text(o, f, wx, cy - text_height(f) / 2 - 1, DESK_CH_TIMES, c,
+               alpha);
+      return wx - x + text_width(f, DESK_CH_TIMES);
+    }
+
+  /* The waves: closing parentheses, bigger and further out */
+
+  for (i = 0; i < waves && i < 3; i++)
+    {
+      const struct desk_font_s *f = wave[s >= 20 && i < 2 ? i + 1 : i];
+      int gx = wx + i * s / 5;
+
+      ops_text(o, f, gx, cy - f->ascent * 6 / 10 - 1, ")", c,
+               (uint8_t)(alpha * (255 - i * 40) / 255));
+    }
+
+  return wx - x + 3 * s / 5;
+}

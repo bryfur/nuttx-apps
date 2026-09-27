@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Settings: a sidebar of pages (Appearance, Display, Dock, Mouse &
- * Keyboard, Date & Time, About this computer), each a function that draws
+ * Keyboard, Date & Time, Sound, About this computer), each a function that draws
  * it and says where its controls are (ctl_add()), and one that acts on a
  * control (a press, a slider's drag).  Everything set is kept in g_prefs
  * and saved at once (desk_prefs_save()).
@@ -25,6 +25,9 @@
 #include "desk.h"
 #include "desk_ui.h"
 #include "desk_widgets.h"
+#ifdef CONFIG_FPCDESK_SOUND
+#  include "desk_sound.h"
+#endif
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -82,7 +85,13 @@ enum
   S_HOUR,
   S_MINUTE,
   S_TZ,
-  S_PIN                                /* + app */
+  S_VOLUME,                            /* Sound */
+  S_MUTE,
+  S_ALERTS,
+  S_ALERTTEST,
+  S_EFFECTS,
+  S_APPLEVEL,                          /* + application */
+  S_PIN = S_APPLEVEL + 8               /* + app */
 };
 
 /****************************************************************************
@@ -128,14 +137,33 @@ static struct settings_s g_st;
 static const char * const g_pages[SETTINGS_PAGES] =
 {
   "Appearance", "Display", "Dock", "Mouse & Keyboard", "Date & Time",
+#ifdef CONFIG_FPCDESK_SOUND
+  "Sound",
+#endif
   "About this computer"
 };
 
 static const uint16_t g_pagetile[SETTINGS_PAGES] =
 {
   RGB(0x0a, 0x84, 0xff), RGB(0x5e, 0x5c, 0xe6), RGB(0x8e, 0x8e, 0x93),
-  RGB(0x34, 0xc7, 0x59), RGB(0xff, 0x95, 0x00), RGB(0x64, 0x7a, 0x96)
+  RGB(0x34, 0xc7, 0x59), RGB(0xff, 0x95, 0x00),
+#ifdef CONFIG_FPCDESK_SOUND
+  RGB(0xff, 0x2d, 0x55),
+#endif
+  RGB(0x64, 0x7a, 0x96)
 };
+
+#ifdef CONFIG_FPCDESK_SOUND
+/* Sound: the applications whose levels the page shows (the mixer's
+ * levels but the system sounds')
+ */
+
+#define APPLEVELS      3
+
+static struct fpcmix_levels_s g_levels;
+static int g_napps;
+static uint8_t g_app[APPLEVELS];
+#endif
 
 #ifdef CONFIG_FPCDESK_WALLPAPER
 static const char * const g_wallnames[3] =
@@ -592,6 +620,106 @@ static void page_datetime(int x, int y, int w)
            "each boot.", g_theme.text_dim);
 }
 
+#ifdef CONFIG_FPCDESK_SOUND
+static bool sound_playing(const struct fpcmix_info_s *info, const char *name)
+{
+  int i;
+
+  for (i = 0; i < info->nchan && i < FPCMIX_NCHAN_MAX; i++)
+    {
+      if (info->chan[i].state == FPCMIX_PLAYING &&
+          strcmp(info->chan[i].name, name) == 0)
+        {
+          return true;
+        }
+    }
+
+  return false;
+}
+
+/* Sound: where it goes, the volume and mute; the alert volume, a test,
+ * interface sounds; the levels of the applications that have played
+ */
+
+static void page_sound(int x, int y, int w)
+{
+  const struct fpcmix_info_s *info = desk_sound_refresh();
+  char value[24];
+  int by;
+  int i;
+
+  heading(x, &y, "Sound");
+  if (info == NULL)
+    {
+      text(&g_desk_font_ui, x + 2, y, "No audio (/dev/mixer)",
+           g_theme.text_dim);
+      return;
+    }
+
+  text(&g_desk_font_small, x + 2, y - 10, info->gpu ?
+       "Output: HDMI, played by the GPU" :
+       "No audio in the GPU (a bitstream before v7): sound is discarded",
+       g_theme.text_dim);
+  y += 8;
+
+  need(12);
+  wg_card(g_op, x, y, w, 2);
+  snprintf(value, sizeof(value), "%d%%", (info->master + 5) / 10);
+  row_slider(S_VOLUME, x, y, w, "Volume", NULL, info->master, 0,
+             FPCMIX_VOLUME_MAX, value);
+  row_switch(S_MUTE, x, y + WG_ROW_H, w, "Mute", NULL, info->mute);
+  y += 2 * WG_ROW_H + 16;
+
+  need(12);
+  wg_card(g_op, x, y, w, 3);
+  i = desk_sound_getlevel(DESK_SOUND_ALERTS);
+  snprintf(value, sizeof(value), "%d%%", (i + 5) / 10);
+  row_slider(S_ALERTS, x, y, w, "Alert volume", "The system's sounds", i,
+             0, FPCMIX_VOLUME_MAX, value);
+  need(30);
+  wg_row_label(g_op, x, y + WG_ROW_H, "Alert sound", NULL);
+  by = y + WG_ROW_H + (WG_ROW_H - UI_CONTROL_H) / 2;
+  ui_button(g_op, x + w - 14 - 96, by, 96, UI_CONTROL_H, "Play",
+            hot(S_ALERTTEST) ? UI_HOVER : UI_NORMAL);
+  ctl_add(S_ALERTTEST, K_BUTTON, x + w - 14 - 96, by, 96, UI_CONTROL_H, 0);
+  row_switch(S_EFFECTS, x, y + 2 * WG_ROW_H, w, "Interface sounds",
+             "Windows opening, closing", desk_sound_effects());
+  y += 3 * WG_ROW_H + 16;
+
+  caption(x, &y, "Applications");
+  g_napps = 0;
+  if (desk_sound_levels(&g_levels) >= 0)
+    {
+      for (i = 0; i < g_levels.n && g_napps < APPLEVELS; i++)
+        {
+          if (strcmp(g_levels.l[i].name, DESK_SOUND_ALERTS) != 0)
+            {
+              g_app[g_napps++] = i;
+            }
+        }
+    }
+
+  if (g_napps == 0)
+    {
+      text(&g_desk_font_ui, x + 2, y + 4, "None has played yet",
+           g_theme.text_dim);
+      return;
+    }
+
+  need(12);
+  wg_card(g_op, x, y, w, g_napps);
+  for (i = 0; i < g_napps; i++)
+    {
+      const struct fpcmix_level_s *l = &g_levels.l[g_app[i]];
+
+      snprintf(value, sizeof(value), "%d%%", (l->level + 5) / 10);
+      row_slider(S_APPLEVEL + i, x, y + i * WG_ROW_H, w, l->name,
+                 sound_playing(info, l->name) ? "Playing" : NULL, l->level,
+                 0, FPCMIX_VOLUME_MAX, value);
+    }
+}
+#endif
+
 /****************************************************************************
  * Private Functions: the window
  ****************************************************************************/
@@ -655,6 +783,12 @@ static void settings_draw(struct desk_win_s *w)
       case SETTINGS_DATETIME:
         page_datetime(x, y, cw);
         break;
+
+#ifdef CONFIG_FPCDESK_SOUND
+      case SETTINGS_SOUND:
+        page_sound(x, y, cw);
+        break;
+#endif
 
       default:
         ops_draw(g_hwnd, g_op);
@@ -902,6 +1036,60 @@ static void settings_act(struct ctl_s *c, int x, int y, bool done)
           }
         break;
 
+#ifdef CONFIG_FPCDESK_SOUND
+      case S_VOLUME:
+        desk_sound_master(wg_slider_value(c->x, c->w, 0, FPCMIX_VOLUME_MAX,
+                                          x));
+        desk_topbar_draw();
+        if (done)
+          {
+            desk_sound_play(SND_VOLUME);       /* How loud it is now */
+            desk_prefs_save();
+          }
+        break;
+
+      case S_MUTE:
+        desk_sound_mute(2);
+        desk_topbar_draw();
+        desk_prefs_save();
+        break;
+
+      case S_ALERTS:
+        desk_sound_level(DESK_SOUND_ALERTS,
+                         wg_slider_value(c->x, c->w, 0, FPCMIX_VOLUME_MAX,
+                                         x));
+        if (done)
+          {
+            desk_sound_play(SND_ALERT);
+            desk_prefs_save();
+          }
+        break;
+
+      case S_ALERTTEST:
+        desk_sound_play(SND_NOTIFY);
+        break;
+
+      case S_EFFECTS:
+        desk_sound_set_effects(!desk_sound_effects());
+        desk_prefs_save();
+        break;
+
+      case S_APPLEVEL:
+      case S_APPLEVEL + 1:
+      case S_APPLEVEL + 2:
+        if (id - S_APPLEVEL < g_napps)
+          {
+            desk_sound_level(g_levels.l[g_app[id - S_APPLEVEL]].name,
+                             wg_slider_value(c->x, c->w, 0,
+                                             FPCMIX_VOLUME_MAX, x));
+            if (done)
+              {
+                desk_prefs_save();
+              }
+          }
+        break;
+#endif
+
       case S_TZ:
         if (part != 0)
           {
@@ -1140,6 +1328,19 @@ const struct desk_app_s g_app_settings =
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
+
+/* What a page shows has changed (the mixer's state): drawn again if it is
+ * showing and not being dragged
+ */
+
+void desk_settings_changed(int page)
+{
+  if (g_op != NULL && g_st.page == page && g_st.drag == 0 &&
+      g_st.w != NULL && desk_app_window(APP_SETTINGS) == g_st.w)
+    {
+      settings_draw(g_st.w);
+    }
+}
 
 /* Settings at a page (the dock's menu: Dock Settings...) */
 

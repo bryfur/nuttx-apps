@@ -20,6 +20,17 @@ CSRCS    += desk_ui.c desk_theme.c desk_widgets.c desk_settings.c desk_log.c
 CSRCS    += desk_game.c
 CSRCS    += desk_image.c desk_viewer.c desk_paint.c
 
+ifeq ($(CONFIG_FPCDESK_SOUND),y)
+CSRCS    += desk_sound.c desk_volume.c
+endif
+
+ifeq ($(CONFIG_FPCDESK_MUSIC),y)
+CSRCS    += desk_music.c
+ifeq ($(CONFIG_AUDIOUTILS_LIBMAD),y)
+CFLAGS   += ${INCDIR_PREFIX}$(APPDIR)/audioutils/libmad/libmad
+endif
+endif
+
 ifeq ($(CONFIG_FPCDESK_DESKCTL),y)
 PROGNAME  += deskctl
 PRIORITY  += 100

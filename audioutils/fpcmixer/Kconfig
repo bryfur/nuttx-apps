@@ -1,0 +1,31 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+config AUDIOUTILS_FPCMIXER
+	tristate "mixer: the FPC's audio mixer from the shell"
+	default n
+	depends on FPC_AUDIO
+	---help---
+		mixer                        what is playing, the volumes
+		mixer master [N|+N|-N]       the master volume, percent
+		mixer mute [on|off|toggle]
+		mixer level NAME N           an application's level, percent
+		mixer tone FREQ MS [RATE [CH [BITS [AMP [NAME [VOL]]]]]]
+		                             a sine through a free channel
+		mixer wav FILE [NAME]        a WAV file through a free channel
+		mixer watch [N]              the state each time it changes
+		(nuttx/audio/fpc_mixer.h, fpc/drivers/audio)
+
+if AUDIOUTILS_FPCMIXER
+
+config AUDIOUTILS_FPCMIXER_PRIORITY
+	int "Priority"
+	default 100
+
+config AUDIOUTILS_FPCMIXER_STACKSIZE
+	int "Stack size"
+	default 4096
+
+endif
