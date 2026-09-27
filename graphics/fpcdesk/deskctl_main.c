@@ -21,7 +21,10 @@
  *                                 enter, esc, tab, bs, up, down, left,
  *                                 right, home, end, pgup, pgdn, ins, del,
  *                                 f1-f12, shift, ctrl, alt, gui (left),
- *                                 rshift, rctrl, ralt, rgui
+ *                                 rshift, rctrl, ralt, rgui, vol+, vol-,
+ *                                 mute (these through /dev/kbd when there
+ *                                 is one to write to, the headless
+ *                                 simulator's: as a keyboard has them)
  *   deskctl shot FILE             the screen as a PPM file (simulator)
  *   deskctl test                  BLEND on the GPU, checked pixel by pixel
  *   deskctl stats [clear|N]       GPU commands and pixels since the last
@@ -47,6 +50,7 @@
 #include <nuttx/config.h>
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -59,6 +63,7 @@
 
 #include <nuttx/nx/nx.h>
 #include <nuttx/nx/nxcompose.h>
+#include <nuttx/input/keyboard.h>
 #include <nuttx/nx/nxkeys.h>
 
 #include "desk.h"
@@ -223,13 +228,52 @@ static const struct
   { "ralt",   NX_KEY_SPECIAL(KEYCODE_RALT),     0,    NX_KEY_ALT },
   { "gui",    NX_KEY_SPECIAL(KEYCODE_LGUI),     0,    NX_KEY_GUI },
   { "rgui",   NX_KEY_SPECIAL(KEYCODE_RGUI),     0,    NX_KEY_GUI },
+  { "vol+",   NX_KEY_SPECIAL(KEYCODE_VOLUP),    0,    0 },
+  { "vol-",   NX_KEY_SPECIAL(KEYCODE_VOLDOWN),  0,    0 },
+  { "mute",   NX_KEY_SPECIAL(KEYCODE_MUTE),     0,    0 },
 };
+
+/* A volume key through the keyboard itself (/dev/kbd, the headless
+ * simulator's FPC_SIM_VKBD), where the desktop session takes it for the
+ * mixer; false if there is none
+ */
+
+static bool deskctl_kbddev(uint8_t code, bool release)
+{
+  struct keyboard_event_s ev;
+  bool ok;
+  int fd;
+
+  if (code != NX_KEY_SPECIAL(KEYCODE_VOLUP) &&
+      code != NX_KEY_SPECIAL(KEYCODE_VOLDOWN) &&
+      code != NX_KEY_SPECIAL(KEYCODE_MUTE))
+    {
+      return false;
+    }
+
+  fd = open("/dev/kbd", O_WRONLY);
+  if (fd < 0)
+    {
+      return false;
+    }
+
+  ev.code = NX_KEY_KEYCODE(code);
+  ev.type = release ? KEYBOARD_SPECREL : KEYBOARD_SPECPRESS;
+  ok = write(fd, &ev, sizeof(ev)) == sizeof(ev);
+  close(fd);
+  return ok;
+}
 
 static void deskctl_keyev(NXHANDLE h, uint8_t *mods, uint8_t code,
                           uint8_t ch, uint8_t mod, bool release)
 {
   uint8_t rec[NX_KEY_SIZE];
   struct nx_key_s key;
+
+  if (deskctl_kbddev(code, release))
+    {
+      return;
+    }
 
   *mods = release ? *mods & ~mod : *mods | mod;
 

@@ -101,6 +101,63 @@ int nxplayer_getmp3subformat(int fd);
 int nxplayer_getsbcsubformat(int fd);
 #endif
 /****************************************************************************
+ * Name: nxplayer_parse_wav
+ *
+ *   A WAV file's format (from its "fmt " chunk), leaving the file at its
+ *   samples ("data").  Anything that is not RIFF WAVE is raw PCM: left as
+ *   it is, from its start.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_NXPLAYER_FMT_FROM_EXT
+static int nxplayer_parse_wav(int fd, FAR uint32_t *samplerate,
+                              FAR uint8_t *chans, FAR uint8_t *bps)
+{
+  uint8_t b[16];
+  uint32_t size;
+
+  if (read(fd, b, 12) != 12 || memcmp(b, "RIFF", 4) != 0 ||
+      memcmp(b + 8, "WAVE", 4) != 0)
+    {
+      lseek(fd, 0, SEEK_SET);
+      return OK;
+    }
+
+  while (read(fd, b, 8) == 8)
+    {
+      size = b[4] | b[5] << 8 | b[6] << 16 | (uint32_t)b[7] << 24;
+      if (memcmp(b, "data", 4) == 0)
+        {
+          return OK;
+        }
+
+      if (memcmp(b, "fmt ", 4) == 0 && size >= 16)
+        {
+          if (read(fd, b, 16) != 16)
+            {
+              break;
+            }
+
+          if ((b[0] | b[1] << 8) != 1)
+            {
+              return -ENOSYS;                   /* Not PCM */
+            }
+
+          *chans      = b[2];
+          *samplerate = b[4] | b[5] << 8 | b[6] << 16 |
+                        (uint32_t)b[7] << 24;
+          *bps        = b[14];
+          size       -= 16;
+        }
+
+      lseek(fd, size + (size & 1), SEEK_CUR);
+    }
+
+  return -ENODATA;
+}
+#endif
+
+/****************************************************************************
  * Private Data
  ****************************************************************************/
 
@@ -151,7 +208,7 @@ static const struct nxplayer_dec_ops_s g_dec_ops[] =
   },
   {
     AUDIO_FMT_PCM,
-    NULL,
+    nxplayer_parse_wav,
     nxplayer_fill_common
   }
 };

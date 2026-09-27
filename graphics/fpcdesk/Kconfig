@@ -126,6 +126,35 @@ config FPCDESK_GAME_CPUSCALE
 
 endif
 
+config FPCDESK_SOUND
+	bool "Sound: system sounds, the volume control, Settings' Sound page"
+	default y
+	depends on FPC_AUDIO
+	---help---
+		With the FPC's audio mixer (/dev/mixer): a speaker in the top
+		bar with a popover (the volume, mute, what is playing, each
+		program's level), a Sound page in Settings (the volume, mute,
+		the alert volume, interface sounds, the applications' levels),
+		and short system sounds (a window opening, closing, an alert, a
+		notification).  The volume keys show the popover.
+
+config FPCDESK_MUSIC
+	bool "Music player"
+	default y
+	depends on FPCDESK_SOUND
+	---help---
+		A Music application: plays the WAV files (and MP3 files with
+		AUDIOUTILS_LIBMAD) of a folder, one after the other.
+
+config FPCDESK_MUSIC_DIR
+	string "Music: the folder"
+	default ""
+	depends on FPCDESK_MUSIC
+	---help---
+		Where the Music application looks for files.  Empty: the home
+		directory ($HOME, else CONFIG_LIBC_HOMEDIR), and its Music
+		folder if it has one.
+
 config FPCDESK_DESKCTL
 	bool "deskctl: scripted input and screenshots"
 	default y

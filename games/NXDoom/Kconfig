@@ -105,9 +105,20 @@ config GAMES_NXDOOM_SOUND
 	bool "Enable sound features"
 	default n
 	---help---
-		Not ported! Will not work.
+		The sound effects through GAMES_NXDOOM_FPCSOUND (the FPC's
+		mixer); otherwise not ported (the PC speaker module does
+		nothing here).  No music.
 
 if GAMES_NXDOOM_SOUND
+
+config GAMES_NXDOOM_FPCSOUND
+	bool "Sound effects through the FPC's audio mixer"
+	default y
+	depends on FPC_AUDIO
+	---help---
+		Doom's sound effects mixed into 11025 Hz stereo and written
+		into a channel of the mixer named "Doom" (src/i_fpcsound.c),
+		which plays it over HDMI.
 
 config GAMES_NXDOOM_RTTTL_MUSIC
 	bool "RTTTL music"

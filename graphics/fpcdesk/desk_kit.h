@@ -760,6 +760,11 @@ void kit_paint_row_label(struct desk_ops_s *o, int x, int y, int h,
 void kit_paint_sidebar_row(struct desk_ops_s *o, int x, int y, int w,
                            int h, const char *label, uint16_t tile,
                            bool sel, bool hot);
+void kit_paint_meter(struct desk_ops_s *o, int x, int y, int w, int h,
+                     int peak);
+int  kit_paint_speaker(struct desk_ops_s *o, int x, int y, int s, int waves,
+                       bool muted, uint16_t c, uint8_t alpha);
+int  kit_speaker_waves(int volume);
 int  kit_tooltip_size(const char *text, int *h);
 
 #endif /* __APPS_GRAPHICS_FPCDESK_DESK_KIT_H */

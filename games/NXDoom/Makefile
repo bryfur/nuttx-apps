@@ -201,6 +201,9 @@ CSRCS += $(COMMONSRCDIR)/mus2mid.c
 CSRCS += $(DOOMSRCDIR)/sounds.c
 CSRCS += $(DOOMSRCDIR)/s_sound.c
 CSRCS += $(DOOMSRCDIR)/deh_sound.c
+ifeq ($(CONFIG_GAMES_NXDOOM_FPCSOUND),y)
+CSRCS += $(COMMONSRCDIR)/i_fpcsound.c
+endif
 endif
 
 # If we have chosen RTTTL music, then add that source

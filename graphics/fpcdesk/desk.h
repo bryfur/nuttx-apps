@@ -136,6 +136,9 @@ enum desk_app_e
   APP_EDITOR,
   APP_VIEWER,
   APP_PAINT,
+#ifdef CONFIG_FPCDESK_MUSIC
+  APP_MUSIC,
+#endif
   APP_MONITOR,
   APP_CALC,
   APP_TETRIS,
@@ -162,7 +165,8 @@ enum desk_evtype_e
   EV_POSITION,
   EV_BLOCKED,
   EV_REDRAW,
-  EV_MODE                          /* The display mode has changed */
+  EV_MODE,                         /* The display mode has changed */
+  EV_SOUND                         /* The mixer's state has changed */
 };
 
 enum desk_part_e
@@ -175,7 +179,8 @@ enum desk_part_e
   PART_WALLPAPER,
   PART_TIP,
   PART_MENU,                       /* A pop-up menu */
-  PART_EDGE                        /* Where the hidden dock comes out */
+  PART_EDGE,                       /* Where the hidden dock comes out */
+  PART_SOUND                       /* The volume popover */
 };
 
 /****************************************************************************
@@ -398,6 +403,9 @@ extern const struct desk_app_s g_app_solitaire;  /* desk_solitaire.c */
 extern const struct desk_app_s g_app_breakout;   /* desk_breakout.c */
 extern const struct desk_app_s g_app_settings;   /* desk_settings.c */
 extern const struct desk_app_s g_app_log;        /* desk_log.c */
+#ifdef CONFIG_FPCDESK_MUSIC
+extern const struct desk_app_s g_app_music;      /* desk_music.c */
+#endif
 #ifdef CONFIG_GAMES_NXDOOM_DESKTOP
 extern const struct desk_app_s g_app_doom;       /* desk_game.c */
 #endif
@@ -505,6 +513,10 @@ void desk_win_sync(struct desk_win_s *w);
  */
 
 void desk_wake(struct desk_win_s *w);
+
+/* From any thread: an event (EV_*) for the main thread */
+
+void desk_post(uint8_t type);
 struct desk_win_s *desk_app_window(int app);
 void desk_launch(int app);
 void desk_app_quit(int app);                /* Close all of its windows */
@@ -601,10 +613,19 @@ void icon_tile(struct desk_ops_s *o, int x, int y, int s, uint16_t top,
 #define SETTINGS_DOCK       2
 #define SETTINGS_INPUT      3               /* Mouse & Keyboard */
 #define SETTINGS_DATETIME   4
-#define SETTINGS_ABOUT      5
-#define SETTINGS_PAGES      6
+#ifdef CONFIG_FPCDESK_SOUND
+#  define SETTINGS_SOUND    5
+#  define SETTINGS_ABOUT    6
+#  define SETTINGS_PAGES    7
+#else
+#  define SETTINGS_ABOUT    5
+#  define SETTINGS_PAGES    6
+#endif
 
 void desk_settings_show(int page);
+void desk_settings_changed(int page);       /* What the page shows has
+                                             * changed: drawn again if it
+                                             * is showing */
 
 /* desk_edit.c: open a file in a new editor window (NULL: a new file) */
 

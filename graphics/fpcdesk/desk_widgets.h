@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * The first controls of Settings (switches, segmented controls, sliders,
- * check boxes, steppers, colour swatches, sidebar rows, cards of rows),
+ * check boxes, steppers, colour swatches, sidebar rows, cards of rows,
+ * level meters, speakers),
  * kept by these names for code that draws them itself.  They are the
  * widget kit's (desk_kit.h, kit_paint_*()): new code builds its window
  * with the kit instead, which also finds the pointer, moves the focus and
@@ -112,6 +113,33 @@ static inline void wg_row_label(struct desk_ops_s *o, int x, int y,
                                 const char *label, const char *caption)
 {
   kit_paint_row_label(o, x, y, WG_ROW_H, label, caption);
+}
+
+/* A level meter: a bar w x h whose lit part shows peak (0..32767) on a
+ * 48 dB scale, green, then amber, then red near full scale
+ */
+
+static inline void wg_meter(struct desk_ops_s *o, int x, int y, int w,
+                            int h, int peak)
+{
+  kit_paint_meter(o, x, y, w, h, peak);
+}
+
+/* A speaker of size s (its height) at (x, y) in colour c: waves 0..3, or
+ * muted (a cross); returns its width.  wg_speaker_waves(): the waves for
+ * a volume of 0..1000.
+ */
+
+static inline int wg_speaker(struct desk_ops_s *o, int x, int y, int s,
+                             int waves, bool muted, uint16_t c,
+                             uint8_t alpha)
+{
+  return kit_paint_speaker(o, x, y, s, waves, muted, c, alpha);
+}
+
+static inline int wg_speaker_waves(int volume)
+{
+  return kit_speaker_waves(volume);
 }
 
 #endif /* __APPS_GRAPHICS_FPCDESK_DESK_WIDGETS_H */

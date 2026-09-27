@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Settings: a sidebar of pages (Appearance, Display, Dock, Mouse &
- * Keyboard, Date & Time, About this computer), built with the widget kit
+ * Keyboard, Date & Time, Sound, About this computer), built with the widget kit
  * (desk_kit.h): each page a column of cards of rows, all of them built
  * when the window opens and the one chosen shown.  Everything set is kept
  * in g_prefs and saved at once (desk_prefs_save()); settings_sync() puts
@@ -27,6 +27,9 @@
 
 #include "desk.h"
 #include "desk_kit.h"
+#ifdef CONFIG_FPCDESK_SOUND
+#  include "desk_sound.h"
+#endif
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -43,6 +46,7 @@
 #define THEME_W        132             /* A theme's preview */
 #define THEME_H        80
 #define RES_MAX        4
+#define APPLEVELS      3               /* Sound: applications' levels */
 
 /* The widgets' ids */
 
@@ -83,7 +87,24 @@ enum
   S_MINUTE,
   S_TZ,
   S_ABOUT,
-  S_PIN                                /* + app */
+  S_VOLUME,                            /* Sound */
+  S_VOLUMEV,
+  S_MUTE,
+  S_ALERTS,
+  S_ALERTSV,
+  S_ALERTTEST,
+  S_EFFECTS,
+  S_OUTPUT,
+  S_SNDCARD,
+  S_ALERTCARD,
+  S_APPSLBL,
+  S_NOAPPS,
+  S_APPCARD,
+  S_APPROW,                            /* + application */
+  S_APPNAME = S_APPROW + APPLEVELS,    /* + application */
+  S_APPLEVEL = S_APPNAME + APPLEVELS,  /* + 2 x application: the slider,
+                                        * its value */
+  S_PIN = S_APPLEVEL + 2 * APPLEVELS   /* + app */
 };
 
 /****************************************************************************
@@ -118,6 +139,21 @@ struct settings_s
   char hour[8];
   char minute[8];
   char tz[16];
+
+#ifdef CONFIG_FPCDESK_SOUND
+  /* Sound: the applications whose levels the page shows (the mixer's
+   * levels but the system sounds')
+   */
+
+  struct fpcmix_levels_s levels;
+  int napps;
+  uint8_t app[APPLEVELS];
+  char output[80];
+  char volume[8];
+  char alerts[8];
+  char appname[APPLEVELS][40];
+  char applevel[APPLEVELS][8];
+#endif
 };
 
 /****************************************************************************
@@ -130,13 +166,20 @@ static int g_page;
 static const char * const g_pages[SETTINGS_PAGES] =
 {
   "Appearance", "Display", "Dock", "Mouse & Keyboard", "Date & Time",
+#ifdef CONFIG_FPCDESK_SOUND
+  "Sound",
+#endif
   "About this computer"
 };
 
 static const uint16_t g_pagetile[SETTINGS_PAGES] =
 {
   RGB(0x0a, 0x84, 0xff), RGB(0x5e, 0x5c, 0xe6), RGB(0x8e, 0x8e, 0x93),
-  RGB(0x34, 0xc7, 0x59), RGB(0xff, 0x95, 0x00), RGB(0x64, 0x7a, 0x96)
+  RGB(0x34, 0xc7, 0x59), RGB(0xff, 0x95, 0x00),
+#ifdef CONFIG_FPCDESK_SOUND
+  RGB(0xff, 0x2d, 0x55),
+#endif
+  RGB(0x64, 0x7a, 0x96)
 };
 
 static const char * const g_shadows[4] =
@@ -523,6 +566,66 @@ static void page_datetime(struct settings_s *st)
   kit_end(k);
 }
 
+#ifdef CONFIG_FPCDESK_SOUND
+/* Sound: where it goes, the volume and mute; the alert volume, a test,
+ * interface sounds; the levels of the applications that have played
+ */
+
+static void page_sound(struct settings_s *st)
+{
+  struct kit_s *k = &st->kit;
+  int i;
+
+  page_begin(k, SETTINGS_SOUND, "Sound");
+    kit_label(k, S_OUTPUT, st->output, KIT_TEXT_SMALL | KIT_TEXT_DIM);
+    kit_card(k)->id = S_SNDCARD;
+      row_slider(k, S_VOLUME, "Volume", st->volume, 0, FPCMIX_VOLUME_MAX);
+      row_switch(k, S_MUTE, "Mute");
+    kit_end(k);
+
+    kit_card(k)->id = S_ALERTCARD;
+      row_slider(k, S_ALERTS, "Alert volume\nThe system's sounds",
+                 st->alerts, 0, FPCMIX_VOLUME_MAX);
+      kit_card_row(k, 0, "Alert sound");
+        kit_button(k, S_ALERTTEST, "Play", KIT_ICON_NONE, KIT_BTN_NORMAL);
+        kit_size(k, 96, 0);
+      kit_end(k);
+      row_switch(k, S_EFFECTS, "Interface sounds\nWindows opening, closing");
+    kit_end(k);
+
+    kit_label(k, S_APPSLBL, "Applications", KIT_TEXT_BOLD);
+    kit_label(k, S_NOAPPS, "None has played yet", KIT_TEXT_DIM);
+    kit_card(k)->id = S_APPCARD;
+      for (i = 0; i < APPLEVELS; i++)
+        {
+          kit_card_row(k, S_APPNAME + i, st->appname[i])->id = S_APPROW + i;
+            kit_label(k, S_APPLEVEL + 2 * i + 1, st->applevel[i],
+                      KIT_TEXT_DIM);
+            kit_slider(k, S_APPLEVEL + 2 * i, 0, 0, FPCMIX_VOLUME_MAX);
+            kit_size(k, 200, 0);
+          kit_end(k);
+        }
+    kit_end(k);
+  kit_end(k);
+}
+
+static bool sound_playing(const struct fpcmix_info_s *info, const char *name)
+{
+  int i;
+
+  for (i = 0; i < info->nchan && i < FPCMIX_NCHAN_MAX; i++)
+    {
+      if (info->chan[i].state == FPCMIX_PLAYING &&
+          strcmp(info->chan[i].name, name) == 0)
+        {
+          return true;
+        }
+    }
+
+  return false;
+}
+#endif
+
 static void page_about(struct settings_s *st)
 {
   struct kit_s *k = &st->kit;
@@ -554,6 +657,10 @@ static void set_text(struct settings_s *st, int id, char *buf, size_t size,
       kit_set_text(&st->kit, id, buf);
     }
 }
+
+#ifdef CONFIG_FPCDESK_SOUND
+static void sound_sync(struct settings_s *st);
+#endif
 
 static void settings_sync(struct settings_s *st)
 {
@@ -669,7 +776,80 @@ static void settings_sync(struct settings_s *st)
            tm.tm_min);
   set_text(st, S_TZ, st->tz, sizeof(st->tz), "UTC%c%02d:%02d",
            g_prefs.tzoff < 0 ? '-' : '+', off / 60, off % 60);
+
+#ifdef CONFIG_FPCDESK_SOUND
+  if (g_page == SETTINGS_SOUND)
+    {
+      sound_sync(st);                  /* It reads the mixer */
+    }
+#endif
 }
+
+#ifdef CONFIG_FPCDESK_SOUND
+static void sound_sync(struct settings_s *st)
+{
+  struct kit_s *k = &st->kit;
+  const struct fpcmix_info_s *info = desk_sound_refresh();
+  int v;
+  int i;
+
+  kit_show(k, S_SNDCARD, info != NULL);
+  kit_show(k, S_ALERTCARD, info != NULL);
+  kit_show(k, S_APPSLBL, info != NULL);
+  if (info == NULL)
+    {
+      set_text(st, S_OUTPUT, st->output, sizeof(st->output), "%s",
+               "No audio (/dev/mixer)");
+      kit_show(k, S_NOAPPS, false);
+      kit_show(k, S_APPCARD, false);
+      return;
+    }
+
+  set_text(st, S_OUTPUT, st->output, sizeof(st->output), "%s", info->gpu ?
+           "Output: HDMI, played by the GPU" :
+           "No audio in the GPU (a bitstream before v7): sound is "
+           "discarded");
+  kit_set_value(k, S_VOLUME, info->master);
+  set_text(st, S_VOLUMEV, st->volume, sizeof(st->volume), "%d%%",
+           (info->master + 5) / 10);
+  kit_set_value(k, S_MUTE, info->mute);
+  v = desk_sound_getlevel(DESK_SOUND_ALERTS);
+  kit_set_value(k, S_ALERTS, v);
+  set_text(st, S_ALERTSV, st->alerts, sizeof(st->alerts), "%d%%",
+           (v + 5) / 10);
+  kit_set_value(k, S_EFFECTS, desk_sound_effects());
+
+  st->napps = 0;
+  if (desk_sound_levels(&st->levels) >= 0)
+    {
+      for (i = 0; i < st->levels.n && st->napps < APPLEVELS; i++)
+        {
+          if (strcmp(st->levels.l[i].name, DESK_SOUND_ALERTS) != 0)
+            {
+              st->app[st->napps++] = i;
+            }
+        }
+    }
+
+  kit_show(k, S_NOAPPS, st->napps == 0);
+  kit_show(k, S_APPCARD, st->napps > 0);
+  for (i = 0; i < APPLEVELS; i++)
+    {
+      kit_show(k, S_APPROW + i, i < st->napps);
+      if (i < st->napps)
+        {
+          const struct fpcmix_level_s *l = &st->levels.l[st->app[i]];
+
+          set_text(st, S_APPNAME + i, st->appname[i], sizeof(st->appname[i]),
+                   "%s%s", l->name, sound_playing(info, l->name) ?
+                   "\nPlaying" : "");
+          kit_set_value(k, S_APPLEVEL + 2 * i, l->level);
+          set_text(st, S_APPLEVEL + 2 * i + 1, st->applevel[i],
+                   sizeof(st->applevel[i]), "%d%%", (l->level + 5) / 10);
+        }
+    }
+}
+#endif
 
 static void show_page(struct settings_s *st, int page)
 {
@@ -690,6 +870,8 @@ static void show_page(struct settings_s *st, int page)
     {
       kit_invalidate(&st->kit, S_ABOUT);         /* The display's size */
     }
+
+  settings_sync(st);                           /* A page's own (Sound) */
 }
 
 /****************************************************************************
@@ -799,6 +981,12 @@ static void settings_event(struct kit_s *k, struct kit_widget_s *wg, int ev)
         {
           desk_dock_pin(id - S_PIN, !desk_dock_pinned(id - S_PIN));
         }
+#ifdef CONFIG_FPCDESK_SOUND
+      else if (id == S_ALERTTEST)
+        {
+          desk_sound_play(SND_NOTIFY);
+        }
+#endif
 
       settings_sync(st);
       return;
@@ -919,6 +1107,52 @@ static void settings_event(struct kit_s *k, struct kit_widget_s *wg, int ev)
         time_step(id, k->arg);
         break;
 
+#ifdef CONFIG_FPCDESK_SOUND
+      case S_VOLUME:
+        desk_sound_master(v);
+        desk_topbar_draw();
+        if (ev == KIT_EV_ACTIVATE)
+          {
+            desk_sound_play(SND_VOLUME);       /* How loud it is now */
+            desk_prefs_save();
+          }
+        break;
+
+      case S_MUTE:
+        desk_sound_mute(v ? 1 : 0);
+        desk_topbar_draw();
+        desk_prefs_save();
+        break;
+
+      case S_ALERTS:
+        desk_sound_level(DESK_SOUND_ALERTS, v);
+        if (ev == KIT_EV_ACTIVATE)
+          {
+            desk_sound_play(SND_ALERT);
+            desk_prefs_save();
+          }
+        break;
+
+      case S_EFFECTS:
+        desk_sound_set_effects(v);
+        desk_prefs_save();
+        break;
+
+      case S_APPLEVEL:
+      case S_APPLEVEL + 2:
+      case S_APPLEVEL + 4:
+        if ((id - S_APPLEVEL) / 2 < st->napps)
+          {
+            desk_sound_level(st->levels.l[st->app[(id - S_APPLEVEL) / 2]].name,
+                             v);
+            if (ev == KIT_EV_ACTIVATE)
+              {
+                desk_prefs_save();
+              }
+          }
+        break;
+#endif
+
       case S_TZ:
         v = g_prefs.tzoff + k->arg * 30;
         g_prefs.tzoff = v < -12 * 60 ? -12 * 60 : v > 14 * 60 ? 14 * 60 : v;
@@ -974,6 +1208,9 @@ static void settings_build(struct settings_s *st, struct desk_win_s *w)
     page_dock(st);
     page_input(st);
     page_datetime(st);
+#ifdef CONFIG_FPCDESK_SOUND
+    page_sound(st);
+#endif
     page_about(st);
   kit_end(k);
 }
@@ -1146,6 +1383,19 @@ const struct desk_app_s g_app_settings =
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
+
+/* What a page shows has changed (the mixer's state): what changed drawn
+ * again if it is showing and nothing is being dragged
+ */
+
+void desk_settings_changed(int page)
+{
+  if (g_st != NULL && g_page == page && g_st->kit.down == KIT_NONE)
+    {
+      settings_sync(g_st);
+      kit_flush(&g_st->kit);
+    }
+}
 
 /* Settings at a page (the dock's menu: Dock Settings...) */
 
