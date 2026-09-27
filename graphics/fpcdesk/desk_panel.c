@@ -582,6 +582,7 @@ static int dock_length(int s)
 static void dock_build(void)
 {
   bool listed[APP_COUNT];
+  bool sep = false;
   int room;
   int off;
   int i;
@@ -606,10 +607,14 @@ static void dock_build(void)
     {
       if (!listed[i] && app_running(i))
         {
-          if (g_dock[g_ndock - 1].app != SEP && g_ndock > 1)
+          /* One separator before the first of them */
+
+          if (!sep && g_ndock > 1)
             {
               g_dock[g_ndock++].app = SEP;
             }
+
+          sep = true;
 
           g_dock[g_ndock++].app = i;
           listed[i] = true;
