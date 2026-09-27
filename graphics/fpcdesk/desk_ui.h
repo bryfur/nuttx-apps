@@ -49,14 +49,16 @@
 
 #define UI_FIELD_MAX    256
 
-#define C_UI_FIELD      RGB(0x16, 0x16, 0x1a)
-#define C_UI_BUTTON     RGB(0x3a, 0x3a, 0x40)
-#define C_UI_HOVER      RGB(0x48, 0x48, 0x50)
-#define C_UI_PRESSED    RGB(0x2a, 0x2a, 0x30)
-#define C_UI_DANGER     RGB(0xe0, 0x3c, 0x34)
-#define C_UI_ERROR      RGB(0xff, 0x7b, 0x72)
-#define C_UI_BAR        RGB(0x2a, 0x2a, 0x2e)    /* Tool and status bars */
-#define C_UI_LINE       RGB(0x14, 0x14, 0x16)    /* Hairlines between */
+/* The theme's colours (desk_theme.h) by these older names */
+
+#define C_UI_FIELD      (g_theme.field)
+#define C_UI_BUTTON     (g_theme.control)
+#define C_UI_HOVER      (g_theme.control_hover)
+#define C_UI_PRESSED    (g_theme.control_pressed)
+#define C_UI_DANGER     (g_theme.destructive)
+#define C_UI_ERROR      (g_theme.error)
+#define C_UI_BAR        (g_theme.bar)            /* Tool and status bars */
+#define C_UI_LINE       (g_theme.separator)      /* Hairlines between */
 
 /****************************************************************************
  * Public Types

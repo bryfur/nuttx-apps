@@ -14,7 +14,8 @@ menuconfig GRAPHICS_FPCDESK
 		windows with title bars, traffic-light buttons, round corners
 		and soft shadows, all drawn and composited by the GPU through
 		the NX server (CONFIG_NX_COMPOSITOR).  The terminal runs NSH
-		on pseudo-terminals, in tabs.
+		on pseudo-terminals, in tabs.  A dark and a light theme.  The
+		System Log reads the RAM log (CONFIG_RAMLOG_SYSLOG).
 
 if GRAPHICS_FPCDESK
 
@@ -78,8 +79,9 @@ config FPCDESK_PREFS
 	default ""
 	---help---
 		Where the desktop keeps the settings it remembers across boots
-		(the display mode, the wallpaper).  Empty: .fpcdesk in the home
-		directory ($HOME, else CONFIG_LIBC_HOMEDIR).
+		(the display mode, the wallpaper, the theme, the dock, ...).
+		Empty: .fpcdesk in the home directory ($HOME, else
+		CONFIG_LIBC_HOMEDIR).
 
 config FPCDESK_DESKCTL
 	bool "deskctl: scripted input and screenshots"

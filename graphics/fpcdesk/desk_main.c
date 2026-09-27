@@ -60,6 +60,7 @@
  ****************************************************************************/
 
 struct desk_s g_desk;
+struct desk_prefs_s g_prefs;
 
 static struct
 {
@@ -377,17 +378,32 @@ static void *listener(void *arg)
  * Private Functions: windows
  ****************************************************************************/
 
+/* A window's effects: its shadow as the theme has it, scaled by the
+ * setting, its edge
+ */
+
 static void win_effects(struct desk_win_s *w, uint8_t opacity)
 {
+  static const uint8_t scale[4] =
+  {
+    0, 60, 100, 150                          /* SHADOW_*, percent */
+  };
+
   struct nx_effects_s fx;
+  int shadow;
+
+  shadow = (w->active ? g_theme.shadow_active : g_theme.shadow_inactive) *
+           scale[g_prefs.shadow & 3] / 100;
+  shadow = shadow > 255 ? 255 : shadow;
 
   memset(&fx, 0, sizeof(fx));
-  fx.flags    = NX_FX_ROUND;
+  fx.flags    = NX_FX_ROUND | (g_theme.darkedge ? NX_FX_DARKEDGE : 0);
   fx.layer    = NX_LAYER_NORMAL;
   fx.opacity  = opacity;
-  fx.shadow   = (w->active ? 170 : 100) * opacity / 255;
+  fx.shadow   = (uint8_t)(shadow * opacity / 255);
   fx.shadowdy = w->active ? 8 : 4;
-  fx.border   = (uint8_t)(34 * opacity / 255);
+  fx.border   = g_prefs.border ? (uint8_t)(g_theme.border * opacity / 255) :
+                                 0;
   nx_seteffects((NXWINDOW)w->hwnd, &fx);
 }
 
@@ -516,8 +532,9 @@ void desk_win_title(struct desk_win_s *w)
   ops_reset(&o);
   ops_fill(&o, 0, 0, width, TITLE_H,
            w->active ? C_TITLE_ACTIVE : C_TITLE_INACTIVE);
-  ops_blend(&o, 0, 0, width, 1, C_WHITE, w->active ? 40 : 20);
-  ops_blend(&o, 0, TITLE_H - 1, width, 1, C_BLACK, 120);
+  ops_blend(&o, 0, 0, width, 1, C_WHITE,
+            THEMED(w->active ? 40 : 20, 120));
+  ops_blend(&o, 0, TITLE_H - 1, width, 1, C_SHADE, THEMED(120, 36));
 
   for (i = 0; i < 3; i++)
     {
@@ -551,7 +568,8 @@ void desk_win_title(struct desk_win_s *w)
       if (w->buttonhover || w->buttonpressed)
         {
           ops_rrect(&o, bx, BUTTON_Y, BUTTON_W, BUTTON_H, LUT_R6, 6,
-                    C_WHITE, w->buttonpressed ? 50 : 26);
+                    C_HILITE, THEMED(w->buttonpressed ? 50 : 26,
+                                     w->buttonpressed ? 30 : 16));
         }
 
       ops_text_centre(&o, &g_desk_font_title, bx + BUTTON_W / 2,
@@ -616,9 +634,9 @@ struct desk_win_s *desk_win_open(int app, const char *title, int cw, int ch)
       return NULL;
     }
 
-  if (cw > DESK_W - 40)
+  if (cw > WORK_W - 40)
     {
-      cw = DESK_W - 40;
+      cw = WORK_W - 40;
     }
 
   if (ch + TITLE_H > WORK_H)
@@ -630,11 +648,16 @@ struct desk_win_s *desk_win_open(int app, const char *title, int cw, int ch)
 
   /* Cascade from the top left of the work area */
 
-  x = 90 + 32 * (g_cascade % 8) + 110 * (g_cascade / 8 % 3);
+  x = WORK_X + 90 + 32 * (g_cascade % 8) + 110 * (g_cascade / 8 % 3);
   y = WORK_Y + 18 + 28 * (g_cascade % 8);
-  if (x + w->size.w > DESK_W - 20)
+  if (x + w->size.w > WORK_X + WORK_W - 20)
     {
-      x = DESK_W - 20 - w->size.w;
+      x = WORK_X + WORK_W - 20 - w->size.w;
+    }
+
+  if (x < WORK_X)
+    {
+      x = WORK_X;
     }
 
   if (y + w->size.h > WORK_Y + WORK_H)
@@ -852,9 +875,8 @@ void desk_win_restore(struct desk_win_s *w)
 
 static void win_setmax(struct desk_win_s *w)
 {
-  win_setpos(w, 0, TOPBAR_H);
-  win_setsize(w, DESK_W, DESK_H - TOPBAR_H - TITLE_H - DOCK_H -
-              2 * DOCK_MARGIN);
+  win_setpos(w, WORK_X, TOPBAR_H);
+  win_setsize(w, WORK_W, WORK_Y + WORK_H - TOPBAR_H - TITLE_H);
 }
 
 void desk_win_maximize(struct desk_win_s *w)
@@ -925,21 +947,13 @@ void desk_launch(int app)
  * it again, the others shrink to fit and stay on it
  */
 
-static void on_mode(void)
+void desk_relayout(void)
 {
-  struct nxgl_size_s size;
   struct desk_win_s *w;
   int cw;
   int ch;
 
-  if (nx_displaysize(g_desk.hnx, &size) < 0 ||
-      (size.w == g_desk.w && size.h == g_desk.h))
-    {
-      return;
-    }
-
-  g_desk.w = size.w;
-  g_desk.h = size.h;
+  desk_layout();
   desk_panels_relayout();
 
   for (w = g_desk.wins; w != NULL; w = w->next)
@@ -955,7 +969,7 @@ static void on_mode(void)
         }
       else
         {
-          cw = w->csize.w > DESK_W - 40 ? DESK_W - 40 : w->csize.w;
+          cw = w->csize.w > WORK_W - 40 ? WORK_W - 40 : w->csize.w;
           ch = w->csize.h + TITLE_H > WORK_H ? WORK_H - TITLE_H :
                                                w->csize.h;
           if (cw != w->csize.w || ch != w->csize.h)
@@ -968,8 +982,9 @@ static void on_mode(void)
             }
 
           win_setpos(w,
-                     w->pos.x + w->size.w > DESK_W ?
-                     DESK_W - w->size.w : w->pos.x,
+                     w->pos.x + w->size.w > WORK_X + WORK_W ?
+                     WORK_X + WORK_W - w->size.w :
+                     w->pos.x < WORK_X ? WORK_X : w->pos.x,
                      w->pos.y + w->size.h > WORK_Y + WORK_H ?
                      WORK_Y + WORK_H - w->size.h : w->pos.y);
           if (cw < 0)
@@ -990,6 +1005,96 @@ static void on_mode(void)
           g_apps[w->app]->draw != NULL)
         {
           g_apps[w->app]->draw(w);
+        }
+    }
+}
+
+static void on_mode(void)
+{
+  struct nxgl_size_s size;
+
+  if (nx_displaysize(g_desk.hnx, &size) < 0 ||
+      (size.w == g_desk.w && size.h == g_desk.h))
+    {
+      return;
+    }
+
+  g_desk.w = size.w;
+  g_desk.h = size.h;
+  desk_relayout();
+}
+
+/* A new theme, accent, or window effects: the panels, every title bar,
+ * every window's effects and every window's contents
+ */
+
+void desk_theme_changed(void)
+{
+  struct desk_win_s *w;
+  nxgl_mxpixel_t bg = g_theme.desktop;
+
+  nx_setbgcolor(g_desk.hnx, &bg);
+  desk_panels_relayout();
+
+  for (w = g_desk.wins; w != NULL; w = w->next)
+    {
+      const struct desk_app_s *a = g_apps[w->app];
+
+      if (w->closing)
+        {
+          continue;
+        }
+
+      desk_win_title(w);
+      if (w->fade == 0 && w->fadeout == 0 && !w->minimized)
+        {
+          win_effects(w, 255);
+        }
+
+      if (a->theme != NULL)
+        {
+          a->theme(w);
+        }
+      else if (a->expose != NULL)
+        {
+          a->expose(w, 0, 0, w->csize.w, w->csize.h);
+        }
+      else if (a->draw != NULL)
+        {
+          a->draw(w);
+        }
+    }
+}
+
+void desk_localtime(struct tm *tm)
+{
+  time_t now = time(NULL) + (time_t)g_prefs.tzoff * 60;
+
+  gmtime_r(&now, tm);
+}
+
+/* Quit an application: all of its windows close (asking first where they
+ * would)
+ */
+
+void desk_app_quit(int app)
+{
+  struct desk_win_s *w;
+  struct desk_win_s *next;
+
+  for (w = g_desk.wins; w != NULL; w = next)
+    {
+      next = w->next;
+      if (w->app == app && !w->closing)
+        {
+          if (g_apps[app]->canclose == NULL || g_apps[app]->canclose(w))
+            {
+              desk_win_close(w);
+            }
+          else
+            {
+              desk_win_restore(w);
+            }
         }
     }
 }
@@ -1182,6 +1287,21 @@ static void on_mouse(struct desk_event_s *ev)
 {
   struct desk_win_s *w = ev->win;
 
+  /* A press anywhere but on it closes a menu */
+
+  if (g_desk.menu != NULL && ev->part != PART_MENU &&
+      (ev->buttons & ~g_desk.buttons) != 0)
+    {
+      desk_menu_close();
+      if (ev->part != PART_DOCK && ev->part != PART_LAUNCHER)
+        {
+          g_desk.buttons = ev->buttons;         /* Only that */
+          return;
+        }
+    }
+
+  desk_panels_mouse(ev->part, ev->pos.x, ev->pos.y, ev->buttons);
+
   switch (ev->part)
     {
       case PART_TITLE:
@@ -1209,6 +1329,10 @@ static void on_mouse(struct desk_event_s *ev)
 
       case PART_LAUNCHER:
         desk_launcher_mouse(ev->pos.x, ev->pos.y, ev->buttons);
+        break;
+
+      case PART_MENU:
+        desk_menu_mouse(ev->pos.x, ev->pos.y, ev->buttons);
         break;
 
       default:
@@ -1264,15 +1388,23 @@ static void on_mouse(struct desk_event_s *ev)
   g_desk.buttons = ev->buttons;
 }
 
-/* Keys go to the active terminal */
+/* Keys go to a menu (Escape closes it), the launcher while it is open
+ * (its search), else the active window
+ */
 
 static void on_kbd(struct desk_event_s *ev)
 {
   struct desk_win_s *w = g_desk.active;
 
-  if (g_desk.launcher != NULL && ev->nch > 0 && ev->ch[0] == 0x1b)
+  if (g_desk.menu != NULL && ev->nch == 1 && ev->ch[0] == 0x1b)
     {
-      desk_launcher_toggle();                   /* Escape */
+      desk_menu_close();
+      return;
+    }
+
+  if (g_desk.launcher != NULL)
+    {
+      desk_launcher_key(ev->ch, ev->nch);
       return;
     }
 
@@ -1419,6 +1551,7 @@ int main(int argc, FAR char *argv[])
 
   memset(&g_desk, 0, sizeof(g_desk));
   g_desk.dockhover = -1;
+  g_desk.dockout   = -1;                  /* Not placed yet */
   pthread_mutex_init(&g_q.lock, NULL);
   sem_init(&g_q.count, 0, 0);
 
@@ -1482,6 +1615,15 @@ int main(int argc, FAR char *argv[])
                       "see the boot log): the desktop will look plain\n");
     }
 
+  desk_theme_set(g_prefs.theme, g_prefs.accent);
+  {
+    nxgl_mxpixel_t bg = g_theme.desktop;
+
+    nx_setbgcolor(g_desk.hnx, &bg);
+  }
+
+  desk_input_apply();
+  desk_layout();
   desk_luts_init();
   if (desk_atlas_init() < 0)
     {
