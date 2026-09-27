@@ -19,6 +19,7 @@
 #include <nuttx/nx/nx.h>
 #include <nuttx/nx/nxtk.h>
 #include <nuttx/nx/nxcompose.h>
+#include <nuttx/nx/nxkeys.h>
 
 #include "desk_font.h"
 
@@ -207,6 +208,15 @@ struct desk_app_s
   void (*key)(struct desk_win_s *w, const uint8_t *ch, int n);
                                                  /* Keys, while active: bytes
                                                   * and VT100 sequences */
+  void (*keyev)(struct desk_win_s *w, const struct nx_key_s *k);
+                                                 /* Key events, while active:
+                                                  * each press, repeat and
+                                                  * release, with the
+                                                  * modifiers (nxkeys.h).  An
+                                                  * app that has this gets
+                                                  * its keys here, not as
+                                                  * bytes (key still gets
+                                                  * plain bytes, deskctl k) */
   void (*close)(struct desk_win_s *w);           /* Going: free w->priv's
                                                   * contents (w->priv itself
                                                   * is freed after) */
