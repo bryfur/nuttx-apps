@@ -21,6 +21,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "desk_kit.h"
 
@@ -47,7 +48,8 @@ enum
   D_LIST,
   D_OK,
   D_CANCEL,
-  D_ALT
+  D_ALT,
+  D_WARN
 };
 
 /****************************************************************************
@@ -69,6 +71,9 @@ struct dlg_s
   int kind;
   char title[64];
   char text[160];
+  char warn[96];                         /* Save: "... is there already" */
+  const char *oklabel;
+  bool replace;                          /* ... Replace pressed next saves */
   struct ui_field_s field;
 
   /* Files */
@@ -266,6 +271,27 @@ static void row_icon(struct kit_s *k, struct kit_widget_s *wg,
     }
 }
 
+/* Saving over a file: asked once (the button says Replace, in red) */
+
+static void replace_ask(struct dlg_s *d, bool ask, const char *name)
+{
+  if (ask == d->replace)
+    {
+      return;
+    }
+
+  d->replace = ask;
+  if (ask)
+    {
+      snprintf(d->warn, sizeof(d->warn), "\"%s\" is there already: "
+               "Replace saves over it.", name);
+    }
+
+  kit_show(&d->kit, D_WARN, ask);
+  kit_set_text(&d->kit, D_OK, ask ? "Replace" : d->oklabel);
+  kit_set_style(&d->kit, D_OK, ask ? KIT_BTN_DANGER : KIT_BTN_DEFAULT);
+}
+
 /* The default button: can it be pressed? */
 
 static void dlg_update(struct dlg_s *d)
@@ -378,7 +404,18 @@ static void dlg_ok(struct dlg_s *d)
           {
             ui_field_set(&d->field, "");
             kit_invalidate(&d->kit, D_FIELD);
+            replace_ask(d, false, NULL);
             dir_go(d, path, NULL);
+            return;
+          }
+
+        /* A file of that name: the first time, ask */
+
+        if (!d->replace && access(path, F_OK) == 0)
+          {
+            const char *slash = strrchr(path, '/');
+
+            replace_ask(d, true, slash != NULL ? slash + 1 : path);
             return;
           }
         break;
@@ -429,6 +466,11 @@ static void dlg_event(struct kit_s *dk, struct kit_widget_s *wg, int ev)
           {
             ui_field_set(&d->field, d->ent[d->list.sel].name);
             kit_invalidate(dk, D_FIELD);
+          }
+
+        if (id == D_FIELD || id == D_LIST)
+          {
+            replace_ask(d, false, NULL);         /* Another name */
           }
 
         dlg_update(d);
@@ -538,8 +580,9 @@ void kit_dialog(struct kit_s *k, int id, int kind, const char *title,
       n = kind == KIT_DLG_MESSAGE ? 1 : 2;
     }
 
-  d->id   = id;
-  d->kind = kind;
+  d->id      = id;
+  d->kind    = kind;
+  d->oklabel = buttons[0];
   strlcpy(d->title, title != NULL ? title : "", sizeof(d->title));
   if (!files && kind != KIT_DLG_PROMPT && text != NULL)
     {
@@ -585,6 +628,8 @@ void kit_dialog(struct kit_s *k, int id, int kind, const char *title,
             kit_field(dk, D_FIELD, &d->field, "File name");
             kit_grow(dk, 1);
           kit_end(dk);
+          kit_label(dk, D_WARN, d->warn, KIT_TEXT_ERROR)->flags |=
+            KIT_F_HIDDEN;
         }
     }
 

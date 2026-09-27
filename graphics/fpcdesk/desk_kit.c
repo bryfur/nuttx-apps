@@ -404,6 +404,31 @@ static bool ringed(struct kit_s *k, int i)
 
 /* What a widget covers when drawn: its rectangle and its ring */
 
+/* What of a scrolling box's contents shows: the box, and any it is in */
+
+static struct kit_rect_s viewport(struct kit_s *k, int i,
+                                  struct kit_rect_s r)
+{
+  int p;
+
+  if (!k->scrolls)
+    {
+      return r;
+    }
+
+  for (p = parent_of(k, i); p >= 0; p = parent_of(k, p))
+    {
+      if (k->wg[p].flags & KIT_F_SCROLL)
+        {
+          struct kit_rect_s v = r_of(&k->wg[p]);
+
+          r = r_and(&r, &v);
+        }
+    }
+
+  return r;
+}
+
 static struct kit_rect_s extent(struct kit_s *k, int i)
 {
   struct kit_rect_s r = r_of(&k->wg[i]);
@@ -416,7 +441,72 @@ static struct kit_rect_s extent(struct kit_s *k, int i)
       r.h += 2 * KIT_RING;
     }
 
-  return r;
+  return viewport(k, i, r);
+}
+
+/* A scrolling box's thumb: false if all of it shows */
+
+static bool box_thumb(struct kit_widget_s *wg, int *ty, int *th)
+{
+  int page = wg->min;
+  int total = wg->max;
+
+  if (!(wg->flags & KIT_F_SCROLL) || total <= page || wg->h <= 0)
+    {
+      return false;
+    }
+
+  *th = wg->h * page / total;
+  *th = *th < KIT_THUMB_MIN ? KIT_THUMB_MIN : *th;
+  *ty = wg->y + (wg->h - *th) * wg->value / (total - page);
+  return true;
+}
+
+static void box_scroll_to(struct kit_s *k, int i, int v)
+{
+  struct kit_widget_s *wg = &k->wg[i];
+  int range = wg->max - wg->min;
+
+  range = range < 0 ? 0 : range;
+  v = v < 0 ? 0 : v > range ? range : v;
+  if (v != wg->value)
+    {
+      wg->value  = v;
+      wg->flags |= KIT_F_RELAYOUT;      /* Placed again, drawn again */
+    }
+}
+
+/* Widget i in view: every scrolling box it is in scrolled to it */
+
+static void box_show(struct kit_s *k, int i)
+{
+  struct kit_widget_s *wg = &k->wg[i];
+  int p;
+
+  if (!k->scrolls)
+    {
+      return;
+    }
+
+  for (p = parent_of(k, i); p >= 0; p = parent_of(k, p))
+    {
+      struct kit_widget_s *b = &k->wg[p];
+
+      if (!(b->flags & KIT_F_SCROLL))
+        {
+          continue;
+        }
+
+      if (wg->y < b->y)
+        {
+          box_scroll_to(k, p, b->value - (b->y - wg->y) - KIT_GAP);
+        }
+      else if (wg->y + wg->h > b->y + b->h)
+        {
+          box_scroll_to(k, p, b->value + (wg->y + wg->h - b->y - b->h) +
+                        KIT_GAP);
+        }
+    }
 }
 
 static void dirty(struct kit_s *k, int i)
@@ -777,6 +867,30 @@ static void place(struct kit_s *k, int i, int x, int y, int w, int h)
 
   room = (row ? iw : ih) - sum - (count > 1 ? wg->gap * (count - 1) : 0);
   pos  = row ? ix : iy;
+
+  /* A scrolling column: what does not fit is there, below, offset by its
+   * value (min and max: what shows and all there is)
+   */
+
+  if ((wg->flags & KIT_F_SCROLL) && !row)
+    {
+      wg->min = h;
+      wg->max = h - room;
+      if (room < 0)
+        {
+          int range = -room;
+
+          wg->value = wg->value > range ? range : wg->value < 0 ? 0 :
+                      wg->value;
+          pos  -= wg->value;
+          room  = 0;
+          iw   -= MAX(0, KIT_SB_W + 2 - wg->padx);
+        }
+      else
+        {
+          wg->value = 0;
+        }
+    }
 
   for (j = i + 1; j < wg->end; j = k->wg[j].end)
     {
@@ -1704,6 +1818,19 @@ static void box_draw(struct kit_s *k, int i, const struct kit_rect_s *clip)
       box_ops(k, i);
     }
 
+  if (wg->flags & KIT_F_SCROLL)
+    {
+      int ty;
+      int th;
+
+      if (box_thumb(wg, &ty, &th))
+        {
+          need(k, 2);
+          kit_paint_thumb(g_kops, wg->x + wg->w - KIT_SB_W, ty, th, false,
+                          k->down == i);
+        }
+    }
+
   cut_end();
 }
 
@@ -1846,10 +1973,13 @@ static void widget_draw(struct kit_s *k, int i,
           int by = y + (h - KIT_CHECK) / 2;
           int bs = wg->type == KIT_CHECK_BOX ? KIT_CHECK : KIT_RADIO;
 
-          if (ring)
+          if (ring && wg->type == KIT_CHECK_BOX)
             {
-              kit_paint_ring(o, x, by + (KIT_CHECK - bs) / 2, bs, bs,
-                             KIT_R_CONTROL, gr);
+              kit_paint_ring(o, x, by, bs, bs, KIT_R_CONTROL, gr);
+            }
+          else if (ring)
+            {
+              kit_paint_ring_round(o, x + 1, by + 1, bs, gr);
             }
 
           if (wg->type == KIT_CHECK_BOX)
@@ -2240,6 +2370,7 @@ static void set_focus(struct kit_s *k, int i)
   if (i != KIT_NONE)
     {
       dirty(k, i);
+      box_show(k, i);
     }
 }
 
@@ -2511,6 +2642,13 @@ static int hit(struct kit_s *k, int x, int y, int *part)
     {
       struct kit_widget_s *wg = &k->wg[i];
       struct kit_rect_s r = r_of(wg);
+      int ty;
+      int th;
+
+      if (wg->type != KIT_BOX)
+        {
+          r = viewport(k, i, r);
+        }
 
       if ((wg->flags & KIT_F_HIDDEN) || !r_has(&r, x, y))
         {
@@ -2522,6 +2660,10 @@ static int hit(struct kit_s *k, int x, int y, int *part)
           wg->type != KIT_SEPARATOR)
         {
           found = i;
+        }
+      else if (box_thumb(wg, &ty, &th) && x >= wg->x + wg->w - KIT_SB_W)
+        {
+          found = i;                     /* A scrolling box's bar */
         }
 
       i++;
@@ -2590,6 +2732,16 @@ static int hit(struct kit_s *k, int x, int y, int *part)
             *part = *part < wg->nitems ? *part : PART_NONE;
             break;
 
+          case KIT_BOX:
+            {
+              int ty;
+              int th;
+
+              *part = box_thumb(wg, &ty, &th) && y >= ty && y < ty + th ?
+                      PART_THUMB : PART_SB;
+            }
+            break;
+
           case KIT_SCROLL:
             {
               int ty;
@@ -2634,7 +2786,7 @@ static void mark_part(struct kit_s *k, int i, int part)
           l->sbdirty = true;
         }
     }
-  else if (wg->type != KIT_CUSTOM)
+  else if (wg->type != KIT_CUSTOM && wg->type != KIT_BOX)
     {
       dirty(k, i);
     }
@@ -2829,6 +2981,29 @@ static void press_at(struct kit_s *k, int i, int part, int x, int y)
           }
         break;
 
+      case KIT_BOX:
+        {
+          int ty;
+          int th;
+
+          if (!box_thumb(wg, &ty, &th))
+            {
+              break;
+            }
+
+          if (part == PART_THUMB)
+            {
+              k->grab = y - ty;
+            }
+          else
+            {
+              box_scroll_to(k, i, wg->value + (y < ty ? -wg->min :
+                                               wg->min) * 3 / 4);
+            }
+        }
+
+        return;                         /* Drawn when laid out again */
+
       case KIT_SWATCHES:
         if (part >= 0 && part != wg->value)
           {
@@ -2886,6 +3061,20 @@ static void drag(struct kit_s *k, int x, int y)
         }
         break;
 
+      case KIT_BOX:
+        {
+          int ty;
+          int th;
+
+          if (k->downpart == PART_THUMB && box_thumb(wg, &ty, &th) &&
+              wg->h > th)
+            {
+              box_scroll_to(k, i, (y - k->grab - wg->y) *
+                                  (wg->max - wg->min) / (wg->h - th));
+            }
+        }
+        break;
+
       case KIT_SCROLL:
         {
           int ty;
@@ -2912,7 +3101,11 @@ static void release(struct kit_s *k, int over, int part)
   bool same = over == i && part == k->downpart;
 
   k->down = KIT_NONE;
-  dirty(k, i);
+  if (wg->type != KIT_BOX)
+    {
+      dirty(k, i);
+    }
+
   switch (wg->type)
     {
       case KIT_BUTTON:
@@ -3510,6 +3703,16 @@ static struct kit_widget_s *box(struct kit_s *k, int style, bool row)
     }
 
   return wg;
+}
+
+void kit_box_scroll(struct kit_s *k, int id, int offset)
+{
+  struct kit_widget_s *wg = kit_get(k, id);
+
+  if (wg != NULL && wg->type == KIT_BOX)
+    {
+      box_scroll_to(k, index_of(k, wg), offset);
+    }
 }
 
 struct kit_widget_s *kit_row(struct kit_s *k, int style)
@@ -4125,7 +4328,15 @@ int kit_list_visible(struct kit_s *k, int id)
 
 void kit_place(struct kit_s *k, int x, int y, int w, int h)
 {
-  k->area = r_make(x, y, w, h);
+  int i;
+
+  k->area    = r_make(x, y, w, h);
+  k->scrolls = false;
+  for (i = 0; i < k->n; i++)
+    {
+      k->scrolls |= (k->wg[i].flags & KIT_F_SCROLL) != 0;
+    }
+
   if (k->n > 0)
     {
       place(k, 0, x, y, w, h);

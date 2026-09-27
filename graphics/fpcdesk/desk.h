@@ -450,6 +450,14 @@ void ops_shape(NXWINDOW hwnd, struct desk_ops_s *o, int x, int y, int w,
                int h, uint16_t c, uint8_t alpha, ops_inside_t inside,
                void *arg);
 
+/* A disc d pixels across at (x, y), from the glyph atlas like a character
+ * (one BLEND): false if the atlas has none of that size (6, 8, 14, 16,
+ * 18, 20, 22)
+ */
+
+bool ops_disc_atlas(struct desk_ops_s *o, int x, int y, int d, uint16_t c,
+                    uint8_t alpha);
+
 int  desk_atlas_init(void);
 void desk_luts_init(void);
 

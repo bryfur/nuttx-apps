@@ -263,32 +263,50 @@ void kit_paint_check(struct desk_ops_s *o, int x, int y, bool on, int look)
   kit_paint_icon(o, KIT_ICON_CHECK, x + 1, y + 1, g_theme.accent_text, 0);
 }
 
+/* A disc d across at (x, y): from the glyph atlas, exactly round; a
+ * round rectangle of the nearest shape table if the atlas has no such
+ * size
+ */
+
+static void disc(struct desk_ops_s *o, int x, int y, int d, uint16_t c,
+                 uint8_t alpha)
+{
+  if (!ops_disc_atlas(o, x, y, d, c, alpha))
+    {
+      ops_rrect(o, x, y, d, d, d >= 12 ? LUT_R6 : LUT_R3, d >= 12 ? 6 : 3,
+                c, alpha);
+    }
+}
+
 void kit_paint_radio(struct desk_ops_s *o, int x, int y, bool on, int look)
 {
   int state = look & KIT_LOOK_MASK;
   uint8_t a = state == KIT_LOOK_DISABLED ? 110 : 255;
-  int cx = x + KIT_RADIO / 2;
-  int cy = y + KIT_RADIO / 2;
-  int r = KIT_RADIO / 2;
-
-  /* A disc of the kit's radio size: the round rectangle of the nearest
-   * table, as round as it will go
-   */
 
   if (!on)
     {
-      ops_rrect(o, cx - r, cy - r, 2 * r, 2 * r, LUT_R6, 6,
-                state == KIT_LOOK_HOT ? g_theme.text_dim : g_theme.text_faint, a);
-      ops_rrect(o, cx - r + 1, cy - r + 1, 2 * r - 2, 2 * r - 2, LUT_R6, 6,
-                state == KIT_LOOK_DOWN ? g_theme.control_pressed :
-                state == KIT_LOOK_HOT ? g_theme.control_hover : g_theme.field, 255);
+      disc(o, x, y, KIT_RADIO, state == KIT_LOOK_HOT ? g_theme.text_dim :
+           g_theme.text_faint, a);
+      disc(o, x + 1, y + 1, KIT_RADIO - 2,
+           state == KIT_LOOK_DOWN ? g_theme.control_pressed :
+           state == KIT_LOOK_HOT ? g_theme.control_hover : g_theme.field,
+           255);
       return;
     }
 
-  ops_rrect(o, cx - r, cy - r, 2 * r, 2 * r, LUT_R6, 6,
-            state == KIT_LOOK_DOWN ? darker(g_theme.accent) :
-            state == KIT_LOOK_HOT ? lighter(g_theme.accent) : g_theme.accent, a);
-  ops_disc(o, cx, cy, LUT_R3, 3, g_theme.accent_text, 255);
+  disc(o, x, y, KIT_RADIO, state == KIT_LOOK_DOWN ? darker(g_theme.accent) :
+       state == KIT_LOOK_HOT ? lighter(g_theme.accent) : g_theme.accent, a);
+  disc(o, x + (KIT_RADIO - 6) / 2, y + (KIT_RADIO - 6) / 2, 6,
+       g_theme.accent_text, 255);
+}
+
+/* A round focus ring around a disc d across at (x, y) */
+
+void kit_paint_ring_round(struct desk_ops_s *o, int x, int y, int d,
+                          uint16_t ground)
+{
+  disc(o, x - KIT_RING, y - KIT_RING, d + 2 * KIT_RING, g_theme.focus, 255);
+  disc(o, x - 1, y - 1, d + 2, ground, 255);
 }
 
 void kit_paint_switch(struct desk_ops_s *o, int x, int y, bool on,

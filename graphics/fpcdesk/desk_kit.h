@@ -138,6 +138,9 @@
                                             * rows (a card of settings) */
 #define KIT_F_SELECTED    0x0400           /* Field: all of its text is
                                             * selected (typing replaces it) */
+#define KIT_F_SCROLL      0x0800           /* Column: what does not fit
+                                            * scrolls (a scroll bar at its
+                                            * right; value: the offset) */
 #define KIT_F_DIRTY       0x1000           /* The kit's: to be drawn */
 #define KIT_F_RELAYOUT    0x2000           /* Box: to be laid out again */
 
@@ -452,6 +455,7 @@ struct kit_s
   bool     ring;                   /* Show the focus: keys moved it */
   bool     caret;                  /* A field's caret: its blink */
   bool     tipshown;
+  bool     scrolls;                /* It has a scrolling box */
   uint8_t  buttons;
   int16_t  px;                     /* The pointer */
   int16_t  py;
@@ -598,6 +602,8 @@ void kit_enable(struct kit_s *k, int id, bool enabled);
 void kit_show(struct kit_s *k, int id, bool shown);
 void kit_set_style(struct kit_s *k, int id, int style);
 void kit_scroll_set(struct kit_s *k, int id, int pos, int page, int total);
+void kit_box_scroll(struct kit_s *k, int id, int offset);  /* A scrolling
+                                                            * box's */
 void kit_focus(struct kit_s *k, int id);
 void kit_select_all(struct kit_s *k, int id);      /* A field's text */
 void kit_invalidate(struct kit_s *k, int id);      /* Draw it again */
@@ -730,6 +736,8 @@ void kit_paint_dropdown(struct desk_ops_s *o, int x, int y, int w, int h,
                         const char *label, int look);
 void kit_paint_ring(struct desk_ops_s *o, int x, int y, int w, int h,
                     int r, uint16_t ground);
+void kit_paint_ring_round(struct desk_ops_s *o, int x, int y, int d,
+                          uint16_t ground);
 void kit_paint_icon(struct desk_ops_s *o, int icon, int x, int y,
                     uint16_t c, uint16_t bg);
 void kit_paint_thumb(struct desk_ops_s *o, int x, int y, int h, bool hot,

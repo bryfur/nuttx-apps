@@ -313,6 +313,8 @@ static struct kit_widget_s *page_begin(struct kit_s *k, int page,
   struct kit_widget_s *wg = kit_col(k, KIT_BOX_NONE);
 
   wg->id   = S_PAGE + page;
+  wg->flags |= KIT_F_SCROLL;           /* Taller than the window: it
+                                        * scrolls (800 x 600) */
   wg->padx = PAD;
   wg->pady = 18;
   wg->gap  = 12;
