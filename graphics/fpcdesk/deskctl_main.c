@@ -22,6 +22,9 @@
  *   deskctl mode [N]              the display mode (N: change it)
  *   deskctl redraw                composite all of the display again (a
  *                                 check: the result must not change)
+ *   deskctl key vol+|vol-|mute    a special key on the keyboard (/dev/kbd,
+ *                                 the headless simulator's: the desktop
+ *                                 session reads it as a USB keyboard)
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -34,6 +37,10 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <fcntl.h>
+
+#include <nuttx/input/kbd_codec.h>
+#include <nuttx/input/keyboard.h>
 #include <nuttx/nx/nx.h>
 #include <nuttx/nx/nxcompose.h>
 
@@ -240,7 +247,8 @@ static void deskctl_usage(void)
 {
   fprintf(stderr,
           "usage: deskctl m X Y [BUTTONS] | c X Y | d X0 Y0 X1 Y1 [N] |\n"
-          "               k TEXT | shot FILE | stats [clear|N] | mode [N]\n");
+          "               k TEXT | shot FILE | stats [clear|N] | mode [N] |\n"
+          "               key vol+|vol-|mute\n");
 }
 
 /****************************************************************************
@@ -270,6 +278,33 @@ int main(int argc, FAR char *argv[])
       return EXIT_SUCCESS;
     }
 #endif
+
+  if (strcmp(argv[1], "key") == 0 && argc >= 3)
+    {
+      struct keyboard_event_s ev[2];
+      int fd;
+
+      ev[0].code = strcmp(argv[2], "vol+") == 0 ? KEYCODE_VOLUP :
+                   strcmp(argv[2], "vol-") == 0 ? KEYCODE_VOLDOWN :
+                   strcmp(argv[2], "mute") == 0 ? KEYCODE_MUTE :
+                   (uint32_t)atoi(argv[2]);
+      ev[0].type = KEYBOARD_SPECPRESS;
+      ev[1].code = ev[0].code;
+      ev[1].type = KEYBOARD_SPECREL;
+      fd = open("/dev/kbd", O_WRONLY);
+      if (fd < 0 || write(fd, ev, sizeof(ev)) != sizeof(ev))
+        {
+          fprintf(stderr, "deskctl: no /dev/kbd to write to\n");
+          ret = EXIT_FAILURE;
+        }
+
+      if (fd >= 0)
+        {
+          close(fd);
+        }
+
+      return ret;
+    }
 
   if (strcmp(argv[1], "shot") == 0)
     {

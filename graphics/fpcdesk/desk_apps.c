@@ -24,6 +24,9 @@
 
 #include "nshlib/nshlib.h"
 #include "desk.h"
+#ifdef CONFIG_FPCDESK_SOUND
+#  include "desk_sound.h"
+#endif
 
 static struct desk_ops_s g_o;
 
@@ -123,6 +126,15 @@ static const char * const g_wallnames[3] =
 #define RES_GAP    8
 #define RES_MAX    4
 
+/* The Sound page, below the rest (desk_soundpage.c) */
+
+#ifdef CONFIG_FPCDESK_SOUND
+#  define SOUND_Y  (SET_H + 8)
+#  define SET_ALLH (SOUND_Y + desk_soundpage_height())
+#else
+#  define SET_ALLH SET_H
+#endif
+
 static void settings_draw(struct desk_win_s *w)
 {
   NXWINDOW hwnd = (NXWINDOW)w->hwnd;
@@ -186,6 +198,11 @@ static void settings_draw(struct desk_win_s *w)
     }
 
   ops_draw(hwnd, &g_o);
+#ifdef CONFIG_FPCDESK_SOUND
+  ops_blend(&g_o, 20, y + SOUND_Y - 10, w->csize.w - 40, 1, C_WHITE, 25);
+  ops_draw(hwnd, &g_o);
+  desk_soundpage_draw(w, 20, y + SOUND_Y, w->csize.w - 40);
+#endif
 }
 
 static void settings_mouse(struct desk_win_s *w, int x, int y,
@@ -196,6 +213,13 @@ static void settings_mouse(struct desk_win_s *w, int x, int y,
   int i;
 
   last = buttons;
+#ifdef CONFIG_FPCDESK_SOUND
+  if (desk_soundpage_mouse(w, x, y, buttons))
+    {
+      return;
+    }
+#endif
+
   if (!press)
     {
       return;
@@ -236,7 +260,8 @@ static void settings_mouse(struct desk_win_s *w, int x, int y,
 
 static struct desk_win_s *settings_open(void)
 {
-  struct desk_win_s *w = desk_win_open(APP_SETTINGS, "Settings", 468, SET_H);
+  struct desk_win_s *w = desk_win_open(APP_SETTINGS, "Settings", 468,
+                                       SET_ALLH);
 
   if (w != NULL)
     {
@@ -336,6 +361,9 @@ const struct desk_app_s * const g_apps[APP_COUNT] =
   [APP_FILES]    = &g_app_files,
   [APP_EDITOR]   = &g_app_editor,
   [APP_MONITOR]  = &g_app_monitor,
+#ifdef CONFIG_FPCDESK_MUSIC
+  [APP_MUSIC]    = &g_app_music,
+#endif
   [APP_SETTINGS] = &g_app_settings,
   [APP_ABOUT]    = &g_app_about,
 };
@@ -392,6 +420,11 @@ int desk_prefs_load(void)
         {
           g_desk.wallstyle = n;
         }
+#ifdef CONFIG_FPCDESK_SOUND
+      else if (desk_sound_prefs_line(line))
+        {
+        }
+#endif
     }
 
   fclose(f);
@@ -425,6 +458,9 @@ void desk_prefs_save(void)
 
   fprintf(f, "mode %d\nwallpaper %d\n",
           nx_getdisplaymode(g_desk.hnx, -1, NULL), g_desk.wallstyle);
+#ifdef CONFIG_FPCDESK_SOUND
+  desk_sound_prefs_write(f);
+#endif
   fclose(f);
 }
 

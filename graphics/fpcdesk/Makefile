@@ -17,6 +17,17 @@ CSRCS     = desk_gputest.c desk_draw.c desk_panel.c desk_apps.c desk_fonts.c
 CSRCS    += desk_term.c desk_vt.c desk_files.c desk_edit.c desk_monitor.c
 CSRCS    += desk_ui.c
 
+ifeq ($(CONFIG_FPCDESK_SOUND),y)
+CSRCS    += desk_sound.c desk_volume.c desk_soundpage.c desk_widgets.c
+endif
+
+ifeq ($(CONFIG_FPCDESK_MUSIC),y)
+CSRCS    += desk_music.c
+ifeq ($(CONFIG_AUDIOUTILS_LIBMAD),y)
+CFLAGS   += ${INCDIR_PREFIX}$(APPDIR)/audioutils/libmad/libmad
+endif
+endif
+
 ifeq ($(CONFIG_FPCDESK_DESKCTL),y)
 PROGNAME  += deskctl
 PRIORITY  += 100

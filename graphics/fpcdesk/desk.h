@@ -92,6 +92,9 @@ enum desk_app_e
   APP_FILES,
   APP_EDITOR,
   APP_MONITOR,
+#ifdef CONFIG_FPCDESK_MUSIC
+  APP_MUSIC,
+#endif
   APP_SETTINGS,
   APP_ABOUT,
   APP_COUNT
@@ -106,7 +109,8 @@ enum desk_evtype_e
   EV_POSITION,
   EV_BLOCKED,
   EV_REDRAW,
-  EV_MODE                          /* The display mode has changed */
+  EV_MODE,                         /* The display mode has changed */
+  EV_SOUND                         /* The mixer's state has changed */
 };
 
 enum desk_part_e
@@ -117,7 +121,8 @@ enum desk_part_e
   PART_DOCK,
   PART_LAUNCHER,
   PART_WALLPAPER,
-  PART_TIP
+  PART_TIP,
+  PART_SOUND                       /* The volume popover */
 };
 
 /****************************************************************************
@@ -273,6 +278,9 @@ extern const struct desk_app_s g_app_terminal;   /* desk_term.c */
 extern const struct desk_app_s g_app_files;      /* desk_files.c */
 extern const struct desk_app_s g_app_editor;     /* desk_edit.c */
 extern const struct desk_app_s g_app_monitor;    /* desk_monitor.c */
+#ifdef CONFIG_FPCDESK_MUSIC
+extern const struct desk_app_s g_app_music;      /* desk_music.c */
+#endif
 
 /****************************************************************************
  * Public Function Prototypes
@@ -332,6 +340,10 @@ void desk_win_sync(struct desk_win_s *w);
  */
 
 void desk_wake(struct desk_win_s *w);
+
+/* From any thread: an event (EV_*) for the main thread */
+
+void desk_post(uint8_t type);
 struct desk_win_s *desk_app_window(int app);
 void desk_launch(int app);
 uint32_t desk_ms(void);

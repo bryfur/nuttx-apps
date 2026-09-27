@@ -30,6 +30,9 @@
 #include <nuttx/nx/nxbe.h>
 
 #include "desk.h"
+#ifdef CONFIG_FPCDESK_SOUND
+#  include "desk_sound.h"
+#endif
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -283,10 +286,18 @@ void desk_topbar_draw(void)
   strftime(buf, sizeof(buf), "%a %b %e  %H:%M", &tm);
   ops_text_centre(&g_ops, f, DESK_W / 2, ty, buf, C_WHITE, 255);
 
-  /* The load, right-aligned: a small meter and a figure */
+  /* The volume at the right edge; the load left of it: a small meter and
+   * a figure
+   */
+
+  x = DESK_W - 14;
+#ifdef CONFIG_FPCDESK_SOUND
+  x = desk_volume_topbar(&g_ops, x, ty);
+  x = x < DESK_W - 14 ? x - 12 : x;
+#endif
 
   snprintf(buf, sizeof(buf), "CPU %d%%", g_desk.cpuload);
-  x = DESK_W - 14 - text_width(&g_desk_font_ui, buf);
+  x -= text_width(&g_desk_font_ui, buf);
   ops_text(&g_ops, &g_desk_font_ui, x, ty, buf, C_WHITE, 220);
   ops_rrect(&g_ops, x - 50, 11, 40, 6, LUT_R6, 3, C_WHITE, 50);
   ops_rrect(&g_ops, x - 50, 11,
@@ -309,6 +320,13 @@ void desk_topbar_mouse(int x, int y, uint8_t buttons)
   bool over = x >= ACT_X - 6 && x < ACT_X - 6 + ACT_W && y >= 0 &&
               y < TOPBAR_H;
   static uint8_t last;
+
+#ifdef CONFIG_FPCDESK_SOUND
+  if (desk_volume_topbar_mouse(x, y, buttons))
+    {
+      over = false;
+    }
+#endif
 
   if (over != g_desk.topbarhover)
     {
