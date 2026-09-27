@@ -306,7 +306,7 @@ static void tet_new(struct tetris_s *t)
 {
   memset(t->board, 0, sizeof(t->board));
   t->nbag  = 0;
-  t->seed ^= desk_ms();
+  t->seed ^= desk_seed();
   t->score = 0;
   t->lines = 0;
   t->level = 1;
@@ -1209,7 +1209,7 @@ static struct desk_win_s *tet_open(void)
     }
 
   w->priv = t;
-  t->seed = desk_ms() * 2654435761u;
+  t->seed = desk_seed() * 2654435761u;
   tet_new(t);
   tet_layout(w);
   tet_update(w);

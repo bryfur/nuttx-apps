@@ -522,6 +522,11 @@ void desk_freeze(time_t t)
   g_frozen = t;
 }
 
+uint32_t desk_seed(void)
+{
+  return g_frozen != 0 ? 0x2545f491u : desk_ms();
+}
+
 uint32_t desk_ms(void)
 {
   struct timespec ts;
@@ -742,6 +747,26 @@ static void win_show(struct desk_win_s *w)
   desk_win_activate(w);
 }
 
+/* g_desk.wins is in stacking order, the top first: a window raised goes
+ * to its head
+ */
+
+static void win_to_top(struct desk_win_s *w)
+{
+  struct desk_win_s **pp;
+
+  for (pp = &g_desk.wins; *pp != NULL; pp = &(*pp)->next)
+    {
+      if (*pp == w)
+        {
+          *pp         = w->next;
+          w->next     = g_desk.wins;
+          g_desk.wins = w;
+          break;
+        }
+    }
+}
+
 void desk_win_activate(struct desk_win_s *w)
 {
   struct desk_win_s *old = g_desk.active;
@@ -749,6 +774,7 @@ void desk_win_activate(struct desk_win_s *w)
   if (w != NULL && !w->minimized)
     {
       nxtk_raise(w->hwnd);
+      win_to_top(w);
     }
 
   if (old == w)
@@ -787,7 +813,9 @@ void desk_win_activate(struct desk_win_s *w)
   desk_dock_draw();
 }
 
-/* The next window to be active: the top one not minimised */
+/* The next window to be active: the top one not minimised (the list is
+ * in stacking order)
+ */
 
 static struct desk_win_s *win_next_active(struct desk_win_s *not)
 {
@@ -1041,11 +1069,12 @@ void desk_relayout(void)
       win_client_redraw(w);
     }
 
-  /* Applications that show the mode (Settings) */
+  /* Applications that show the mode (Settings, About) */
 
   for (w = g_desk.wins; w != NULL; w = w->next)
     {
-      if (!w->closing && w->app == APP_SETTINGS &&
+      if (!w->closing &&
+          (w->app == APP_SETTINGS || w->app == APP_ABOUT) &&
           g_apps[w->app]->draw != NULL)
         {
           g_apps[w->app]->draw(w);

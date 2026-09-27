@@ -1998,11 +1998,24 @@ static void ask(struct desk_win_s *w, int prompt)
       const char *home = getenv("HOME");
       char *p = malloc(PATH_MAX);
 
+      /* In the home directory ($HOME, else CONFIG_LIBC_HOMEDIR); without
+       * one, on the microSD, or in /tmp
+       */
+
+#ifdef CONFIG_LIBC_HOMEDIR
+      if (home == NULL)
+        {
+          home = CONFIG_LIBC_HOMEDIR;
+        }
+#endif
+
       if (p != NULL)
         {
-          if (home == NULL || strcmp(home, "/") == 0)
+          if (home == NULL || strcmp(home, "/") == 0 ||
+              access(home, F_OK) != 0)
             {
-              home = access("/mnt/sd0", F_OK) == 0 ? "/mnt/sd0" : "/tmp";
+              home = access("/mnt/sd0", F_OK) == 0 ? "/mnt/sd0" :
+                     access("/tmp", F_OK) == 0 ? "/tmp" : "";
             }
 
           snprintf(p, PATH_MAX, "%s/Untitled.txt", home);

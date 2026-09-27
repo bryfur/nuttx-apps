@@ -469,7 +469,10 @@ static void clock_text(char *buf, size_t len, const struct tm *tm)
 
 void desk_topbar_draw(void)
 {
+  static uint32_t g_topbarhash;
+  uint32_t hash;
   char buf[48];
+  int i;
   struct tm tm;
   const struct desk_font_s *f = &g_desk_font_uib;
   uint16_t fg = g_theme.panel_text;
@@ -536,6 +539,23 @@ void desk_topbar_draw(void)
       ops_text(&g_ops, &g_desk_font_ui, x, ty, buf, fg, 170);
     }
 
+  /* Once a second the list is made again; it is sent only when it
+   * changed (the minute, the load), which spares compositing under it
+   */
+
+  hash = 2166136261u;
+  for (i = 0; i < (int)(g_ops.n * sizeof(g_ops.op[0])); i++)
+    {
+      hash = (hash ^ ((const uint8_t *)g_ops.op)[i]) * 16777619u;
+    }
+
+  if (hash == g_topbarhash)
+    {
+      ops_reset(&g_ops);
+      return;
+    }
+
+  g_topbarhash = hash;
   ops_setlist(g_desk.topbar, &g_ops);
 }
 
@@ -1139,6 +1159,28 @@ void desk_dock_mouse(int x, int y, uint8_t buttons)
           desk_launch(app);
         }
     }
+}
+
+/* Where an application's icon is in the dock, its centre on the display
+ * (deskctl dock): false if it is not there
+ */
+
+bool desk_dock_where(int app, int *x, int *y)
+{
+  int i;
+
+  for (i = 0; i < g_ndock; i++)
+    {
+      if (g_dock[i].app == app)
+        {
+          dock_item_xy(i, x, y);
+          *x += g_desk.dockx + g_dicon / 2;
+          *y += g_desk.docky + g_dicon / 2;
+          return true;
+        }
+    }
+
+  return false;
 }
 
 bool desk_dock_pinned(int app)
@@ -1841,6 +1883,13 @@ int desk_panels_init(void)
   panel_effects(g_desk.wallpaper, NX_LAYER_DESKTOP, 0, 0, 0, 0);
   desk_wallpaper_draw();
   nx_setvisibility(g_desk.wallpaper, false);
+#else
+  /* No wallpaper: the background (NX's, the colour) is ours, so that the
+   * pointer is seen where no window is (leaving the dock onto it)
+   */
+
+  nx_requestbkgd(g_desk.hnx, &g_desk_partcb,
+                 (FAR void *)(uintptr_t)PART_WALLPAPER);
 #endif
 
   /* The top bar */
