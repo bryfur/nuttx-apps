@@ -1,0 +1,10 @@
+############################################################################
+# apps/audioutils/fpcmixer/Make.defs
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+############################################################################
+
+ifneq ($(CONFIG_AUDIOUTILS_FPCMIXER),)
+CONFIGURED_APPS += $(APPDIR)/audioutils/fpcmixer
+endif
