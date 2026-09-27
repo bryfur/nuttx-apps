@@ -78,6 +78,7 @@ void z_init(void);
 void *z_malloc(int size, int tag, void *ptr);
 void z_free(void *ptr);
 void z_free_tags(int lowtag, int hightag);
+int z_purge_cache(int size, unsigned long *purged);
 void z_dump_heap(int lowtag, int hightag);
 void z_file_dump_heap(FILE *f);
 void z_check_heap(void);

@@ -95,6 +95,18 @@ void i_poll_quit_signal(void);
 
 void i_error(const char *error, ...) NORETURN PRINTF_ATTR(1, 2);
 
+/****************************************************************************
+ * Name: i_exit
+ *
+ * Description:
+ *   End the game with this exit code (i_main.c: the program's memory is
+ *   given back; it does not return).  i_exit_error() says why first.
+ *
+ ****************************************************************************/
+
+void i_exit(int code) NORETURN;
+void i_exit_error(const char *msg);
+
 void i_tactile(int on, int off, int total);
 
 void *i_realloc(void *ptr, size_t size);

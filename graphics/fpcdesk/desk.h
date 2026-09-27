@@ -93,6 +93,9 @@ enum desk_app_e
   APP_FILES,
   APP_EDITOR,
   APP_MONITOR,
+#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
+  APP_DOOM,
+#endif
   APP_SETTINGS,
   APP_ABOUT,
   APP_COUNT
@@ -283,6 +286,9 @@ extern const struct desk_app_s g_app_terminal;   /* desk_term.c */
 extern const struct desk_app_s g_app_files;      /* desk_files.c */
 extern const struct desk_app_s g_app_editor;     /* desk_edit.c */
 extern const struct desk_app_s g_app_monitor;    /* desk_monitor.c */
+#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
+extern const struct desk_app_s g_app_doom;       /* desk_game.c */
+#endif
 
 /****************************************************************************
  * Public Function Prototypes

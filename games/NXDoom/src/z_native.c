@@ -210,6 +210,43 @@ static boolean clear_cache(int size)
  * Public Functions
  ****************************************************************************/
 
+/****************************************************************************
+ * Name: z_purge_cache
+ *
+ * Description:
+ *  Let go of cached blocks (the oldest first) worth size bytes, for an
+ *  allocation that failed; *purged counts what went.
+ *
+ * Return:
+ *  True if any blocks were freed.
+ *
+ ****************************************************************************/
+
+int z_purge_cache(int size, unsigned long *purged)
+{
+  memblock_t *block;
+  unsigned long before = 0;
+  unsigned long after = 0;
+  boolean ret;
+
+  for (block = allocated_blocks[PU_CACHE]; block != NULL;
+       block = block->next)
+    {
+      before += block->size;
+    }
+
+  ret = clear_cache(size);
+
+  for (block = allocated_blocks[PU_CACHE]; block != NULL;
+       block = block->next)
+    {
+      after += block->size;
+    }
+
+  *purged += before - after;
+  return ret;
+}
+
 #ifdef TESTING
 void *test_malloc(size_t size)
 {
