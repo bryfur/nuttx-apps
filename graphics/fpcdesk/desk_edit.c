@@ -2782,7 +2782,8 @@ static void edit_mouse(struct desk_win_s *w, int x, int cy, uint8_t buttons)
 static void edit_tick(struct desk_win_s *w)
 {
   struct edit_s *e = w->priv;
-  bool blink = w->active && !e->blink && e->prompt == P_NONE;
+  bool blink = w->active && (!e->blink || desk_frozen()) &&
+               e->prompt == P_NONE;
 
   if (blink != e->blink)
     {

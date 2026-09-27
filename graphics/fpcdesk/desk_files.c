@@ -738,7 +738,7 @@ static void fmt_date(time_t t, char *buf, int n)
   struct tm tm;
   struct tm now;
   time_t tz = (time_t)g_prefs.tzoff * 60;         /* The desktop's zone */
-  time_t tn = time(NULL) + tz;
+  time_t tn = desk_time() + tz;
 
   buf[0] = '\0';
   t += tz;

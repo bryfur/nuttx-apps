@@ -1317,7 +1317,7 @@ static void term_tick(struct desk_win_s *w)
 
   if (t != NULL && w->active)
     {
-      t->blink = !t->blink;
+      t->blink = !t->blink || desk_frozen();
       term_render(w);
     }
 }

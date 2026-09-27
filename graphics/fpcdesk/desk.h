@@ -14,6 +14,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <sys/types.h>
+#include <time.h>
 #include <semaphore.h>
 #include <time.h>
 
@@ -480,6 +481,15 @@ void desk_relayout(void);
 /* The time as the desktop shows it: UTC plus g_prefs.tzoff */
 
 void desk_localtime(struct tm *tm);
+
+/* The wall clock the desktop shows.  Tests (deskctl freeze) stop it at a
+ * fixed time and stop the text cursors blinking (they stay on), so that
+ * screenshots do not depend on when they are taken.
+ */
+
+time_t desk_time(void);
+bool desk_frozen(void);
+void desk_freeze(time_t t);                /* 0: the clock runs again */
 
 /* desk_panel.c: the top bar, the dock, the launcher, the wallpaper */
 
