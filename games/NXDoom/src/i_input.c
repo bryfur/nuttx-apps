@@ -30,8 +30,10 @@
 #include <string.h>
 #include <unistd.h>
 
-#ifdef CONFIG_GAMES_NXDOOM_KEYBOARD
 #include <nuttx/input/kbd_codec.h>
+
+#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
+#include <nuttx/nx/nxkeys.h>
 #endif
 
 #include "d_event.h"
@@ -163,6 +165,7 @@ int mouse_threshold = 10;
  *
  ****************************************************************************/
 
+#ifdef CONFIG_GAMES_NXDOOM_KEYBOARD
 static int init_kbd_dev(struct keyboard_dev *dev)
 {
   if (dev->inited)
@@ -179,6 +182,7 @@ static int init_kbd_dev(struct keyboard_dev *dev)
   dev->inited = true;
   return 0;
 }
+#endif
 
 /****************************************************************************
  * Name: translate_key
@@ -478,6 +482,134 @@ void i_handle_keyboard_event(struct keyboard_event_s *kevent)
 
   d_post_event(&event);
 }
+
+#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
+
+/* The keys held down (Doom's codes), to let go of when the window is left */
+
+static uint8_t g_keysdown[256 / 8];
+
+/****************************************************************************
+ * Name: i_handle_nx_key
+ *
+ * Description:
+ *   A key event from the desktop (nuttx/nx/nxkeys.h): which key, pressed
+ *   (or repeated) or released, what it types.
+ *
+ ****************************************************************************/
+
+void i_handle_nx_key(const struct nx_key_s *key)
+{
+  event_t event;
+  int doomkey;
+
+  if (NX_KEY_ISSPECIAL(key->code))
+    {
+      doomkey = translate_speckey(NX_KEY_KEYCODE(key->code));
+    }
+  else
+    {
+      switch (key->code)
+        {
+          case NX_KEY_ENTER:
+            doomkey = KEY_ENTER;
+            break;
+
+          case NX_KEY_TAB:
+            doomkey = KEY_TAB;
+            break;
+
+          case NX_KEY_ESCAPE:
+            doomkey = KEY_ESCAPE;
+            break;
+
+          case NX_KEY_BACKSPACE:
+            doomkey = KEY_BACKSPACE;
+            break;
+
+          default:
+            doomkey = key->code >= 0x20 && key->code < 0x7f ? key->code : 0;
+            break;
+        }
+    }
+
+  if (doomkey <= 0 || doomkey > 0xff)
+    {
+      return;
+    }
+
+  memset(&event, 0, sizeof(event));
+  event.data1 = doomkey;
+  if ((key->flags & NX_KEY_RELEASE) != 0)
+    {
+      if ((g_keysdown[doomkey / 8] & (1 << (doomkey % 8))) == 0)
+        {
+          return;                      /* Pressed before the window was */
+        }
+
+      g_keysdown[doomkey / 8] &= ~(1 << (doomkey % 8));
+      event.type = ev_keyup;
+    }
+  else
+    {
+      g_keysdown[doomkey / 8] |= 1 << (doomkey % 8);
+      event.type  = ev_keydown;
+      event.data2 = key->code >= 0x20 && key->code < 0x7f ? key->code : 0;
+      event.data3 = key->ch >= 0x20 && key->ch < 0x7f ? key->ch : 0;
+    }
+
+  d_post_event(&event);
+}
+
+/****************************************************************************
+ * Name: i_release_keys
+ *
+ * Description:
+ *   The window is not active any more: every key held is let go of.
+ *
+ ****************************************************************************/
+
+void i_release_keys(void)
+{
+  event_t event;
+  int k;
+
+  memset(&event, 0, sizeof(event));
+  event.type = ev_keyup;
+  for (k = 0; k < 256; k++)
+    {
+      if ((g_keysdown[k / 8] & (1 << (k % 8))) != 0)
+        {
+          g_keysdown[k / 8] &= ~(1 << (k % 8));
+          event.data1 = k;
+          d_post_event(&event);
+        }
+    }
+}
+
+/****************************************************************************
+ * Name: i_handle_desk_mouse
+ *
+ * Description:
+ *   The pointer over the window: buttons held (1 left, 2 middle, 4 right,
+ *   NX's) and how far it moved, in the frame's pixels.  It turns (across
+ *   only: the pointer is free, it does not also walk).
+ *
+ ****************************************************************************/
+
+void i_handle_desk_mouse(int buttons, int dx, int dy)
+{
+  event_t event;
+
+  memset(&event, 0, sizeof(event));
+  event.type  = ev_mouse;
+  event.data1 = ((buttons & 1) ? 1 : 0) | ((buttons & 4) ? 2 : 0) |
+                ((buttons & 2) ? 4 : 0);
+  event.data2 = dx * 8;
+  event.data3 = 0;
+  d_post_event(&event);
+}
+#endif /* CONFIG_GAMES_NXDOOM_DESKTOP */
 
 void i_start_text_input(int x1, int y1, int x2, int y2)
 {

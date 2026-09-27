@@ -236,7 +236,9 @@ static void cb_kbd(uint8_t nch, const uint8_t *ch)
   ev.type = EV_KBD;
   while (nch > 0)
     {
-      ev.nch = nch > sizeof(ev.ch) ? sizeof(ev.ch) : nch;
+      /* Whole key events in each (nxkeys.h) */
+
+      ev.nch = nx_key_split(ch, nch, sizeof(ev.ch));
       memcpy(ev.ch, ch, ev.nch);
       q_push(&ev);
       ch  += ev.nch;
@@ -1410,29 +1412,71 @@ static void on_mouse(struct desk_event_s *ev)
 }
 
 /* Keys go to a menu (Escape closes it), the launcher while it is open
- * (its search), else the active window
+ * (its search), else the active window: key events (nxkeys.h) to an
+ * application that takes them, else what they type, as bytes; plain bytes
+ * (deskctl k) as they are
  */
+
+static void kbd_bytes(struct desk_win_s *w, const uint8_t *ch, int n)
+{
+  if (n <= 0)
+    {
+      return;
+    }
+
+  if (g_desk.menu != NULL && n == 1 && ch[0] == 0x1b)
+    {
+      desk_menu_close();
+    }
+  else if (g_desk.launcher != NULL)
+    {
+      desk_launcher_key(ch, n);
+    }
+  else if (w != NULL && !w->closing && g_apps[w->app]->key != NULL)
+    {
+      g_apps[w->app]->key(w, ch, n);
+    }
+}
 
 static void on_kbd(struct desk_event_s *ev)
 {
   struct desk_win_s *w = g_desk.active;
+  const uint8_t *ch = ev->ch;
+  uint8_t bytes[sizeof(ev->ch) + NX_KEY_MAXBYTES];
+  uint8_t seq[NX_KEY_MAXBYTES];
+  struct nx_key_s key;
+  uint8_t byte;
+  int left = ev->nch;
+  int nb = 0;
+  int item;
 
-  if (g_desk.menu != NULL && ev->nch == 1 && ev->ch[0] == 0x1b)
+  while ((item = nx_key_next(&ch, &left, &key, &byte)) != NX_KEYITEM_NONE)
     {
-      desk_menu_close();
-      return;
+      if (item == NX_KEYITEM_BYTE)
+        {
+          bytes[nb++] = byte;
+          continue;
+        }
+
+      /* A key event: the bytes before it first */
+
+      kbd_bytes(w, bytes, nb);
+      nb = 0;
+
+      if (g_desk.menu == NULL && g_desk.launcher == NULL && w != NULL &&
+          !w->closing && g_apps[w->app]->keyev != NULL)
+        {
+          g_apps[w->app]->keyev(w, &key);
+        }
+      else
+        {
+          /* One call a key: an Escape on its own is the key (ui_keys()) */
+
+          kbd_bytes(w, seq, nx_key_bytes(&key, seq));
+        }
     }
 
-  if (g_desk.launcher != NULL)
-    {
-      desk_launcher_key(ev->ch, ev->nch);
-      return;
-    }
-
-  if (w != NULL && !w->closing && g_apps[w->app]->key != NULL)
-    {
-      g_apps[w->app]->key(w, ev->ch, ev->nch);
-    }
+  kbd_bytes(w, bytes, nb);
 }
 
 static void on_event(struct desk_event_s *ev)
@@ -1625,6 +1669,12 @@ int main(int argc, FAR char *argv[])
       fprintf(stderr, "desk: not connected: %d\n", errno);
       return EXIT_FAILURE;
     }
+
+  /* Key events, not only bytes: the applications that want them get
+   * presses and releases (games), the others what the keys type
+   */
+
+  nx_kbdmode(g_desk.hnx, NX_KBDMODE_KEYS);
 
   pthread_attr_init(&attr);
   pthread_attr_setstacksize(&attr, CONFIG_FPCDESK_LISTENER_STACKSIZE);

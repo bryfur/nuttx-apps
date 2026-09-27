@@ -21,6 +21,7 @@
 #include <nuttx/nx/nx.h>
 #include <nuttx/nx/nxtk.h>
 #include <nuttx/nx/nxcompose.h>
+#include <nuttx/nx/nxkeys.h>
 
 #include "desk_font.h"
 #include "desk_theme.h"
@@ -133,6 +134,9 @@ enum desk_app_e
   APP_TETRIS,
   APP_SOLITAIRE,
   APP_BREAKOUT,
+#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
+  APP_DOOM,
+#endif
   APP_SETTINGS,
   APP_ABOUT,
   APP_LOG,
@@ -263,6 +267,15 @@ struct desk_app_s
   void (*key)(struct desk_win_s *w, const uint8_t *ch, int n);
                                                  /* Keys, while active: bytes
                                                   * and VT100 sequences */
+  void (*keyev)(struct desk_win_s *w, const struct nx_key_s *k);
+                                                 /* Key events, while active:
+                                                  * each press, repeat and
+                                                  * release, with the
+                                                  * modifiers (nxkeys.h).  An
+                                                  * app that has this gets
+                                                  * its keys here, not as
+                                                  * bytes (key still gets
+                                                  * plain bytes, deskctl k) */
   void (*close)(struct desk_win_s *w);           /* Going: free w->priv's
                                                   * contents (w->priv itself
                                                   * is freed after) */
@@ -375,6 +388,9 @@ extern const struct desk_app_s g_app_solitaire;  /* desk_solitaire.c */
 extern const struct desk_app_s g_app_breakout;   /* desk_breakout.c */
 extern const struct desk_app_s g_app_settings;   /* desk_settings.c */
 extern const struct desk_app_s g_app_log;        /* desk_log.c */
+#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
+extern const struct desk_app_s g_app_doom;       /* desk_game.c */
+#endif
 
 /****************************************************************************
  * Public Function Prototypes

@@ -30,9 +30,7 @@
 
 #include "doomtype.h"
 
-#ifdef CONFIG_GAMES_NXDOOM_KEYBOARD
 #include <nuttx/input/keyboard.h>
-#endif
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -68,6 +66,13 @@ void i_start_text_input(int x1, int y1, int x2, int y2);
 void i_stop_text_input(void);
 
 void i_handle_keyboard_event(struct keyboard_event_s *kevent);
+
+#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
+struct nx_key_s;
+void i_handle_nx_key(const struct nx_key_s *key);
+void i_release_keys(void);
+void i_handle_desk_mouse(int buttons, int dx, int dy);
+#endif
 void i_handle_mouse_event(void);
 
 #ifdef CONFIG_GAMES_NXDOOM_KEYBOARD

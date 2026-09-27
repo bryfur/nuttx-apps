@@ -83,6 +83,41 @@ config FPCDESK_PREFS
 		Empty: .fpcdesk in the home directory ($HOME, else
 		CONFIG_LIBC_HOMEDIR).
 
+if GAMES_NXDOOM_DESKTOP
+
+config FPCDESK_DOOM_PRIORITY
+	int "Doom: priority"
+	default 90
+	---help---
+		The game's task, below the desktop's so that the desktop stays
+		quick to answer while it runs.
+
+config FPCDESK_DOOM_STACKSIZE
+	int "Doom: stack size"
+	default 8192
+
+config FPCDESK_DOOM_WADDIRS
+	string "Doom: where else to look for the game's data"
+	default ""
+	---help---
+		Directories, separated by spaces, where Doom's window looks for
+		an IWAD (doom1.wad, doom.wad, doom2.wad, freedoom1.wad, ...)
+		after the home directory ($HOME, else CONFIG_LIBC_HOMEDIR).
+		Doom keeps its configuration and saved games in .doom/ beside
+		the IWAD it found.
+
+config FPCDESK_GAME_CPUSCALE
+	bool "Games: scale frames on the CPU"
+	default n
+	---help---
+		A game's frames are scaled to its window across by the CPU (for
+		free: a palette lookup gives the pixel twice) and down by the
+		GPU (each row PUT once into a hidden window, then COPYed as many
+		times as the scale).  This scales down on the CPU too and PUTs
+		all of it: twice the bytes on the link at 2x.  For comparison.
+
+endif
+
 config FPCDESK_DESKCTL
 	bool "deskctl: scripted input and screenshots"
 	default y
