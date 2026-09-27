@@ -8,9 +8,9 @@
  * a popover below it: the master volume (a slider; the speaker mutes),
  * what is playing (each program with its level meter and its own level),
  * and a way to the Sound settings.  A volume key shows the popover for a
- * moment.  The popover is a layer window (a display list over a
- * translucent backdrop), redrawn whole when anything in it changes; while
- * it is open its meters are read ten times a second.
+ * moment.  The popover is a layer window (a display list over the theme's
+ * popup backdrop), redrawn whole when anything in it changes; while it is
+ * open its meters are read ten times a second.
  *
  * Hooks: see desk_sound.h.
  ****************************************************************************/
@@ -23,6 +23,7 @@
 #include <nuttx/nx/nxbe.h>
 
 #include "desk_sound.h"
+#include "desk_theme.h"
 #include "desk_widgets.h"
 
 /****************************************************************************
@@ -36,6 +37,22 @@
 #define POP_TOP         56              /* Below the master volume */
 #define POP_METER_MS    100
 #define POP_OSD_MS      1500
+
+/****************************************************************************
+ * Private Types
+ ****************************************************************************/
+
+/* A slider of desk_widgets' (0..1000) and what the pointer does with it */
+
+struct vslider_s
+{
+  int16_t  x;
+  int16_t  y;
+  int16_t  w;
+  uint16_t value;
+  bool     hot;
+  bool     drag;
+};
 
 /****************************************************************************
  * Private Data
@@ -58,10 +75,10 @@ static struct
   bool     mutehot;
   bool     linkhot;
   uint32_t meterms;
-  struct wdg_slider_s master;
+  struct vslider_s master;
   int      nrows;
   int8_t   chan[FPCMIX_NCHAN_MAX];      /* The channel each row shows */
-  struct wdg_slider_s lev[FPCMIX_NCHAN_MAX];
+  struct vslider_s lev[FPCMIX_NCHAN_MAX];
   uint16_t peak[FPCMIX_NCHAN_MAX];      /* What the meters show */
   struct desk_ops_s ops;
 } g_vol;
@@ -69,6 +86,46 @@ static struct
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
+
+static bool vslider_over(const struct vslider_s *s, int x, int y)
+{
+  return x >= s->x && x < s->x + s->w && y >= s->y &&
+         y < s->y + WG_SLIDER_H;
+}
+
+/* Every pointer event (and the buttons before it): true if the value has
+ * changed (a press on it jumps there, a drag follows)
+ */
+
+static bool vslider_mouse(struct vslider_s *s, int x, int y,
+                          uint8_t buttons, uint8_t last)
+{
+  bool down = (buttons & NX_MOUSE_LEFTBUTTON) != 0;
+  int v = s->value;
+
+  s->hot = vslider_over(s, x, y);
+  if (down && !(last & NX_MOUSE_LEFTBUTTON) && s->hot)
+    {
+      s->drag = true;
+    }
+  else if (!down)
+    {
+      s->drag = false;
+    }
+
+  if (s->drag)
+    {
+      s->value = wg_slider_value(s->x, s->w, 0, FPCMIX_VOLUME_MAX, x);
+    }
+
+  return s->value != v;
+}
+
+static void vslider_draw(struct desk_ops_s *o, const struct vslider_s *s)
+{
+  wg_slider(o, s->x, s->y, s->w, s->value, 0, FPCMIX_VOLUME_MAX,
+            s->hot || s->drag);
+}
 
 /* The programs to list: playing, paused or playing out, but not the
  * desktop's own system sounds
@@ -113,6 +170,7 @@ static void pop_draw(void)
   const struct fpcmix_info_s *info = desk_sound_info();
   struct desk_ops_s *o = &g_vol.ops;
   const struct desk_font_s *f = &g_desk_font_ui;
+  uint16_t fg = g_theme.popup_text;
   char buf[40];
   int y;
   int i;
@@ -130,77 +188,73 @@ static void pop_draw(void)
 
   if (g_vol.mutehot)
     {
-      ops_rrect(o, POP_PAD - 6, 12, 38, 32, LUT_R6, 6, C_WHITE, 30);
+      ops_rrect(o, POP_PAD - 6, 12, 38, 32, LUT_R6, 6, fg, 30);
     }
 
-  wdg_speaker(o, POP_PAD, 18, 20, wdg_speaker_waves(info->master),
-              info->mute, C_WHITE, 255);
-  g_vol.master.x     = POP_PAD + 44;
-  g_vol.master.y     = 18;
-  g_vol.master.w     = g_vol.w - POP_PAD - 44 - 48;
-  g_vol.master.dim   = info->mute;
+  wg_speaker(o, POP_PAD, 18, 20, wg_speaker_waves(info->master),
+             info->mute, fg, 255);
+  g_vol.master.x     = POP_PAD + 40;
+  g_vol.master.y     = 16;
+  g_vol.master.w     = g_vol.w - POP_PAD - 40 - 50;
   if (!g_vol.master.drag)
     {
       g_vol.master.value = info->master;
     }
 
-  wdg_slider_draw(o, &g_vol.master);
+  vslider_draw(o, &g_vol.master);
   snprintf(buf, sizeof(buf), "%d%%", (info->master + 5) / 10);
   ops_text(o, &g_desk_font_uib, g_vol.w - POP_PAD -
            text_width(&g_desk_font_uib, buf), 28 - text_height(f) / 2, buf,
-           info->mute ? C_TEXT_DIM : C_WHITE, 255);
+           fg, info->mute ? 130 : 255);
 
   /* What is playing */
 
-  ops_blend(o, POP_PAD, POP_TOP - 6, g_vol.w - 2 * POP_PAD, 1, C_WHITE, 40);
+  ops_blend(o, POP_PAD, POP_TOP - 6, g_vol.w - 2 * POP_PAD, 1, fg, 40);
   ops_text(o, &g_desk_font_small, POP_PAD, POP_TOP + 4,
-           info->gpu ? "PLAYING" : "PLAYING (NO AUDIO IN THE GPU)",
-           C_TEXT_DIM, 255);
+           info->gpu ? "PLAYING" : "PLAYING (NO AUDIO IN THE GPU)", fg,
+           150);
 
   y = POP_TOP + 30;
   if (g_vol.nrows == 0)
     {
-      ops_text(o, f, POP_PAD, y + 6, "Nothing is playing", C_TEXT_DIM,
-               255);
+      ops_text(o, f, POP_PAD, y + 6, "Nothing is playing", fg, 150);
     }
 
   for (i = 0; i < g_vol.nrows; i++, y += POP_ROW)
     {
       const struct fpcmix_chan_s *c = &info->chan[g_vol.chan[i]];
-      struct wdg_slider_s *s = &g_vol.lev[i];
+      struct vslider_s *s = &g_vol.lev[i];
 
       ops_text(o, &g_desk_font_uib, POP_PAD, y, c->name[0] ? c->name : "?",
-               C_WHITE, 255);
+               fg, 255);
       pop_format(c, buf, sizeof(buf));
-      ops_text(o, &g_desk_font_small, POP_PAD, y + 18, buf, C_TEXT_DIM,
-               255);
+      ops_text(o, &g_desk_font_small, POP_PAD, y + 18, buf, fg, 150);
       g_vol.peak[i] = c->peak;
-      wdg_meter(o, POP_PAD, y + 34, 110, 4, c->peak, 255);
+      wg_meter(o, POP_PAD, y + 34, 110, 4, c->peak);
 
-      s->x   = POP_PAD + 136;
-      s->y   = y + 6;
-      s->w   = g_vol.w - POP_PAD - 136 - POP_PAD;
-      s->dim = info->mute;
+      s->x = POP_PAD + 136;
+      s->y = y + 4;
+      s->w = g_vol.w - POP_PAD - 136 - POP_PAD;
       if (!s->drag)
         {
           s->value = c->level;
         }
 
-      wdg_slider_draw(o, s);
+      vslider_draw(o, s);
     }
 
   /* The way to the settings */
 
   y = g_vol.h - 38;
-  ops_blend(o, POP_PAD, y, g_vol.w - 2 * POP_PAD, 1, C_WHITE, 40);
+  ops_blend(o, POP_PAD, y, g_vol.w - 2 * POP_PAD, 1, fg, 40);
   if (g_vol.linkhot)
     {
       ops_rrect(o, POP_PAD / 2, y + 6, g_vol.w - POP_PAD, 26, LUT_R6, 6,
-                C_WHITE, 30);
+                fg, 30);
     }
 
-  ops_text(o, f, POP_PAD, y + 11, "Sound Settings" DESK_CH_ELLIPSIS,
-           C_WHITE, 255);
+  ops_text(o, f, POP_PAD, y + 11, "Sound Settings" DESK_CH_ELLIPSIS, fg,
+           255);
   ops_setlist(g_vol.pop, o);
 }
 
@@ -248,10 +302,16 @@ static void pop_open(bool osd)
       fx.flags    = NX_FX_ROUND;
       fx.layer    = NX_LAYER_OVERLAY;
       fx.opacity  = 255;
-      fx.backdrop = 235;
-      fx.tint     = RGB(0x24, 0x24, 0x28);
+      fx.backdrop = g_theme.popup_alpha;
+      fx.tint     = g_theme.popup;
       fx.shadow   = 140;
       fx.shadowdy = 6;
+      if (g_theme.darkedge)
+        {
+          fx.flags |= NX_FX_DARKEDGE;        /* Light glass: a dark edge */
+          fx.border = 40;
+        }
+
       nx_seteffects(g_vol.pop, &fx);
 
       memset(&g_vol.master, 0, sizeof(g_vol.master));
@@ -304,13 +364,14 @@ int desk_volume_topbar(struct desk_ops_s *o, int right, int ty)
   g_vol.iw = w + 12;
   if (g_vol.hover || g_vol.pop != NULL)
     {
-      ops_rrect(o, g_vol.ix, 4, g_vol.iw, TOPBAR_H - 8, LUT_R6, 6, C_WHITE,
-                g_vol.pop != NULL ? 70 : 45);
+      ops_rrect(o, g_vol.ix, 4, g_vol.iw, TOPBAR_H - 8, LUT_R6, 6,
+                g_theme.panel_text, THEMED(g_vol.pop != NULL ? 70 : 45,
+                                           g_vol.pop != NULL ? 40 : 24));
     }
 
-  wdg_speaker(o, x, (TOPBAR_H - ICON_S) / 2, ICON_S,
-              wdg_speaker_waves(info->master), info->mute, C_WHITE,
-              info->mute ? 170 : 235);
+  wg_speaker(o, x, (TOPBAR_H - ICON_S) / 2, ICON_S,
+             wg_speaker_waves(info->master), info->mute, g_theme.panel_text,
+             info->mute ? 170 : 235);
   return g_vol.ix;
 }
 
@@ -383,7 +444,7 @@ void desk_volume_popover_mouse(int x, int y, uint8_t buttons)
 
   was  = g_vol.master.hot;
   drag = g_vol.master.drag;
-  if (wdg_slider_mouse(&g_vol.master, x, y, buttons, g_vol.last))
+  if (vslider_mouse(&g_vol.master, x, y, buttons, g_vol.last))
     {
       desk_sound_master(g_vol.master.value);
       desk_topbar_draw();
@@ -406,12 +467,12 @@ void desk_volume_popover_mouse(int x, int y, uint8_t buttons)
 
   for (i = 0; i < g_vol.nrows; i++)
     {
-      struct wdg_slider_s *s = &g_vol.lev[i];
+      struct vslider_s *s = &g_vol.lev[i];
 
       was  = s->hot;
       drag = s->drag;
 
-      if (wdg_slider_mouse(s, x, y, buttons, g_vol.last))
+      if (vslider_mouse(s, x, y, buttons, g_vol.last))
         {
           desk_sound_level(info->chan[g_vol.chan[i]].name, s->value);
           redraw = true;
@@ -440,7 +501,7 @@ void desk_volume_popover_mouse(int x, int y, uint8_t buttons)
   if (hot && press)
     {
       pop_close();
-      desk_launch(APP_SETTINGS);
+      desk_settings_show(SETTINGS_SOUND);
       return;
     }
 

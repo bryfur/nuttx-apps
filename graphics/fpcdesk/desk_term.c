@@ -59,7 +59,7 @@
 #define READER_STACK   3072
 #define POLL_MS        500
 
-#define C_CURSOR       RGB(0xd8, 0xd8, 0xd8)
+#define C_CURSOR       (g_theme.term_cursor)
 
 /****************************************************************************
  * Private Types
@@ -138,18 +138,6 @@ struct term_s
 static struct desk_ops_s g_o;
 static NXWINDOW g_hwnd;                /* Where g_o goes */
 
-/* The 16 colours: a dark theme's, after the desktop's own */
-
-static const uint16_t g_pal16[16] =
-{
-  RGB(0x3a, 0x3a, 0x40), RGB(0xff, 0x5f, 0x57), RGB(0x32, 0xd7, 0x4b),
-  RGB(0xfe, 0xbc, 0x2e), RGB(0x3a, 0x8e, 0xff), RGB(0xbf, 0x5a, 0xf2),
-  RGB(0x40, 0xc8, 0xe0), RGB(0xd8, 0xd8, 0xd8),
-  RGB(0x6e, 0x6e, 0x76), RGB(0xff, 0x8a, 0x80), RGB(0x6c, 0xf0, 0x85),
-  RGB(0xff, 0xd6, 0x5c), RGB(0x78, 0xb4, 0xff), RGB(0xd8, 0x92, 0xff),
-  RGB(0x80, 0xe4, 0xf4), RGB(0xff, 0xff, 0xff)
-};
-
 /****************************************************************************
  * Private Functions: colours, cells
  ****************************************************************************/
@@ -163,7 +151,7 @@ static uint16_t colour(uint8_t i)
 
   if (i < 16)
     {
-      return g_pal16[i];
+      return g_theme.term_pal[i];          /* The theme's 16 */
     }
 
   if (i < 232)
@@ -419,7 +407,8 @@ static void draw_strip(struct desk_win_s *w, struct term_s *t)
   need(2);
   ops_fill(&g_o, 0, ty, w->csize.w, TAB_H,
            w->active ? C_TITLE_ACTIVE : C_TITLE_INACTIVE);
-  ops_blend(&g_o, 0, ty + TAB_H - 1, w->csize.w, 1, C_BLACK, 120);
+  ops_blend(&g_o, 0, ty + TAB_H - 1, w->csize.w, 1, C_SHADE,
+            THEMED(120, 36));
 
   for (i = 0; i < t->ntabs; i++)
     {
@@ -441,12 +430,13 @@ static void draw_strip(struct desk_win_s *w, struct term_s *t)
       else if (hover)
         {
           ops_rrect(&g_o, x + 3, ty + 3, tw - 6, TAB_H - 7, LUT_R6, 6,
-                    C_WHITE, 14);
+                    C_HILITE, THEMED(14, 10));
         }
       else if (i + 1 != t->cur && i + 1 < t->ntabs &&
                t->hovertab != i + 1)
         {
-          ops_blend(&g_o, x + tw - 1, ty + 8, 1, TAB_H - 17, C_WHITE, 30);
+          ops_blend(&g_o, x + tw - 1, ty + 8, 1, TAB_H - 17, C_HILITE,
+                    THEMED(30, 40));
         }
 
       /* The title, shortened to fit */
@@ -480,7 +470,8 @@ static void draw_strip(struct desk_win_s *w, struct term_s *t)
           if (hover && t->hoverclose)
             {
               ops_rrect(&g_o, cx, cy, TAB_CLOSE, TAB_CLOSE, LUT_R6, 6,
-                        C_WHITE, t->pressclose == i ? 60 : 30);
+                        C_HILITE, THEMED(t->pressclose == i ? 60 : 30,
+                                         t->pressclose == i ? 36 : 18));
             }
 
           ops_text_centre(&g_o, &g_desk_font_uib, cx + TAB_CLOSE / 2,
@@ -546,7 +537,7 @@ static void draw_sbar(struct desk_win_s *w, struct term_s *t,
   if (th > 0)
     {
       ops_rrect(&g_o, x + (hot ? 1 : 2), ty, hot ? 8 : 6, th, LUT_R3, 3,
-                C_WHITE, hot ? 120 : 70);
+                C_HILITE, THEMED(hot ? 120 : 70, hot ? 100 : 60));
     }
 }
 
@@ -1326,7 +1317,7 @@ static void term_tick(struct desk_win_s *w)
 
   if (t != NULL && w->active)
     {
-      t->blink = !t->blink;
+      t->blink = !t->blink || desk_frozen();
       term_render(w);
     }
 }
@@ -1392,6 +1383,19 @@ static void term_resize(struct desk_win_s *w)
   if (w->priv != NULL)
     {
       term_layout(w);
+      term_render(w);
+    }
+}
+
+/* The theme changed: all of it again */
+
+static void term_theme(struct desk_win_s *w)
+{
+  struct term_s *t = w->priv;
+
+  if (t != NULL)
+    {
+      t->full = true;
       term_render(w);
     }
 }
@@ -1562,4 +1566,5 @@ const struct desk_app_s g_app_terminal =
   .wake   = term_wake,
   .focus  = term_focus,
   .button = term_button,
+  .theme  = term_theme,
 };

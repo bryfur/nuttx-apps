@@ -3,11 +3,12 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Small controls drawn with GPU operations and driven by the pointer: a
- * slider, a switch, a level meter, a speaker icon.  Each is a struct the
- * caller places (its position is in the caller's coordinates) and a draw
- * and a mouse function; they know nothing of what they control.  (To go
- * into the shared widget toolkit when there is one.)
+ * Controls drawn into a list of operations, in the theme's colours:
+ * switches, segmented controls, sliders, check boxes, steppers, colour
+ * swatches, sidebar rows, cards with rows of settings.  Each is a drawing
+ * function and, where a control has parts, a function that says which
+ * part a point is on; the caller keeps where it put them and what they
+ * mean (Settings, the System Log's toolbar).
  ****************************************************************************/
 
 #ifndef __APPS_GRAPHICS_FPCDESK_DESK_WIDGETS_H
@@ -19,74 +20,79 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-#define WDG_SLIDER_H     20             /* A slider's height (the knob's) */
-#define WDG_SLIDER_MAX   1000           /* Its values: 0..WDG_SLIDER_MAX */
-#define WDG_SWITCH_W     44
-#define WDG_SWITCH_H     24
-
-/****************************************************************************
- * Public Types
- ****************************************************************************/
-
-/* A horizontal slider: a track across w at (x, y), WDG_SLIDER_H tall */
-
-struct wdg_slider_s
-{
-  int16_t  x;
-  int16_t  y;
-  int16_t  w;
-  uint16_t value;                       /* 0..WDG_SLIDER_MAX */
-  bool     hot;                         /* The pointer is over it */
-  bool     drag;                        /* Being dragged */
-  bool     dim;                         /* Drawn faded (muted, disabled) */
-};
-
-/* An on/off switch, WDG_SWITCH_W x WDG_SWITCH_H at (x, y) */
-
-struct wdg_switch_s
-{
-  int16_t  x;
-  int16_t  y;
-  bool     on;
-  bool     hot;
-};
+#define WG_SWITCH_W     48
+#define WG_SWITCH_H     28
+#define WG_SLIDER_H     24              /* The knob's size */
+#define WG_CHECK        18
+#define WG_STEP         24              /* A stepper's buttons */
+#define WG_SWATCH_R     12
+#define WG_ROW_H        44              /* A row of a card */
 
 /****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
 
-/* The slider.  wdg_slider_mouse() takes every pointer event (x, y in the
- * caller's coordinates) and the buttons of the one before; true when the
- * value has changed (a press on the track jumps there, a drag follows).
+/* A switch, WG_SWITCH_W x WG_SWITCH_H */
+
+void wg_switch(struct desk_ops_s *o, int x, int y, bool on, bool hot);
+
+/* A segmented control of n labels across w; sel lit, hot under the
+ * pointer (-1: none); which segment x is on
  */
 
-void wdg_slider_draw(struct desk_ops_s *o, const struct wdg_slider_s *s);
-bool wdg_slider_mouse(struct wdg_slider_s *s, int x, int y, uint8_t buttons,
-                      uint8_t last);
-bool wdg_slider_over(const struct wdg_slider_s *s, int x, int y);
+void wg_segments(struct desk_ops_s *o, int x, int y, int w, int h,
+                 const char * const *labels, int n, int sel, int hot);
+int  wg_segment_at(int x, int w, int n, int px);
 
-/* The switch: true when a click has turned it over */
+/* A slider of width w for v in [min, max]; the value at px */
 
-void wdg_switch_draw(struct desk_ops_s *o, const struct wdg_switch_s *s);
-bool wdg_switch_mouse(struct wdg_switch_s *s, int x, int y, uint8_t buttons,
-                      uint8_t last);
+void wg_slider(struct desk_ops_s *o, int x, int y, int w, int v, int min,
+               int max, bool hot);
+int  wg_slider_value(int x, int w, int min, int max, int px);
+
+/* A check box, WG_CHECK square */
+
+void wg_check(struct desk_ops_s *o, int x, int y, bool on, bool hot);
+
+/* A stepper: [-] value [+] across w; hot: -1 minus, 1 plus, 0 none; which
+ * button px is on (-1, 1, or 0)
+ */
+
+void wg_stepper(struct desk_ops_s *o, int x, int y, int w,
+                const char *value, int hot);
+int  wg_stepper_at(int x, int w, int px);
+
+/* A colour swatch centred at (cx, cy), a dot in it when selected */
+
+void wg_swatch(struct desk_ops_s *o, int cx, int cy, uint16_t c, bool sel,
+               bool hot);
+
+/* A row of a sidebar: a small coloured tile, the label */
+
+void wg_sidebar_row(struct desk_ops_s *o, int x, int y, int w, int h,
+                    const char *label, uint16_t tile, bool sel, bool hot);
+
+/* A card of nrows rows of WG_ROW_H, hairlines between them; a row's label
+ * (and a caption under it, or NULL)
+ */
+
+void wg_card(struct desk_ops_s *o, int x, int y, int w, int nrows);
+void wg_row_label(struct desk_ops_s *o, int x, int y, const char *label,
+                  const char *caption);
 
 /* A level meter: a bar w x h whose lit part shows peak (0..32767) on a
  * 48 dB scale, green, then amber, then red near full scale
  */
 
-void wdg_meter(struct desk_ops_s *o, int x, int y, int w, int h, int peak,
-               uint8_t alpha);
+void wg_meter(struct desk_ops_s *o, int x, int y, int w, int h, int peak);
 
-/* A speaker of size s (its height) at (x, y): waves 0..3, or muted (a
- * cross); returns its width
+/* A speaker of size s (its height) at (x, y) in colour c: waves 0..3, or
+ * muted (a cross); returns its width.  wg_speaker_waves(): the waves for
+ * a volume of 0..1000.
  */
 
-int  wdg_speaker(struct desk_ops_s *o, int x, int y, int s, int waves,
-                 bool muted, uint16_t c, uint8_t alpha);
-
-/* How many waves a volume (0..1000) gets */
-
-int  wdg_speaker_waves(int volume);
+int  wg_speaker(struct desk_ops_s *o, int x, int y, int s, int waves,
+                bool muted, uint16_t c, uint8_t alpha);
+int  wg_speaker_waves(int volume);
 
 #endif /* __APPS_GRAPHICS_FPCDESK_DESK_WIDGETS_H */

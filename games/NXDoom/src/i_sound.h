@@ -267,6 +267,9 @@ extern int use_libsamplerate;
 extern float libsamplerate_scale;
 
 extern const sound_module_t sound_pcsound_module;
+#ifdef CONFIG_GAMES_NXDOOM_FPCSOUND
+extern const sound_module_t sound_fpc_module;   /* i_fpcsound.c */
+#endif
 
 extern const music_module_t music_pack_module;
 

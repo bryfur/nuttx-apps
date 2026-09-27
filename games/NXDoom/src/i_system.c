@@ -325,7 +325,7 @@ void i_quit(void)
       entry = entry->next;
     }
 
-  exit(0);
+  i_exit(0);
 }
 
 /****************************************************************************
@@ -401,7 +401,7 @@ void i_error(const char *error, ...)
   if (already_quitting)
     {
       fprintf(stderr, "Warning: recursive call to i_error detected.\n");
-      exit(-1);
+      i_exit(-1);
     }
   else
     {
@@ -457,7 +457,8 @@ void i_error(const char *error, ...)
 
   /* abort(); */
 
-  exit(-1);
+  i_exit_error(msgbuf);
+  i_exit(-1);
 }
 
 void *i_realloc(void *ptr, size_t size)

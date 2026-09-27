@@ -14,13 +14,17 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <sys/types.h>
+#include <time.h>
 #include <semaphore.h>
+#include <time.h>
 
 #include <nuttx/nx/nx.h>
 #include <nuttx/nx/nxtk.h>
 #include <nuttx/nx/nxcompose.h>
+#include <nuttx/nx/nxkeys.h>
 
 #include "desk_font.h"
+#include "desk_theme.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -38,35 +42,69 @@
 #define RGB(r, g, b)      ((uint16_t)((((r) >> 3) << 11) | (((g) >> 2) << 5) | \
                                       ((b) >> 3)))
 
-/* The look */
+/* The look: colours by role come from the theme (desk_theme.h); these are
+ * the older names for them
+ */
 
 #define TOPBAR_H          28
 #define TITLE_H           34
-#define DOCK_ICON         48
-#define DOCK_PAD          10
-#define DOCK_H            (DOCK_ICON + 2 * DOCK_PAD)
-#define DOCK_MARGIN       8
-#define WORK_Y            (TOPBAR_H + 6)                 /* Where windows may go */
-#define WORK_H            (DESK_H - WORK_Y - DOCK_H - 2 * DOCK_MARGIN)
 
-#define C_TITLE_ACTIVE    RGB(0x38, 0x38, 0x3c)
-#define C_TITLE_INACTIVE  RGB(0x28, 0x28, 0x2c)
-#define C_TITLE_HILITE    RGB(0x48, 0x48, 0x4d)
-#define C_TITLE_TEXT      RGB(0xec, 0xec, 0xee)
-#define C_TITLE_DIM       RGB(0x8e, 0x8e, 0x93)
-#define C_WINDOW_BG       RGB(0x20, 0x20, 0x24)
-#define C_CARD            RGB(0x30, 0x30, 0x34)
-#define C_TEXT            RGB(0xe8, 0xe8, 0xea)
-#define C_TEXT_DIM        RGB(0x98, 0x98, 0x9e)
-#define C_ACCENT          RGB(0x0a, 0x84, 0xff)
+#define C_TITLE_ACTIVE    (g_theme.title_active)
+#define C_TITLE_INACTIVE  (g_theme.title_inactive)
+#define C_TITLE_HILITE    (g_theme.title_hilite)
+#define C_TITLE_TEXT      (g_theme.title_text)
+#define C_TITLE_DIM       (g_theme.title_dim)
+#define C_WINDOW_BG       (g_theme.window_bg)
+#define C_CARD            (g_theme.card)
+#define C_TEXT            (g_theme.text)
+#define C_TEXT_DIM        (g_theme.text_dim)
+#define C_TEXT_FAINT      (g_theme.text_faint)
+#define C_ACCENT          (g_theme.accent)
+#define C_ACCENT_TEXT     (g_theme.accent_text)
+#define C_SELECTION       (g_theme.selection)
+#define C_HILITE          (g_theme.hilite)
+#define C_SHADE           (g_theme.shade)
+#define C_THUMB           (g_theme.thumb)
+#define C_LIGHT_OFF       (g_theme.light_off)
+#define C_TERM_BG         (g_theme.term_bg)
+#define C_TERM_FG         (g_theme.term_fg)
+
+/* Fixed colours: the traffic lights, white and black */
+
 #define C_CLOSE           RGB(0xff, 0x5f, 0x57)
 #define C_MINIMIZE        RGB(0xfe, 0xbc, 0x2e)
 #define C_MAXIMIZE        RGB(0x28, 0xc8, 0x40)
-#define C_LIGHT_OFF       RGB(0x48, 0x48, 0x4c)
-#define C_TERM_BG         RGB(0x18, 0x18, 0x1c)
-#define C_TERM_FG         RGB(0xd8, 0xd8, 0xd8)
 #define C_WHITE           RGB(0xff, 0xff, 0xff)
 #define C_BLACK           RGB(0x00, 0x00, 0x00)
+
+/* The dock: its icons' size is a setting (40 to 64), and where it is */
+
+#define DOCK_ICON         (g_prefs.dockicon)
+#define DOCK_ICON_MIN     40
+#define DOCK_ICON_MAX     64
+#define DOCK_PAD          (DOCK_ICON / 5)
+#define DOCK_H            (DOCK_ICON + 2 * DOCK_PAD)     /* Its thickness */
+#define DOCK_MARGIN       8
+
+#define DOCK_BOTTOM       0
+#define DOCK_LEFT         1
+#define DOCK_RIGHT        2
+
+/* Where windows may go: the display less the top bar and the dock (unless
+ * it hides itself); desk_layout() works it out
+ */
+
+#define WORK_X            (g_desk.work.pt1.x)
+#define WORK_Y            (g_desk.work.pt1.y)
+#define WORK_W            (g_desk.work.pt2.x - g_desk.work.pt1.x + 1)
+#define WORK_H            (g_desk.work.pt2.y - g_desk.work.pt1.y + 1)
+
+/* Window shadows (Settings) */
+
+#define SHADOW_OFF        0
+#define SHADOW_LIGHT      1
+#define SHADOW_NORMAL     2
+#define SHADOW_STRONG     3
 
 /* Client shape tables (nx_setlut()): round corners of these radii */
 
@@ -74,7 +112,13 @@
 #define LUT_R6            (NX_LUT_CLIENT0 + 1)
 #define LUT_GLOW          (NX_LUT_CLIENT0 + 2)   /* A wide Gaussian around a point */
 #define LUT_R3            (NX_LUT_CLIENT0 + 3)
-#define LUT_R20           (NX_LUT_CLIENT0 + 4)
+
+/* The applications' table: loaded by an application for what it draws into
+ * its own windows, never for a display list (the compositor would replay
+ * that with whatever table is loaded then).  desk_lut_app() loads it.
+ */
+
+#define LUT_APP           (NX_LUT_CLIENT0 + 4)
 
 /* Traffic lights: three discs of radius 6 in the title bar */
 
@@ -91,12 +135,22 @@ enum desk_app_e
   APP_TERMINAL,
   APP_FILES,
   APP_EDITOR,
-  APP_MONITOR,
+  APP_VIEWER,
+  APP_PAINT,
 #ifdef CONFIG_FPCDESK_MUSIC
   APP_MUSIC,
 #endif
+  APP_MONITOR,
+  APP_CALC,
+  APP_TETRIS,
+  APP_SOLITAIRE,
+  APP_BREAKOUT,
+#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
+  APP_DOOM,
+#endif
   APP_SETTINGS,
   APP_ABOUT,
+  APP_LOG,
   APP_COUNT
 };
 
@@ -122,6 +176,8 @@ enum desk_part_e
   PART_LAUNCHER,
   PART_WALLPAPER,
   PART_TIP,
+  PART_MENU,                       /* A pop-up menu */
+  PART_EDGE,                       /* Where the hidden dock comes out */
   PART_SOUND                       /* The volume popover */
 };
 
@@ -152,6 +208,17 @@ struct desk_ops_s
   struct nx_gpuop_s op[NX_GPUOPS_MAX];
 };
 
+/* A layer window's display list longer than one desk_ops_s (up to
+ * NX_DLIST_MAX): operations are built in a desk_ops_s and moved into it
+ */
+
+struct desk_list_s
+{
+  struct nx_gpuop_s *op;
+  int n;
+  int cap;
+};
+
 /* An application window */
 
 struct desk_win_s
@@ -176,6 +243,7 @@ struct desk_win_s
   bool minimizing;                 /* Faded out: to be hidden */
   sem_t synced;                    /* The server has caught up (nx_synch) */
   bool wakeq;                      /* desk_wake(): the app's wake is due */
+  bool frames;                     /* The app's frame is due every frame */
   const char *button;              /* A title bar button's symbol, or NULL */
   bool buttonhover;
   bool buttonpressed;
@@ -212,17 +280,58 @@ struct desk_app_s
   void (*key)(struct desk_win_s *w, const uint8_t *ch, int n);
                                                  /* Keys, while active: bytes
                                                   * and VT100 sequences */
+  void (*keyev)(struct desk_win_s *w, const struct nx_key_s *k);
+                                                 /* Key events, while active:
+                                                  * each press, repeat and
+                                                  * release, with the
+                                                  * modifiers (nxkeys.h).  An
+                                                  * app that has this gets
+                                                  * its keys here, not as
+                                                  * bytes (key still gets
+                                                  * plain bytes, deskctl k) */
   void (*close)(struct desk_win_s *w);           /* Going: free w->priv's
                                                   * contents (w->priv itself
                                                   * is freed after) */
   void (*wake)(struct desk_win_s *w);            /* After desk_wake(w) */
   void (*focus)(struct desk_win_s *w);           /* w->active changed */
   void (*button)(struct desk_win_s *w);          /* w->button clicked */
+  void (*frame)(struct desk_win_s *w);           /* Every frame (about 60 a
+                                                  * second) while w->frames
+                                                  * and not minimised: games,
+                                                  * animations (desk_ms() for
+                                                  * the time) */
+  void (*theme)(struct desk_win_s *w);           /* The theme changed: all
+                                                  * of it again (default:
+                                                  * expose all of the client
+                                                  * area, else draw) */
   bool single;                                   /* One window at most */
   bool (*canclose)(struct desk_win_s *w);        /* The close button: false
                                                   * keeps the window (to ask
                                                   * first; the app then calls
                                                   * desk_win_close()) */
+};
+
+/* The settings remembered across boots (desk_prefs_load(), _save()) */
+
+struct desk_prefs_s
+{
+  uint8_t theme;                   /* THEME_* */
+  uint8_t accent;                  /* ACCENT_* */
+  uint8_t shadow;                  /* SHADOW_* */
+  bool border;                     /* Windows' 1-pixel edge */
+  bool clock24;                    /* The top bar's clock: 24-hour */
+  bool clockdate;                  /* ... with the date */
+  bool clocksecs;                  /* ... with seconds */
+  uint8_t dockicon;                /* DOCK_ICON_MIN to _MAX */
+  uint8_t dockpos;                 /* DOCK_BOTTOM, _LEFT, _RIGHT */
+  bool dockhide;                   /* The dock hides until the pointer
+                                    * touches its edge */
+  uint16_t repdelay;               /* Keys repeat after (ms), 0: never */
+  uint16_t reprate;                /* ... every (ms) */
+  uint16_t ptrspeed;               /* Pointer speed, percent */
+  int16_t tzoff;                   /* Time zone: minutes east of UTC */
+  uint8_t npinned;                 /* The dock's favourites, in order */
+  uint8_t pinned[APP_COUNT];
 };
 
 /* The desktop */
@@ -242,9 +351,16 @@ struct desk_s
   NXWINDOW tip;
   NXWINDOW launcher;               /* NULL when closed */
   int wallstyle;                   /* Settings: which wallpaper */
-  int dockx;                       /* The dock's left edge */
-  int dockw;
-  int dockhover;                   /* App under the pointer, -1 */
+  NXWINDOW menu;                   /* A pop-up menu, NULL */
+  NXWINDOW edge;                   /* The hidden dock's edge, NULL */
+  struct nxgl_rect_s work;         /* Where windows may go */
+  int dockx;                       /* The dock's top-left, shown */
+  int docky;
+  int dockw;                       /* Its size */
+  int dockh;
+  int dockhover;                   /* Item under the pointer, -1 */
+  int dockout;                     /* Autohide: 0 hidden .. DOCK_STEPS out */
+  bool dockwant;                   /* ... it should be out */
   int launcherfade;                /* Launcher opening: steps to go */
   int topbarhover;                 /* 1: over "Activities" */
 
@@ -273,14 +389,27 @@ struct desk_s
  ****************************************************************************/
 
 extern struct desk_s g_desk;
+extern struct desk_prefs_s g_prefs;
 extern const struct desk_app_s * const g_apps[APP_COUNT];
 extern const struct desk_app_s g_app_terminal;   /* desk_term.c */
 extern const struct desk_app_s g_app_files;      /* desk_files.c */
 extern const struct desk_app_s g_app_editor;     /* desk_edit.c */
 extern const struct desk_app_s g_app_monitor;    /* desk_monitor.c */
+extern const struct desk_app_s g_app_calc;       /* desk_calc.c */
+extern const struct desk_app_s g_app_tetris;     /* desk_tetris.c */
+extern const struct desk_app_s g_app_solitaire;  /* desk_solitaire.c */
+extern const struct desk_app_s g_app_breakout;   /* desk_breakout.c */
+extern const struct desk_app_s g_app_settings;   /* desk_settings.c */
+extern const struct desk_app_s g_app_log;        /* desk_log.c */
 #ifdef CONFIG_FPCDESK_MUSIC
 extern const struct desk_app_s g_app_music;      /* desk_music.c */
 #endif
+#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
+extern const struct desk_app_s g_app_doom;       /* desk_game.c */
+#endif
+
+extern const struct desk_app_s g_app_viewer;     /* desk_viewer.c */
+extern const struct desk_app_s g_app_paint;      /* desk_paint.c */
 
 /****************************************************************************
  * Public Function Prototypes
@@ -315,13 +444,46 @@ void ops_text_centre(struct desk_ops_s *o, const struct desk_font_s *f,
                      uint8_t alpha);
 uint16_t colour_mix(uint16_t a, uint16_t b, int t256);
 
+/* Any anti-aliased shape: inside(arg, x, y) says whether a point, in 1/16
+ * pixel from (x, y), is in it; 4 x 4 samples a pixel, drawn as runs of
+ * pixels of the same coverage (a FILL or BLEND each; the list is sent to
+ * hwnd when full).  For small shapes drawn once (symbols, sprites).
+ */
+
+typedef bool (*ops_inside_t)(void *arg, int x, int y);
+void ops_shape(NXWINDOW hwnd, struct desk_ops_s *o, int x, int y, int w,
+               int h, uint16_t c, uint8_t alpha, ops_inside_t inside,
+               void *arg);
+
 int  desk_atlas_init(void);
 void desk_luts_init(void);
+
+/* A hidden window of w x h pixels in the GPU's memory, to draw into once
+ * and use as an image source (op->src) for COPY and BLEND: sprites,
+ * pre-drawn tiles.  *lost is set (on the listener thread) when the server
+ * has had to take its pixels away: draw them again.
+ */
+
+NXWINDOW desk_surface_open(int w, int h, volatile bool *lost);
+void desk_surface_close(NXWINDOW hwnd);
+
+/* LUT_APP: make (if key is not what it holds) and load it; key 0 is none */
+
+typedef void (*desk_lutmake_t)(uint8_t lut[NX_BLEND_LUT_N][NX_BLEND_LUT_N],
+                               int arg);
+void desk_lut_app(uint32_t key, desk_lutmake_t make, int arg);
 
 /* Send operations: into a window's pixels, or as a layer's display list */
 
 void ops_draw(NXWINDOW hwnd, struct desk_ops_s *o);
 void ops_setlist(NXWINDOW hwnd, struct desk_ops_s *o);
+
+/* Long display lists: make room for need more operations in o (moving
+ * what it has into l), and set l, with what is left in o, as hwnd's list
+ */
+
+void list_room(struct desk_list_s *l, struct desk_ops_s *o, int need);
+void list_set(NXWINDOW hwnd, struct desk_list_s *l, struct desk_ops_s *o);
 
 /* desk_main.c: windows */
 
@@ -346,10 +508,37 @@ void desk_wake(struct desk_win_s *w);
 void desk_post(uint8_t type);
 struct desk_win_s *desk_app_window(int app);
 void desk_launch(int app);
+void desk_app_quit(int app);                /* Close all of its windows */
 uint32_t desk_ms(void);
+
+/* The theme or the look of windows has changed (g_theme, g_prefs): draw
+ * everything again
+ */
+
+void desk_theme_changed(void);
+
+/* The work area, the dock and the windows after a change of the display's
+ * size or of the dock's settings
+ */
+
+void desk_relayout(void);
+
+/* The time as the desktop shows it: UTC plus g_prefs.tzoff */
+
+void desk_localtime(struct tm *tm);
+
+/* The wall clock the desktop shows.  Tests (deskctl freeze) stop it at a
+ * fixed time and stop the text cursors blinking (they stay on), so that
+ * screenshots do not depend on when they are taken.
+ */
+
+time_t desk_time(void);
+bool desk_frozen(void);
+void desk_freeze(time_t t);                /* 0: the clock runs again */
 
 /* desk_panel.c: the top bar, the dock, the launcher, the wallpaper */
 
+void desk_layout(void);                     /* g_desk.work, the dock */
 int  desk_panels_init(void);
 void desk_topbar_draw(void);
 void desk_dock_draw(void);
@@ -364,18 +553,70 @@ void desk_wallpaper_preview(struct desk_ops_s *o, int style, int x, int y,
 void desk_panels_tick(void);
 bool desk_panels_animate(void);
 void desk_panels_relayout(void);           /* The display's size changed */
+void desk_panels_mouse(int part, int x, int y, uint8_t buttons);
+                                           /* Any pointer event (autohide) */
+bool desk_launcher_key(const uint8_t *ch, int n);
+bool desk_dock_pinned(int app);
+void desk_dock_pin(int app, bool pin);
+
+/* Pop-up menus: items (a label of "-" is a separator) with ids; pick is
+ * called with the id of the one chosen.  At (x, y) on the display, moved
+ * to stay on it.  Any press elsewhere, or Escape, closes it.
+ */
+
+struct desk_menu_item_s
+{
+  const char *label;
+  int id;
+  bool enabled;
+};
+
+void desk_menu_show(int x, int y, const struct desk_menu_item_s *items,
+                    int n, void (*pick)(int id, void *arg), void *arg);
+void desk_menu_close(void);
+void desk_menu_mouse(int x, int y, uint8_t buttons);
 
 /* desk_apps.c: the applications */
 
 void desk_load_sample(void);
 int  desk_prefs_load(void);                 /* The saved display mode, or -1 */
 void desk_prefs_save(void);
+void desk_input_apply(void);                /* Key repeat, pointer speed:
+                                             * to the desktop session */
+void desk_about_draw(NXWINDOW hwnd, int x, int y, int w);
+                                            /* About this computer */
 void icon_tile(struct desk_ops_s *o, int x, int y, int s, uint16_t top,
                uint16_t bottom, uint8_t a);
+
+/* desk_settings.c: Settings, at one of its pages */
+
+#define SETTINGS_APPEARANCE 0
+#define SETTINGS_DISPLAY    1
+#define SETTINGS_DOCK       2
+#define SETTINGS_INPUT      3               /* Mouse & Keyboard */
+#define SETTINGS_DATETIME   4
+#ifdef CONFIG_FPCDESK_SOUND
+#  define SETTINGS_SOUND    5
+#  define SETTINGS_ABOUT    6
+#  define SETTINGS_PAGES    7
+#else
+#  define SETTINGS_ABOUT    5
+#  define SETTINGS_PAGES    6
+#endif
+
+void desk_settings_show(int page);
+void desk_settings_changed(int page);       /* What the page shows has
+                                             * changed: drawn again if it
+                                             * is showing */
 
 /* desk_edit.c: open a file in a new editor window (NULL: a new file) */
 
 int desk_editor_open(const char *path);
+
+/* desk_viewer.c: show an image; desk_paint.c: edit one (NULL: a new one) */
+
+int desk_viewer_open(const char *path);
+int desk_paint_open(const char *path);
 
 /* desk_ui.c: the clipboard, shared by the applications (a copy is kept) */
 

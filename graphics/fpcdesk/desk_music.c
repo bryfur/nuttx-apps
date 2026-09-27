@@ -48,6 +48,7 @@
 
 #include "desk_sound.h"
 #include "desk_ui.h"
+#include "desk_theme.h"
 #include "desk_widgets.h"
 
 /****************************************************************************
@@ -93,6 +94,22 @@
  * Private Types
  ****************************************************************************/
 
+/* A slider of desk_widgets' (0..MS_MAX) and what the pointer does with
+ * it; y in client coordinates
+ */
+
+#define MS_MAX          1000
+
+struct mslider_s
+{
+  int16_t  x;
+  int16_t  y;
+  int16_t  w;
+  uint16_t value;
+  bool     hot;
+  bool     drag;
+};
+
 struct track_s
 {
   char     name[48];
@@ -112,7 +129,7 @@ struct music_s
   int      clickrow;
   uint8_t  last;
   struct ui_zones_s zones;
-  struct wdg_slider_s volume;
+  struct mslider_s volume;
   bool     seeking;                      /* The progress bar is held */
   uint32_t seekms;
 
@@ -899,6 +916,42 @@ static uint32_t music_pos(struct music_s *m)
  * Private Functions: the window
  ****************************************************************************/
 
+static bool mslider_over(const struct mslider_s *s, int x, int y)
+{
+  return x >= s->x && x < s->x + s->w && y >= s->y &&
+         y < s->y + WG_SLIDER_H;
+}
+
+static bool mslider_mouse(struct mslider_s *s, int x, int y,
+                          uint8_t buttons, uint8_t last)
+{
+  bool down = (buttons & NX_MOUSE_LEFTBUTTON) != 0;
+  int v = s->value;
+
+  s->hot = mslider_over(s, x, y);
+  if (down && !(last & NX_MOUSE_LEFTBUTTON) && s->hot)
+    {
+      s->drag = true;
+    }
+  else if (!down)
+    {
+      s->drag = false;
+    }
+
+  if (s->drag)
+    {
+      s->value = wg_slider_value(s->x, s->w, 0, MS_MAX, x);
+    }
+
+  return s->value != v;
+}
+
+static void mslider_draw(struct desk_ops_s *o, const struct mslider_s *s)
+{
+  wg_slider(o, s->x, s->y + TITLE_H, s->w, s->value, 0, MS_MAX,
+            s->hot || s->drag);
+}
+
 static void fmt_time(char *buf, size_t len, uint32_t ms)
 {
   snprintf(buf, len, "%lu:%02lu", (unsigned long)(ms / 60000),
@@ -914,7 +967,7 @@ static int list_rows(struct desk_win_s *w)
 
 /* The progress bar: where it is, as a slider (0..1000 of the length) */
 
-static void progress_geom(struct desk_win_s *w, struct wdg_slider_s *s)
+static void progress_geom(struct desk_win_s *w, struct mslider_s *s)
 {
   s->x = PAD + 44;
   s->y = 72;
@@ -925,7 +978,7 @@ static void draw_head(struct music_s *m)
 {
   struct desk_win_s *w = m->win;
   struct desk_ops_s *o = &m->ops;
-  struct wdg_slider_s bar;
+  struct mslider_s bar;
   const char *title;
   char buf[128];
   char fit[64];
@@ -966,12 +1019,10 @@ static void draw_head(struct music_s *m)
 
   memset(&bar, 0, sizeof(bar));
   progress_geom(w, &bar);
-  bar.y += y;
   bar.value = m->lenms > 0 ? (uint32_t)((uint64_t)(pos > m->lenms ?
-              m->lenms : pos) * WDG_SLIDER_MAX / m->lenms) : 0;
-  bar.dim   = m->state != ST_PLAYING;
+              m->lenms : pos) * MS_MAX / m->lenms) : 0;
   bar.drag  = m->seeking;
-  wdg_slider_draw(o, &bar);
+  mslider_draw(o, &bar);
   fmt_time(buf, sizeof(buf), m->state != ST_IDLE || m->seeking ? pos : 0);
   ops_text(o, &g_desk_font_small, PAD, y + 76, buf, C_TEXT_DIM, 255);
   fmt_time(buf, sizeof(buf), m->lenms);
@@ -985,17 +1036,17 @@ static void draw_button(struct music_s *m, int id, int cx, int cy)
   struct desk_ops_s *o = &m->ops;
   int look = ui_look(&m->zones, id, true);
   uint16_t c = C_TEXT;
-  int r = id == ID_PLAY ? 20 : 12;
+  int r = id == ID_PLAY ? 22 : 12;
 
   if (id == ID_PLAY)
     {
-      ops_disc(o, cx, cy, LUT_R20, 20, C_ACCENT,
-               look == UI_PRESSED ? 180 : look == UI_HOVER ? 230 : 255);
-      c = C_WHITE;
+      ops_rrect(o, cx - 22, cy - 12, 44, 24, LUT_R12, 12, C_ACCENT,
+                look == UI_PRESSED ? 180 : look == UI_HOVER ? 230 : 255);
+      c = C_ACCENT_TEXT;
     }
   else if (look != UI_NORMAL)
     {
-      ops_disc(o, cx, cy, LUT_R12, 12, C_WHITE,
+      ops_disc(o, cx, cy, LUT_R12, 12, C_TEXT,
                look == UI_PRESSED ? 50 : 25);
     }
 
@@ -1042,7 +1093,7 @@ static void draw_controls(struct music_s *m)
   int cx = PAD + 20;
 
   ops_fill(o, 0, y, w->csize.w, CTRL_H, C_WINDOW_BG);
-  ops_blend(o, 0, y + CTRL_H - 1, w->csize.w, 1, C_BLACK, 90);
+  ops_fill(o, 0, y + CTRL_H - 1, w->csize.w, 1, g_theme.separator);
   ui_zones_clear(&m->zones, 1);
   draw_button(m, ID_PREV, cx, cy);
   draw_button(m, ID_PLAY, cx + 44, cy);
@@ -1052,19 +1103,17 @@ static void draw_controls(struct music_s *m)
   /* Its level (the application's, "Music") */
 
   m->volume.x = w->csize.w - PAD - 150;
-  m->volume.y = cy - TITLE_H - WDG_SLIDER_H / 2;
+  m->volume.y = cy - TITLE_H - WG_SLIDER_H / 2;
   m->volume.w = 150;
   if (!m->volume.drag)
     {
       m->volume.value = desk_sound_getlevel(MUSIC_NAME);
     }
 
-  wdg_speaker(o, m->volume.x - 34, cy - 8, 16,
-              wdg_speaker_waves(m->volume.value),
-              info != NULL && info->mute, C_TEXT_DIM, 255);
-  m->volume.y += TITLE_H;
-  wdg_slider_draw(o, &m->volume);
-  m->volume.y -= TITLE_H;
+  wg_speaker(o, m->volume.x - 34, cy - 8, 16,
+             wg_speaker_waves(m->volume.value),
+             info != NULL && info->mute, C_TEXT_DIM, 255);
+  mslider_draw(o, &m->volume);
 }
 
 static void draw_list(struct music_s *m)
@@ -1095,7 +1144,7 @@ static void draw_list(struct music_s *m)
     {
       int ry = y + 4 + (i - m->top) * ROW_H;
       bool playing = i == m->track && m->state != ST_IDLE;
-      uint16_t c = i == m->sel ? C_WHITE : C_TEXT;
+      uint16_t c = i == m->sel ? C_ACCENT_TEXT : C_TEXT;
 
       if (i == m->sel)
         {
@@ -1106,7 +1155,7 @@ static void draw_list(struct music_s *m)
       if (playing)
         {
           ui_triangle(o, PAD + 2, ry + ROW_H / 2, 5, 3,
-                      i == m->sel ? C_WHITE : C_ACCENT, 255);
+                      i == m->sel ? C_ACCENT_TEXT : C_ACCENT, 255);
         }
 
       ui_fit(&g_desk_font_ui, m->tracks[i].name, w->csize.w - 2 * PAD - 80,
@@ -1120,7 +1169,7 @@ static void draw_list(struct music_s *m)
           ops_text(o, &g_desk_font_ui, w->csize.w - PAD -
                    text_width(&g_desk_font_ui, buf), ry + (ROW_H -
                    text_height(&g_desk_font_ui)) / 2, buf,
-                   i == m->sel ? C_WHITE : C_TEXT_DIM, 255);
+                   i == m->sel ? C_ACCENT_TEXT : C_TEXT_DIM, 255);
         }
 
       ui_flush(hwnd, o, 64);
@@ -1215,7 +1264,7 @@ static void music_mouse(struct desk_win_s *w, int x, int y, uint8_t buttons)
   bool release = !(buttons & NX_MOUSE_LEFTBUTTON) &&
                  (m->last & NX_MOUSE_LEFTBUTTON);
   uint8_t last = m->last;
-  struct wdg_slider_s bar;
+  struct mslider_s bar;
   struct ui_zone_s *z;
   int hot;
   bool drag;
@@ -1253,7 +1302,7 @@ static void music_mouse(struct desk_win_s *w, int x, int y, uint8_t buttons)
   /* The level */
 
   drag = m->volume.drag;
-  if (wdg_slider_mouse(&m->volume, x, y, buttons, last))
+  if (mslider_mouse(&m->volume, x, y, buttons, last))
     {
       desk_sound_level(MUSIC_NAME, m->volume.value);
       music_redraw_head(m);
@@ -1269,14 +1318,14 @@ static void music_mouse(struct desk_win_s *w, int x, int y, uint8_t buttons)
   memset(&bar, 0, sizeof(bar));
   progress_geom(w, &bar);
   if (m->lenms > 0 && m->track >= 0 &&
-      ((press && wdg_slider_over(&bar, x, y)) || m->seeking))
+      ((press && mslider_over(&bar, x, y)) || m->seeking))
     {
       int v;
 
       m->seeking = (buttons & NX_MOUSE_LEFTBUTTON) != 0;
-      v = (x - bar.x) * WDG_SLIDER_MAX / (bar.w > 0 ? bar.w : 1);
-      v = v < 0 ? 0 : v > WDG_SLIDER_MAX ? WDG_SLIDER_MAX : v;
-      m->seekms = (uint32_t)((uint64_t)m->lenms * v / WDG_SLIDER_MAX);
+      v = (x - bar.x) * MS_MAX / (bar.w > 0 ? bar.w : 1);
+      v = v < 0 ? 0 : v > MS_MAX ? MS_MAX : v;
+      m->seekms = (uint32_t)((uint64_t)m->lenms * v / MS_MAX);
       if (!m->seeking)
         {
           music_play(m, m->track, m->seekms);

@@ -582,7 +582,7 @@ static boolean read_file_header(midi_file_t *file, FILE *stream)
       fprintf(stderr,
               "read_file_header: Invalid MIDI chunk header! "
               "chunk_size=%i\n",
-              be32toh(file->header.chunk_header.chunk_size));
+              (int)be32toh(file->header.chunk_header.chunk_size));
       return false;
     }
 

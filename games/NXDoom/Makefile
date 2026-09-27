@@ -19,6 +19,11 @@ PCSOUNDSRCDIR = pcsound
 CFLAGS += -I$(COMMONSRCDIR) -I$(DOOMSRCDIR) -I$(TEXTSCREENSRCDIR)
 CFLAGS += -I$(PCSOUNDSRCDIR)
 
+# The game's own heap (CONFIG_GAMES_NXDOOM_HEAPSIZE): every file allocates
+# through it
+
+CFLAGS += -include $(COMMONSRCDIR)/i_heap.h
+
 # Source files
 
 COMMONSRCS = i_system.c m_argv.c m_misc.c # Excluding i_main.c
@@ -196,6 +201,9 @@ CSRCS += $(COMMONSRCDIR)/mus2mid.c
 CSRCS += $(DOOMSRCDIR)/sounds.c
 CSRCS += $(DOOMSRCDIR)/s_sound.c
 CSRCS += $(DOOMSRCDIR)/deh_sound.c
+ifeq ($(CONFIG_GAMES_NXDOOM_FPCSOUND),y)
+CSRCS += $(COMMONSRCDIR)/i_fpcsound.c
+endif
 endif
 
 # If we have chosen RTTTL music, then add that source
@@ -206,4 +214,37 @@ endif
 
 MAINSRC  = $(COMMONSRCDIR)/i_main.c
 
+# Start afresh every time (CONFIG_GAMES_NXDOOM_RESTART): the game's objects
+# (all but i_main.c, which restores the rest) are linked into one, whose
+# data and bss are one block each (nxdoom.ld), and that goes into the
+# library instead of them
+
+ifeq ($(CONFIG_GAMES_NXDOOM_RESTART),y)
+GAMESRCS  := $(CSRCS)
+CSRCS     :=
+GAMEBLOCK  = nxdoom_game$(OBJEXT)
+EXTOBJS   += $(GAMEBLOCK)
+ifeq ($(CONFIG_GAMES_NXDOOM_STATE_PSRAM),y)
+GAMELD     = nxdoom-psram.ld
+else
+GAMELD     = nxdoom.ld
+endif
+endif
+
 include $(APPDIR)/Application.mk
+
+ifeq ($(CONFIG_GAMES_NXDOOM_RESTART),y)
+GAMEOBJS = $(GAMESRCS:%=$(PREFIX)%$(SUFFIX)$(OBJEXT))
+
+$(GAMEOBJS): $(PREFIX)%.c$(SUFFIX)$(OBJEXT): %.c
+	$(call COMPILE, $<, $@, -MMD -MP -MF $@.d)
+
+$(GAMEBLOCK): $(GAMEOBJS) $(GAMELD)
+	$(Q) $(LD) -r -T $(GAMELD) -o $@ $(GAMEOBJS)
+
+-include $(GAMEOBJS:=.d)
+
+clean::
+	$(call DELFILE, $(GAMEBLOCK))
+	$(Q) rm -f $(GAMEOBJS) $(GAMEOBJS:=.d)
+endif

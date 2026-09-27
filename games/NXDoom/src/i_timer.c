@@ -42,6 +42,10 @@ static struct timespec basetime =
   .tv_nsec = 0, .tv_sec = 0
 };
 
+/* Time the game did not run (i_skip_time()) */
+
+static int skippedms;
+
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
@@ -80,7 +84,21 @@ int i_get_time_ms(void)
       clock_gettime(CLOCK_MONOTONIC, &basetime);
     }
 
-  return (clock_time2usec(&curtime) - clock_time2usec(&basetime)) / 1000;
+  return (clock_time2usec(&curtime) - clock_time2usec(&basetime)) / 1000 -
+         skippedms;
+}
+
+/****************************************************************************
+ * Name: i_skip_time
+ *
+ * Description:
+ *  The game was held for ms (its window was not active): the clock leaves
+ *  that out, so that the game does not run the tics it missed.
+ ****************************************************************************/
+
+void i_skip_time(int ms)
+{
+  skippedms += ms;
 }
 
 /****************************************************************************

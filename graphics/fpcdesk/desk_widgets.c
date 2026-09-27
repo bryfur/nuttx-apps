@@ -3,9 +3,9 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Small controls (desk_widgets.h): a slider, a switch, a level meter and a
- * speaker, drawn with GPU operations (round shapes are BLENDs through the
- * desktop's disc tables).
+ * Controls drawn into a list of operations (desk_widgets.h).  Round shapes
+ * come from the client shape tables (LUT_R3, R6, R12), so their radii are
+ * those.
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -13,36 +13,231 @@
 #include "desk_widgets.h"
 
 /****************************************************************************
- * Pre-processor Definitions
+ * Public Functions
  ****************************************************************************/
 
-#define KNOB_R          6               /* The slider's knob (LUT_R6) */
-#define TRACK_H         6               /* Its track (LUT_R3) */
-
-#define C_TRACK         RGB(0x60, 0x60, 0x68)
-#define C_METER_OK      RGB(0x34, 0xc7, 0x59)
-#define C_METER_HOT     RGB(0xff, 0xb3, 0x40)
-#define C_METER_CLIP    RGB(0xff, 0x45, 0x3a)
-
-/****************************************************************************
- * Private Functions
- ****************************************************************************/
-
-/* Where the knob's centre is for the slider's value */
-
-static int slider_kx(const struct wdg_slider_s *s)
+void wg_switch(struct desk_ops_s *o, int x, int y, bool on, bool hot)
 {
-  return s->x + KNOB_R + (s->w - 2 * KNOB_R) * s->value / WDG_SLIDER_MAX;
+  uint16_t track = on ? C_ACCENT :
+                   hot ? g_theme.control_hover : g_theme.control;
+  int kx = on ? x + WG_SWITCH_W - 14 : x + 14;
+
+  ops_rrect(o, x, y, WG_SWITCH_W, WG_SWITCH_H, LUT_R12, 12, track, 255);
+  ops_disc(o, kx, y + WG_SWITCH_H / 2 + 1, LUT_R12, 12, C_BLACK, 40);
+  ops_disc(o, kx, y + WG_SWITCH_H / 2, LUT_R12, 12, C_WHITE, 255);
 }
 
-/* The value for a pointer at x */
-
-static int slider_at(const struct wdg_slider_s *s, int x)
+void wg_segments(struct desk_ops_s *o, int x, int y, int w, int h,
+                 const char * const *labels, int n, int sel, int hot)
 {
-  int span = s->w - 2 * KNOB_R;
-  int v = span > 0 ? (x - s->x - KNOB_R) * WDG_SLIDER_MAX / span : 0;
+  const struct desk_font_s *f = &g_desk_font_ui;
+  int i;
 
-  return v < 0 ? 0 : v > WDG_SLIDER_MAX ? WDG_SLIDER_MAX : v;
+  ops_rrect(o, x, y, w, h, LUT_R6, 6, g_theme.control, 255);
+  for (i = 0; i < n; i++)
+    {
+      int sx = x + w * i / n;
+      int sw = x + w * (i + 1) / n - sx;
+      uint16_t fg = g_theme.control_text;
+
+      if (i == sel)
+        {
+          ops_rrect(o, sx + 2, y + 2, sw - 4, h - 4, LUT_R6, 5, C_ACCENT,
+                    255);
+          fg = C_ACCENT_TEXT;
+        }
+      else if (i == hot)
+        {
+          ops_rrect(o, sx + 2, y + 2, sw - 4, h - 4, LUT_R6, 5,
+                    g_theme.control_hover, 255);
+        }
+      else if (i > 0 && i - 1 != sel && i - 1 != hot)
+        {
+          ops_blend(o, sx, y + 7, 1, h - 14, g_theme.text, 50);
+        }
+
+      ops_text_centre(o, i == sel ? &g_desk_font_uib : f, sx + sw / 2,
+                      y + (h - text_height(f)) / 2, labels[i], fg, 255);
+    }
+}
+
+int wg_segment_at(int x, int w, int n, int px)
+{
+  int i;
+
+  for (i = 0; i < n; i++)
+    {
+      if (px >= x + w * i / n && px < x + w * (i + 1) / n)
+        {
+          return i;
+        }
+    }
+
+  return -1;
+}
+
+void wg_slider(struct desk_ops_s *o, int x, int y, int w, int v, int min,
+               int max, bool hot)
+{
+  int r = WG_SLIDER_H / 2;
+  int span = w - 2 * r;
+  int kx = x + r + (max > min ? (v - min) * span / (max - min) : 0);
+  int ty = y + WG_SLIDER_H / 2 - 3;
+
+  ops_rrect(o, x + r - 3, ty, span + 6, 6, LUT_R3, 3, g_theme.control_hover,
+            255);
+  ops_rrect(o, x + r - 3, ty, kx - x - r + 6, 6, LUT_R3, 3, C_ACCENT, 255);
+  ops_disc(o, kx, y + r + 1, LUT_R12, 12, C_BLACK, hot ? 70 : 45);
+  ops_disc(o, kx, y + r, LUT_R12, 12, C_WHITE, 255);
+}
+
+int wg_slider_value(int x, int w, int min, int max, int px)
+{
+  int r = WG_SLIDER_H / 2;
+  int span = w - 2 * r;
+  int v;
+
+  if (span <= 0)
+    {
+      return min;
+    }
+
+  v = min + ((px - x - r) * (max - min) + span / 2) / span;
+  return v < min ? min : v > max ? max : v;
+}
+
+void wg_check(struct desk_ops_s *o, int x, int y, bool on, bool hot)
+{
+  int i;
+
+  if (!on)
+    {
+      ops_rrect(o, x, y, WG_CHECK, WG_CHECK, LUT_R3, 3,
+                THEMED(RGB(0x70, 0x70, 0x78), RGB(0xa8, 0xa8, 0xb0)), 255);
+      ops_rrect(o, x + 1, y + 1, WG_CHECK - 2, WG_CHECK - 2, LUT_R3, 3,
+                hot ? g_theme.control_hover : g_theme.field, 255);
+      return;
+    }
+
+  ops_rrect(o, x, y, WG_CHECK, WG_CHECK, LUT_R3, 3, C_ACCENT, 255);
+
+  /* The tick: a short stroke down, a long one up, 2 pixels thick */
+
+  for (i = 0; i < 4; i++)
+    {
+      ops_fill(o, x + 4 + i, y + 8 + i, 2, 2, C_ACCENT_TEXT);
+    }
+
+  for (i = 0; i < 7; i++)
+    {
+      ops_fill(o, x + 7 + i, y + 11 - i, 2, 2, C_ACCENT_TEXT);
+    }
+}
+
+void wg_stepper(struct desk_ops_s *o, int x, int y, int w,
+                const char *value, int hot)
+{
+  const struct desk_font_s *f = &g_desk_font_ui;
+  int ty = y + (WG_STEP - text_height(f)) / 2;
+
+  ops_rrect(o, x, y, WG_STEP, WG_STEP, LUT_R6, 6,
+            hot < 0 ? g_theme.control_hover : g_theme.control, 255);
+  ops_rrect(o, x + w - WG_STEP, y, WG_STEP, WG_STEP, LUT_R6, 6,
+            hot > 0 ? g_theme.control_hover : g_theme.control, 255);
+  ops_text_centre(o, &g_desk_font_uib, x + WG_STEP / 2, ty - 1,
+                  DESK_CH_MINUS, g_theme.control_text, 255);
+  ops_text_centre(o, &g_desk_font_uib, x + w - WG_STEP / 2, ty - 1, "+",
+                  g_theme.control_text, 255);
+  ops_text_centre(o, &g_desk_font_uib, x + w / 2, ty, value, g_theme.text,
+                  255);
+}
+
+int wg_stepper_at(int x, int w, int px)
+{
+  return px >= x && px < x + WG_STEP ? -1 :
+         px >= x + w - WG_STEP && px < x + w ? 1 : 0;
+}
+
+void wg_swatch(struct desk_ops_s *o, int cx, int cy, uint16_t c, bool sel,
+               bool hot)
+{
+  ops_disc(o, cx, cy + 1, LUT_R12, WG_SWATCH_R, C_BLACK, hot ? 60 : 30);
+  ops_disc(o, cx, cy, LUT_R12, WG_SWATCH_R, c, 255);
+  if (sel)
+    {
+      ops_disc(o, cx, cy, LUT_R3, 3, C_WHITE, 255);
+    }
+}
+
+void wg_sidebar_row(struct desk_ops_s *o, int x, int y, int w, int h,
+                    const char *label, uint16_t tile, bool sel, bool hot)
+{
+  const struct desk_font_s *f = &g_desk_font_ui;
+
+  if (sel)
+    {
+      ops_rrect(o, x, y, w, h, LUT_R6, 6, C_ACCENT, 255);
+    }
+  else if (hot)
+    {
+      ops_rrect(o, x, y, w, h, LUT_R6, 6, C_HILITE, THEMED(20, 14));
+    }
+
+  if (sel)
+    {
+      ops_rrect(o, x + 7, y + (h - 22) / 2, 22, 22, LUT_R6, 6, C_WHITE,
+                200);
+    }
+
+  ops_rrect(o, x + 8, y + (h - 20) / 2, 20, 20, LUT_R6, 6, tile, 255);
+  ops_blend(o, x + 12, y + (h - 20) / 2, 12, 1, C_WHITE, 70);
+  ops_text(o, sel ? &g_desk_font_uib : f, x + 38,
+           y + (h - text_height(f)) / 2, label,
+           sel ? C_ACCENT_TEXT : g_theme.text, 255);
+}
+
+void wg_card(struct desk_ops_s *o, int x, int y, int w, int nrows)
+{
+  int i;
+
+  if (g_theme.dark)
+    {
+      ops_rrect(o, x, y, w, nrows * WG_ROW_H, LUT_R12, 12, g_theme.card,
+                255);
+    }
+  else
+    {
+      /* White on light grey: a hairline shows where it ends */
+
+      ops_rrect(o, x, y, w, nrows * WG_ROW_H, LUT_R12, 12,
+                RGB(0xde, 0xde, 0xe3), 255);
+      ops_rrect(o, x + 1, y + 1, w - 2, nrows * WG_ROW_H - 2, LUT_R12, 11,
+                g_theme.card, 255);
+    }
+
+  for (i = 1; i < nrows; i++)
+    {
+      ops_fill(o, x + 14, y + i * WG_ROW_H, w - 28, 1,
+               THEMED(RGB(0x3c, 0x3c, 0x42), RGB(0xe6, 0xe6, 0xea)));
+    }
+}
+
+void wg_row_label(struct desk_ops_s *o, int x, int y, const char *label,
+                  const char *caption)
+{
+  const struct desk_font_s *f = &g_desk_font_ui;
+
+  if (caption == NULL)
+    {
+      ops_text(o, f, x + 14, y + (WG_ROW_H - text_height(f)) / 2, label,
+               g_theme.text, 255);
+    }
+  else
+    {
+      ops_text(o, f, x + 14, y + 6, label, g_theme.text, 255);
+      ops_text(o, &g_desk_font_small, x + 14, y + 6 + text_height(f) + 1,
+               caption, g_theme.text_dim, 255);
+    }
 }
 
 /* 256 x log2(v) for v >= 1 (the fraction from the next bits, linearly) */
@@ -66,116 +261,14 @@ static int log2_256(uint32_t v)
   return (e + 8) * 256 + (int)(v - 256);
 }
 
-/****************************************************************************
- * Public Functions: the slider
- ****************************************************************************/
-
-void wdg_slider_draw(struct desk_ops_s *o, const struct wdg_slider_s *s)
-{
-  int cy = s->y + WDG_SLIDER_H / 2;
-  int kx = slider_kx(s);
-  uint16_t fill = s->dim ? C_TEXT_DIM : C_ACCENT;
-
-  ops_rrect(o, s->x, cy - TRACK_H / 2, s->w, TRACK_H, LUT_R3, 3, C_TRACK,
-            255);
-  if (kx - s->x > 0)
-    {
-      ops_rrect(o, s->x, cy - TRACK_H / 2, kx - s->x + 3, TRACK_H, LUT_R3, 3,
-                fill, 255);
-    }
-
-  /* The knob: a halo when the pointer is on it, a soft shadow, white */
-
-  if (s->hot || s->drag)
-    {
-      ops_disc(o, kx, cy, LUT_R12, 12, C_ACCENT, s->drag ? 70 : 45);
-    }
-
-  ops_disc(o, kx, cy + 1, LUT_R6, KNOB_R, C_BLACK, 90);
-  ops_disc(o, kx, cy, LUT_R6, KNOB_R, s->dim ? C_TEXT_DIM : C_WHITE, 255);
-}
-
-bool wdg_slider_over(const struct wdg_slider_s *s, int x, int y)
-{
-  return x >= s->x - 4 && x < s->x + s->w + 4 && y >= s->y &&
-         y < s->y + WDG_SLIDER_H;
-}
-
-bool wdg_slider_mouse(struct wdg_slider_s *s, int x, int y, uint8_t buttons,
-                      uint8_t last)
-{
-  bool down = (buttons & NX_MOUSE_LEFTBUTTON) != 0;
-  bool press = down && (last & NX_MOUSE_LEFTBUTTON) == 0;
-  int v = s->value;
-
-  s->hot = wdg_slider_over(s, x, y);
-  if (press && s->hot)
-    {
-      s->drag = true;
-    }
-  else if (!down)
-    {
-      s->drag = false;
-    }
-
-  if (s->drag)
-    {
-      s->value = slider_at(s, x);
-    }
-
-  return s->value != v;
-}
-
-/****************************************************************************
- * Public Functions: the switch
- ****************************************************************************/
-
-void wdg_switch_draw(struct desk_ops_s *o, const struct wdg_switch_s *s)
-{
-  int kx = s->on ? s->x + WDG_SWITCH_W - 3 - 18 : s->x + 3;
-
-  ops_rrect(o, s->x, s->y, WDG_SWITCH_W, WDG_SWITCH_H, LUT_R12, 12,
-            s->on ? C_ACCENT : C_TRACK, 255);
-  if (s->hot)
-    {
-      ops_rrect(o, s->x, s->y, WDG_SWITCH_W, WDG_SWITCH_H, LUT_R12, 12,
-                C_WHITE, 30);
-    }
-
-  ops_rrect(o, kx, s->y + 4, 18, 18, LUT_R6, 6, C_BLACK, 70);
-  ops_rrect(o, kx, s->y + 3, 18, 18, LUT_R6, 6, C_WHITE, 255);
-}
-
-bool wdg_switch_mouse(struct wdg_switch_s *s, int x, int y, uint8_t buttons,
-                      uint8_t last)
-{
-  bool press = (buttons & NX_MOUSE_LEFTBUTTON) != 0 &&
-               (last & NX_MOUSE_LEFTBUTTON) == 0;
-
-  s->hot = x >= s->x && x < s->x + WDG_SWITCH_W && y >= s->y &&
-           y < s->y + WDG_SWITCH_H;
-  if (press && s->hot)
-    {
-      s->on = !s->on;
-      return true;
-    }
-
-  return false;
-}
-
-/****************************************************************************
- * Public Functions: the meter and the speaker
- ****************************************************************************/
-
-void wdg_meter(struct desk_ops_s *o, int x, int y, int w, int h, int peak,
-               uint8_t alpha)
+void wg_meter(struct desk_ops_s *o, int x, int y, int w, int h, int peak)
 {
   int lit = 0;
   int ok = w * 36 / 48;                 /* -12 dB */
   int hot = w * 45 / 48;                /* -3 dB */
 
-  ops_rrect(o, x, y, w, h, LUT_R3, h / 2 < 3 ? h / 2 : 3, C_TRACK, alpha);
-
+  ops_rrect(o, x, y, w, h, LUT_R3, h / 2 < 3 ? h / 2 : 3,
+            g_theme.control_hover, 255);
   if (peak > 0)
     {
       /* dB = 6.02 log2(peak / 32767): the bar is 48 dB long */
@@ -188,28 +281,28 @@ void wdg_meter(struct desk_ops_s *o, int x, int y, int w, int h, int peak,
 
   if (lit > 0)
     {
-      ops_blend(o, x, y, lit < ok ? lit : ok, h, C_METER_OK, alpha);
+      ops_blend(o, x, y, lit < ok ? lit : ok, h, g_theme.success, 255);
     }
 
   if (lit > ok)
     {
-      ops_blend(o, x + ok, y, (lit < hot ? lit : hot) - ok, h, C_METER_HOT,
-                alpha);
+      ops_blend(o, x + ok, y, (lit < hot ? lit : hot) - ok, h,
+                g_theme.warning, 255);
     }
 
   if (lit > hot)
     {
-      ops_blend(o, x + hot, y, lit - hot, h, C_METER_CLIP, alpha);
+      ops_blend(o, x + hot, y, lit - hot, h, g_theme.destructive, 255);
     }
 }
 
-int wdg_speaker_waves(int volume)
+int wg_speaker_waves(int volume)
 {
   return volume <= 0 ? 0 : volume < 400 ? 1 : volume < 750 ? 2 : 3;
 }
 
-int wdg_speaker(struct desk_ops_s *o, int x, int y, int s, int waves,
-                bool muted, uint16_t c, uint8_t alpha)
+int wg_speaker(struct desk_ops_s *o, int x, int y, int s, int waves,
+               bool muted, uint16_t c, uint8_t alpha)
 {
   static const struct desk_font_s * const wave[3] =
   {

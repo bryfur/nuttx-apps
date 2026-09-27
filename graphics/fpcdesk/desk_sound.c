@@ -330,7 +330,7 @@ static int snd_open(void)
 
 static void *snd_player(void *arg)
 {
-  int16_t buf[SND_CHUNK];
+  static int16_t buf[SND_CHUNK];          /* (Not on its small stack) */
   int fd = -1;
 
   for (; ; )
@@ -536,7 +536,37 @@ void desk_sound_changed(void)
     }
 
   desk_volume_changed(bykey);
-  desk_soundpage_changed();
+  desk_settings_changed(SETTINGS_SOUND);
+}
+
+/* A volume key as a key event (from deskctl key, or a keyboard the
+ * desktop session did not take it from): Volume Up / Down 5 % a press or
+ * repeat, Mute toggles.  True if it was one.
+ */
+
+bool desk_sound_key(const struct nx_key_s *key)
+{
+  int step = key->code == NX_KEY_SPECIAL(KEYCODE_VOLUP) ? 50 :
+             key->code == NX_KEY_SPECIAL(KEYCODE_VOLDOWN) ? -50 : 0;
+
+  if (step == 0 && key->code != NX_KEY_SPECIAL(KEYCODE_MUTE))
+    {
+      return false;
+    }
+
+  if (g_snd.fd >= 0 && (key->flags & NX_KEY_RELEASE) == 0)
+    {
+      if (step != 0)
+        {
+          ioctl(g_snd.fd, MIXIOC_STEPMASTER, step);
+        }
+      else if ((key->flags & NX_KEY_REPEAT) == 0)
+        {
+          ioctl(g_snd.fd, MIXIOC_SETMUTE, 2);
+        }
+    }
+
+  return true;
 }
 
 void desk_sound_master(int volume)
@@ -607,39 +637,32 @@ void desk_sound_set_effects(bool on)
 }
 
 /* Settings: "sound master N", "sound mute 0|1", "sound effects 0|1",
- * "sound level NAME N"
+ * "sound level NAME N" (line: what follows "sound ")
  */
 
-bool desk_sound_prefs_line(const char *line)
+void desk_sound_prefs_line(const char *line)
 {
   char name[FPCMIX_NAME_MAX];
   int n;
 
-  if (strncmp(line, "sound ", 6) != 0)
-    {
-      return false;
-    }
-
-  if (sscanf(line, "sound master %d", &n) == 1)
+  if (sscanf(line, "master %d", &n) == 1)
     {
       g_snd.pmaster = n;
     }
-  else if (sscanf(line, "sound mute %d", &n) == 1)
+  else if (sscanf(line, "mute %d", &n) == 1)
     {
       g_snd.pmute = n != 0;
     }
-  else if (sscanf(line, "sound effects %d", &n) == 1)
+  else if (sscanf(line, "effects %d", &n) == 1)
     {
       g_snd.effects = n != 0;
     }
-  else if (sscanf(line, "sound level %15s %d", name, &n) == 2 &&
+  else if (sscanf(line, "level %15s %d", name, &n) == 2 &&
            g_snd.nplevels < FPCMIX_LEVELS_MAX)
     {
       strlcpy(g_snd.plevels[g_snd.nplevels].name, name, FPCMIX_NAME_MAX);
       g_snd.plevels[g_snd.nplevels++].level = n;
     }
-
-  return true;
 }
 
 void desk_sound_prefs_write(FILE *f)

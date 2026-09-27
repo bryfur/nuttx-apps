@@ -105,21 +105,21 @@
 
 /* Colours: the desktop's, and a few of its own */
 
-#define C_GRAPH          RGB(0x24, 0x24, 0x28)
-#define C_GRID           RGB(0x36, 0x36, 0x3b)
-#define C_TRACK          RGB(0x46, 0x46, 0x4c)
-#define C_ROWALT         RGB(0x34, 0x34, 0x39)
-#define C_HEADER         RGB(0x3c, 0x3c, 0x42)
-#define C_SELECT         RGB(0x17, 0x4f, 0x8f)
-#define C_SELDIM         RGB(0xb8, 0xcc, 0xe6)
-#define C_CHIP           RGB(0x44, 0x44, 0x4a)
-#define C_CHIPON         RGB(0x1c, 0x44, 0x78)
-#define C_FAINT          RGB(0x68, 0x68, 0x6e)
-#define C_GREEN          RGB(0x30, 0xd1, 0x58)
-#define C_AMBER          RGB(0xff, 0x9f, 0x0a)
-#define C_RED            RGB(0xff, 0x45, 0x3a)
-#define C_VIOLET         RGB(0xbf, 0x5a, 0xf2)
-#define C_DANGER         RGB(0xc4, 0x2b, 0x22)
+#define C_GRAPH          THEMED(RGB(0x24, 0x24, 0x28), RGB(0xf4, 0xf4, 0xf7))
+#define C_GRID           THEMED(RGB(0x36, 0x36, 0x3b), RGB(0xe0, 0xe0, 0xe5))
+#define C_TRACK          THEMED(RGB(0x46, 0x46, 0x4c), RGB(0xdd, 0xdd, 0xe2))
+#define C_ROWALT         THEMED(RGB(0x34, 0x34, 0x39), RGB(0xf5, 0xf5, 0xf8))
+#define C_HEADER         THEMED(RGB(0x3c, 0x3c, 0x42), RGB(0xec, 0xec, 0xf0))
+#define C_SELECT         (g_theme.selection)
+#define C_SELDIM         THEMED(RGB(0xb8, 0xcc, 0xe6), g_theme.text_dim)
+#define C_CHIP           THEMED(RGB(0x44, 0x44, 0x4a), RGB(0xe6, 0xe6, 0xea))
+#define C_CHIPON         colour_mix(C_CARD, C_ACCENT, THEMED(90, 50))
+#define C_FAINT          (g_theme.text_faint)
+#define C_GREEN          (g_theme.success)
+#define C_AMBER          (g_theme.warning)
+#define C_RED            THEMED(RGB(0xff, 0x45, 0x3a), RGB(0xe0, 0x35, 0x2b))
+#define C_VIOLET         THEMED(RGB(0xbf, 0x5a, 0xf2), RGB(0x9b, 0x4a, 0xd0))
+#define C_DANGER         THEMED(RGB(0xc4, 0x2b, 0x22), RGB(0xe0, 0x3c, 0x34))
 
 /* The table's columns */
 
@@ -379,10 +379,25 @@ static struct
 } g_stats;
 #endif
 
-static const uint16_t g_cpucolours[MON_MAXCPUS] =
+/* A CPU's colour in the graphs (the first is the accent's) */
+
+static uint16_t cpu_colour(int i)
 {
-  C_ACCENT, C_AMBER, C_GREEN, RGB(0xff, 0x37, 0x5f)
-};
+  switch (i)
+    {
+      case 0:
+        return C_ACCENT;
+
+      case 1:
+        return C_ACCENT == C_AMBER ? C_VIOLET : C_AMBER;
+
+      case 2:
+        return C_GREEN;
+
+      default:
+        return RGB(0xff, 0x37, 0x5f);
+    }
+}
 
 static const uint8_t g_intervals[] =
 {
@@ -1710,7 +1725,7 @@ static void graph_plot(struct mon_s *m, struct mon_graph_s *g, bool cpu,
     {
       for (s = nseries - 1; s >= 0; s--)
         {
-          uint16_t c = cpu ? g_cpucolours[s] : C_VIOLET;
+          uint16_t c = cpu ? cpu_colour(s) : C_VIOLET;
           int runx = -1;
           int runa = 0;
           int runb = 0;
@@ -1868,7 +1883,7 @@ static void draw_cpu(struct mon_s *m)
       if (m->force)
         {
           need(1);
-          ops_disc(&g_o, cx + 4, cy + 9, LUT_R3, 3, g_cpucolours[i], 255);
+          ops_disc(&g_o, cx + 4, cy + 9, LUT_R3, 3, cpu_colour(i), 255);
           snprintf(buf, sizeof(buf), "CPU%d", i);
           d_text(&g_desk_font_ui, cx + 13, cy, buf, C_TEXT_DIM);
         }

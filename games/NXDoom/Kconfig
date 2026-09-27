@@ -105,9 +105,20 @@ config GAMES_NXDOOM_SOUND
 	bool "Enable sound features"
 	default n
 	---help---
-		Not ported! Will not work.
+		The sound effects through GAMES_NXDOOM_FPCSOUND (the FPC's
+		mixer); otherwise not ported (the PC speaker module does
+		nothing here).  No music.
 
 if GAMES_NXDOOM_SOUND
+
+config GAMES_NXDOOM_FPCSOUND
+	bool "Sound effects through the FPC's audio mixer"
+	default y
+	depends on FPC_AUDIO
+	---help---
+		Doom's sound effects mixed into 11025 Hz stereo and written
+		into a channel of the mixer named "Doom" (src/i_fpcsound.c),
+		which plays it over HDMI.
 
 config GAMES_NXDOOM_RTTTL_MUSIC
 	bool "RTTTL music"
@@ -127,6 +138,32 @@ config GAMES_NXDOOM_RTTTL_DEVICE
 endif # GAMES_NXDOOM_SOUND
 
 comment "Graphics options"
+
+choice # Output
+	prompt "Where the game is shown"
+	default GAMES_NXDOOM_FB
+
+	config GAMES_NXDOOM_FB
+		bool "Frame buffer"
+		---help---
+			Draw on a frame buffer (GAMES_NXDOOM_FBPATH), read a
+			keyboard device (GAMES_NXDOOM_KBDPATH).
+
+	config GAMES_NXDOOM_DESKTOP
+		bool "A window of the FPC desktop"
+		depends on GRAPHICS_FPCDESK
+		---help---
+			Doom in a window of the FPC desktop (apps/graphics/fpcdesk,
+			graphics/deskgame.h): its dock and launcher have Doom, which
+			starts nxdoom with the IWAD it finds and hands it its
+			frames (8-bit, scaled to the window by the GPU), the key
+			presses and releases, the mouse over the window.  The game
+			waits while its window is not the active one, and ends when
+			it is closed.
+
+endchoice # Output
+
+if GAMES_NXDOOM_FB
 
 config GAMES_NXDOOM_FBPATH
 	string "Framebuffer path"
@@ -156,6 +193,48 @@ config GAMES_NXDOOM_KBDPATH
 		Path to the keyboard device to use as input.
 
 endif # GAMES_NXDOOM_KEYBOARD
+
+endif # GAMES_NXDOOM_FB
+
+comment "Memory"
+
+config GAMES_NXDOOM_HEAPSIZE
+	int "Heap of its own (KB, 0: the system's)"
+	default 0
+	---help---
+		The game allocates what it caches of the WAD (textures, sprites,
+		the level) as it goes and lets go of it only when an allocation
+		fails.  From the system heap it takes all there is.  With a
+		heap of its own, taken from the system heap when the game
+		starts and given back whole when it ends, it keeps within this
+		size (the cache is trimmed when full) and leaves nothing behind.
+		The shareware and Freedoom episodes play in 4 MB.  "-mb N"
+		overrides it (MB).
+
+config GAMES_NXDOOM_RESTART
+	bool "Start afresh every time"
+	default y
+	depends on GAMES_NXDOOM = y
+	---help---
+		A builtin program's variables keep the values its last run left
+		them with, and DOOM expects to start from those it was built
+		with.  With this the game's objects are linked into one (ld -r)
+		whose data and bss are each one block; nxdoom saves the data as
+		it was before its first run and puts it back, and clears the
+		bss, every time it starts.  Costs a copy of the data (about 40
+		KB) from the first run on.
+
+config GAMES_NXDOOM_STATE_PSRAM
+	bool "Keep the game's variables in external RAM"
+	default n
+	depends on GAMES_NXDOOM_RESTART
+	---help---
+		Put the game's data and bss (about 220 KB, most of it the
+		renderer's tables) in the sections .psram_data.nxdoom and
+		.psram_bss.nxdoom instead of .data and .bss, for a board whose
+		linker script places .psram_data* and .psram_bss* in external
+		RAM (and initialises them at boot as .data and .bss): the
+		internal RAM is then free of them.
 
 config GAMES_NXDOOM_FB_CMAP
 	bool "Draw through the frame buffer colour map"

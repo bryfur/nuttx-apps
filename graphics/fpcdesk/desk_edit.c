@@ -52,10 +52,9 @@
 #define UNDO_MAX       200
 #define DBLCLICK_MS    400
 
-#define C_EDIT_BG      RGB(0x1c, 0x1c, 0x20)
-#define C_LINENO       RGB(0x62, 0x62, 0x6a)
-#define C_CARET        RGB(0xf2, 0xf2, 0xf4)
-#define C_THUMB        RGB(0x80, 0x80, 0x88)
+#define C_EDIT_BG      THEMED(RGB(0x1c, 0x1c, 0x20), RGB(0xff, 0xff, 0xff))
+#define C_LINENO       THEMED(RGB(0x62, 0x62, 0x6a), RGB(0xa8, 0xa8, 0xb0))
+#define C_CARET        THEMED(RGB(0xf2, 0xf2, 0xf4), RGB(0x1d, 0x1d, 0x1f))
 
 /* Syntax classes and their colours (g_syncol) */
 
@@ -199,16 +198,31 @@ struct lay_s
 static struct desk_ops_s g_o;
 static const char *g_openpath;
 
-static const uint16_t g_syncol[7] =
+/* The syntax colours: dark theme, light theme (the first is the text's) */
+
+static const uint16_t g_syncol[2][7] =
 {
-  C_TEXT,
-  RGB(0xff, 0x8f, 0x70),                 /* Keywords: orange */
-  RGB(0x70, 0xc4, 0xff),                 /* Types: blue */
-  RGB(0xa4, 0xde, 0x7c),                 /* Strings: green */
-  RGB(0x7c, 0x82, 0x8c),                 /* Comments: grey */
-  RGB(0xd4, 0xa4, 0xff),                 /* Preprocessor, $vars: purple */
-  RGB(0xff, 0xd0, 0x60),                 /* Numbers: yellow */
+  {
+    0,
+    RGB(0xff, 0x8f, 0x70),               /* Keywords: orange */
+    RGB(0x70, 0xc4, 0xff),               /* Types: blue */
+    RGB(0xa4, 0xde, 0x7c),               /* Strings: green */
+    RGB(0x7c, 0x82, 0x8c),               /* Comments: grey */
+    RGB(0xd4, 0xa4, 0xff),               /* Preprocessor, $vars: purple */
+    RGB(0xff, 0xd0, 0x60),               /* Numbers: yellow */
+  },
+  {
+    0,
+    RGB(0xc8, 0x3c, 0x1c),
+    RGB(0x0b, 0x64, 0xc0),
+    RGB(0x24, 0x80, 0x2c),
+    RGB(0x8a, 0x8f, 0x98),
+    RGB(0x8a, 0x3a, 0xb8),
+    RGB(0xa8, 0x62, 0x00),
+  },
 };
+
+#define SYNCOL(k)      ((k) == 0 ? C_TEXT : g_syncol[g_theme.dark ? 0 : 1][k])
 
 static const char * const g_ckw[] =
 {
@@ -1099,7 +1113,7 @@ static void line_draw(struct desk_win_s *w, struct lay_s *l, int i)
               if (v1 > v0)
                 {
                   ops_blend(&g_o, l->x0 + (v0 - e->left) * CW, y,
-                            (v1 - v0) * CW, LH, C_ACCENT, 120);
+                            (v1 - v0) * CW, LH, C_ACCENT, THEMED(120, 70));
                 }
             }
         }
@@ -1138,7 +1152,7 @@ static void line_draw(struct desk_win_s *w, struct lay_s *l, int i)
               ch[0] = c >= 0x20 && c < 0x7f ? c : '?';
               ops_text(&g_o, font, l->x0 + (v - e->left) * CW, ty, ch,
                        e->lang != LANG_PLAIN && ln->len <= e->clscap ?
-                       g_syncol[e->cls[k]] : C_TEXT, 255);
+                       SYNCOL(e->cls[k]) : C_TEXT, 255);
             }
 
           v++;
@@ -2768,7 +2782,8 @@ static void edit_mouse(struct desk_win_s *w, int x, int cy, uint8_t buttons)
 static void edit_tick(struct desk_win_s *w)
 {
   struct edit_s *e = w->priv;
-  bool blink = w->active && !e->blink && e->prompt == P_NONE;
+  bool blink = w->active && (!e->blink || desk_frozen()) &&
+               e->prompt == P_NONE;
 
   if (blink != e->blink)
     {

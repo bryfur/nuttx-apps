@@ -10,10 +10,21 @@
  *
  *   deskctl m X Y [BUTTONS]       move the pointer (buttons: 1 left, 2
  *                                 middle, 4 right; default none)
- *   deskctl c X Y                 click there
+ *   deskctl c X Y [N]             click there (N times: 2 a double click)
  *   deskctl d X0 Y0 X1 Y1 [N]     drag with the left button, in N steps
  *   deskctl k TEXT                type (\n Enter, \t Tab, \e Escape,
  *                                 \b Backspace, \xHH any byte)
+ *   deskctl key EVENT...          key events (nuttx/nx/nxkeys.h), as a
+ *                                 keyboard sends them: +NAME press, -NAME
+ *                                 release, NAME both, @MS wait MS ms.
+ *                                 NAME: a character (a, 1, -), space,
+ *                                 enter, esc, tab, bs, up, down, left,
+ *                                 right, home, end, pgup, pgdn, ins, del,
+ *                                 f1-f12, shift, ctrl, alt, gui (left),
+ *                                 rshift, rctrl, ralt, rgui, vol+, vol-,
+ *                                 mute (these through /dev/kbd when there
+ *                                 is one to write to, the headless
+ *                                 simulator's: as a keyboard has them)
  *   deskctl shot FILE             the screen as a PPM file (simulator)
  *   deskctl test                  BLEND on the GPU, checked pixel by pixel
  *   deskctl stats [clear|N]       GPU commands and pixels since the last
@@ -22,27 +33,29 @@
  *   deskctl mode [N]              the display mode (N: change it)
  *   deskctl redraw                composite all of the display again (a
  *                                 check: the result must not change)
- *   deskctl key vol+|vol-|mute    a special key on the keyboard (/dev/kbd,
- *                                 the headless simulator's: the desktop
- *                                 session reads it as a USB keyboard)
+ *   deskctl freeze [SECONDS|off]  stop the desktop's clock at SECONDS
+ *                                 since 1970 (default 2026-01-02 09:41
+ *                                 UTC) and the cursors' blinking, for
+ *                                 screenshots that do not depend on when
+ *                                 they are taken; off: let them run
  ****************************************************************************/
 
 #include <nuttx/config.h>
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
-#include <fcntl.h>
-
-#include <nuttx/input/kbd_codec.h>
-#include <nuttx/input/keyboard.h>
 #include <nuttx/nx/nx.h>
 #include <nuttx/nx/nxcompose.h>
+#include <nuttx/input/keyboard.h>
+#include <nuttx/nx/nxkeys.h>
 
 /* The GPU's cursor and the simulator's screenshot are kernel functions of
  * the board (a flat build)
@@ -66,6 +79,7 @@ void fpc_gpu_stats(struct fpc_gpu_stats_s *st, bool clear);
 int fpc_simgpu_screenshot(FAR const char *path);
 #endif
 int desk_gputest(void);
+void desk_freeze(time_t t);
 
 /****************************************************************************
  * Private Functions
@@ -170,6 +184,203 @@ static void deskctl_type(NXHANDLE h, FAR const char *text)
     }
 }
 
+/* Key events: names of the keys that type no character */
+
+static const struct
+{
+  const char *name;
+  uint8_t code;
+  uint8_t ch;
+  uint8_t mod;
+} g_keynames[] =
+{
+  { "space",  ' ',                              ' ',  0 },
+  { "enter",  NX_KEY_ENTER,                     '\n', 0 },
+  { "esc",    NX_KEY_ESCAPE,                    0x1b, 0 },
+  { "tab",    NX_KEY_TAB,                       '\t', 0 },
+  { "bs",     NX_KEY_BACKSPACE,                 0x7f, 0 },
+  { "up",     NX_KEY_SPECIAL(KEYCODE_UP),       0,    0 },
+  { "down",   NX_KEY_SPECIAL(KEYCODE_DOWN),     0,    0 },
+  { "left",   NX_KEY_SPECIAL(KEYCODE_LEFT),     0,    0 },
+  { "right",  NX_KEY_SPECIAL(KEYCODE_RIGHT),    0,    0 },
+  { "home",   NX_KEY_SPECIAL(KEYCODE_HOME),     0,    0 },
+  { "end",    NX_KEY_SPECIAL(KEYCODE_END),      0,    0 },
+  { "pgup",   NX_KEY_SPECIAL(KEYCODE_PAGEUP),   0,    0 },
+  { "pgdn",   NX_KEY_SPECIAL(KEYCODE_PAGEDOWN), 0,    0 },
+  { "ins",    NX_KEY_SPECIAL(KEYCODE_INSERT),   0,    0 },
+  { "del",    NX_KEY_SPECIAL(KEYCODE_FWDDEL),   0,    0 },
+  { "pause",  NX_KEY_SPECIAL(KEYCODE_PAUSE),    0,    0 },
+  { "shift",  NX_KEY_SPECIAL(KEYCODE_LSHIFT),   0,    NX_KEY_SHIFT },
+  { "rshift", NX_KEY_SPECIAL(KEYCODE_RSHIFT),   0,    NX_KEY_SHIFT },
+  { "ctrl",   NX_KEY_SPECIAL(KEYCODE_LCTRL),    0,    NX_KEY_CTRL },
+  { "rctrl",  NX_KEY_SPECIAL(KEYCODE_RCTRL),    0,    NX_KEY_CTRL },
+  { "alt",    NX_KEY_SPECIAL(KEYCODE_LALT),     0,    NX_KEY_ALT },
+  { "ralt",   NX_KEY_SPECIAL(KEYCODE_RALT),     0,    NX_KEY_ALT },
+  { "gui",    NX_KEY_SPECIAL(KEYCODE_LGUI),     0,    NX_KEY_GUI },
+  { "rgui",   NX_KEY_SPECIAL(KEYCODE_RGUI),     0,    NX_KEY_GUI },
+  { "vol+",   NX_KEY_SPECIAL(KEYCODE_VOLUP),    0,    0 },
+  { "vol-",   NX_KEY_SPECIAL(KEYCODE_VOLDOWN),  0,    0 },
+  { "mute",   NX_KEY_SPECIAL(KEYCODE_MUTE),     0,    0 },
+};
+
+/* A volume key through the keyboard itself (/dev/kbd, the headless
+ * simulator's FPC_SIM_VKBD), where the desktop session takes it for the
+ * mixer; false if there is none
+ */
+
+static bool deskctl_kbddev(uint8_t code, bool release)
+{
+  struct keyboard_event_s ev;
+  bool ok;
+  int fd;
+
+  if (code != NX_KEY_SPECIAL(KEYCODE_VOLUP) &&
+      code != NX_KEY_SPECIAL(KEYCODE_VOLDOWN) &&
+      code != NX_KEY_SPECIAL(KEYCODE_MUTE))
+    {
+      return false;
+    }
+
+  fd = open("/dev/kbd", O_WRONLY);
+  if (fd < 0)
+    {
+      return false;
+    }
+
+  ev.code = NX_KEY_KEYCODE(code);
+  ev.type = release ? KEYBOARD_SPECREL : KEYBOARD_SPECPRESS;
+  ok = write(fd, &ev, sizeof(ev)) == sizeof(ev);
+  close(fd);
+  return ok;
+}
+
+static void deskctl_keyev(NXHANDLE h, uint8_t *mods, uint8_t code,
+                          uint8_t ch, uint8_t mod, bool release)
+{
+  uint8_t rec[NX_KEY_SIZE];
+  struct nx_key_s key;
+
+  if (deskctl_kbddev(code, release))
+    {
+      return;
+    }
+
+  *mods = release ? *mods & ~mod : *mods | mod;
+
+  /* What the key types with the modifiers held, as a US keyboard */
+
+  if (!release && ch >= 'a' && ch <= 'z')
+    {
+      if (*mods & NX_KEY_CTRL)
+        {
+          ch &= 0x1f;
+        }
+      else if (*mods & NX_KEY_SHIFT)
+        {
+          ch -= 'a' - 'A';
+        }
+    }
+
+  key.flags = *mods | (release ? NX_KEY_RELEASE : 0);
+  key.code  = code;
+  key.ch    = release ? 0 : ch;
+  nx_key_encode(rec, &key);
+  nx_kbdin(h, NX_KEY_SIZE, rec);
+}
+
+static int deskctl_key(NXHANDLE h, uint8_t *mods, FAR const char *a)
+{
+  bool press = true;
+  bool release = true;
+  uint8_t code = 0;
+  uint8_t ch = 0;
+  uint8_t mod = 0;
+  size_t k;
+
+  if (a[0] == '@')
+    {
+      usleep(atoi(a + 1) * 1000);
+      return 0;
+    }
+
+  if ((a[0] == '+' || a[0] == '-') && a[1] != '\0')
+    {
+      press   = a[0] == '+';
+      release = a[0] == '-';
+      a++;
+    }
+
+  if (a[1] == '\0')
+    {
+      code = nx_key_code((uint8_t)a[0], false);
+      ch   = (uint8_t)a[0];
+    }
+  else if (a[0] == 'f' && atoi(a + 1) >= 1 && atoi(a + 1) <= 12)
+    {
+      code = NX_KEY_SPECIAL(KEYCODE_F1 + atoi(a + 1) - 1);
+    }
+  else
+    {
+      for (k = 0; k < sizeof(g_keynames) / sizeof(g_keynames[0]); k++)
+        {
+          if (strcmp(a, g_keynames[k].name) == 0)
+            {
+              code = g_keynames[k].code;
+              ch   = g_keynames[k].ch;
+              mod  = g_keynames[k].mod;
+              break;
+            }
+        }
+
+      if (code == 0)
+        {
+          fprintf(stderr, "deskctl: no key %s\n", a);
+          return -1;
+        }
+    }
+
+  if (press)
+    {
+      deskctl_keyev(h, mods, code, ch, mod, false);
+    }
+
+  if (press && release)
+    {
+      usleep(30000);
+    }
+
+  if (release)
+    {
+      deskctl_keyev(h, mods, code, ch, mod, true);
+    }
+
+  return 0;
+}
+
+/* Events are arguments, or words of one (NSH takes few arguments) */
+
+static int deskctl_keys(NXHANDLE h, int argc, FAR char *argv[])
+{
+  uint8_t mods = 0;
+  FAR char *save;
+  FAR char *a;
+  int i;
+
+  for (i = 0; i < argc; i++)
+    {
+      for (a = strtok_r(argv[i], " ", &save); a != NULL;
+           a = strtok_r(NULL, " ", &save))
+        {
+          if (deskctl_key(h, &mods, a) < 0)
+            {
+              return -1;
+            }
+        }
+    }
+
+  return 0;
+}
+
 #ifdef CONFIG_FPC_GPU
 /* GPU time per pixel, ns, from docs/desktop.md (500 x 350: FILL 1.70 ms,
  * COPY 3.34 ms, BLEND of a colour 3.5 ms, of an image 4.75 ms); PUT and
@@ -247,8 +458,9 @@ static void deskctl_usage(void)
 {
   fprintf(stderr,
           "usage: deskctl m X Y [BUTTONS] | c X Y | d X0 Y0 X1 Y1 [N] |\n"
-          "               k TEXT | shot FILE | stats [clear|N] | mode [N] |\n"
-          "               key vol+|vol-|mute\n");
+          "               k TEXT | key [+|-]NAME|@MS... | shot FILE |\n"
+          "               stats [clear|N] | mode [N] | redraw | test |\n"
+          "               freeze [SECONDS|off]\n");
 }
 
 /****************************************************************************
@@ -279,31 +491,17 @@ int main(int argc, FAR char *argv[])
     }
 #endif
 
-  if (strcmp(argv[1], "key") == 0 && argc >= 3)
+  if (strcmp(argv[1], "freeze") == 0)
     {
-      struct keyboard_event_s ev[2];
-      int fd;
+      time_t t = 1767346860;         /* Fri 2026-01-02 09:41 UTC */
 
-      ev[0].code = strcmp(argv[2], "vol+") == 0 ? KEYCODE_VOLUP :
-                   strcmp(argv[2], "vol-") == 0 ? KEYCODE_VOLDOWN :
-                   strcmp(argv[2], "mute") == 0 ? KEYCODE_MUTE :
-                   (uint32_t)atoi(argv[2]);
-      ev[0].type = KEYBOARD_SPECPRESS;
-      ev[1].code = ev[0].code;
-      ev[1].type = KEYBOARD_SPECREL;
-      fd = open("/dev/kbd", O_WRONLY);
-      if (fd < 0 || write(fd, ev, sizeof(ev)) != sizeof(ev))
+      if (argc >= 3)
         {
-          fprintf(stderr, "deskctl: no /dev/kbd to write to\n");
-          ret = EXIT_FAILURE;
+          t = strcmp(argv[2], "off") == 0 ? 0 : (time_t)atoll(argv[2]);
         }
 
-      if (fd >= 0)
-        {
-          close(fd);
-        }
-
-      return ret;
+      desk_freeze(t);
+      return EXIT_SUCCESS;
     }
 
   if (strcmp(argv[1], "shot") == 0)
@@ -337,12 +535,16 @@ int main(int argc, FAR char *argv[])
     {
       int x = atoi(argv[2]);
       int y = atoi(argv[3]);
+      int n = argc >= 5 ? atoi(argv[4]) : 1;
 
       deskctl_pointer(h, x, y, 0);
-      usleep(30000);
-      deskctl_pointer(h, x, y, NX_MOUSE_LEFTBUTTON);
-      usleep(30000);
-      deskctl_pointer(h, x, y, 0);
+      while (n-- > 0)
+        {
+          usleep(30000);
+          deskctl_pointer(h, x, y, NX_MOUSE_LEFTBUTTON);
+          usleep(30000);
+          deskctl_pointer(h, x, y, 0);
+        }
     }
   else if (strcmp(argv[1], "d") == 0 && argc >= 6)
     {
@@ -410,6 +612,13 @@ int main(int argc, FAR char *argv[])
   else if (strcmp(argv[1], "k") == 0 && argc >= 3)
     {
       deskctl_type(h, argv[2]);
+    }
+  else if (strcmp(argv[1], "key") == 0 && argc >= 3)
+    {
+      if (deskctl_keys(h, argc - 2, &argv[2]) < 0)
+        {
+          ret = EXIT_FAILURE;
+        }
     }
   else
     {

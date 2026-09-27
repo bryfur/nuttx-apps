@@ -14,7 +14,8 @@ menuconfig GRAPHICS_FPCDESK
 		windows with title bars, traffic-light buttons, round corners
 		and soft shadows, all drawn and composited by the GPU through
 		the NX server (CONFIG_NX_COMPOSITOR).  The terminal runs NSH
-		on pseudo-terminals, in tabs.
+		on pseudo-terminals, in tabs.  A dark and a light theme.  The
+		System Log reads the RAM log (CONFIG_RAMLOG_SYSLOG).
 
 if GRAPHICS_FPCDESK
 
@@ -78,8 +79,44 @@ config FPCDESK_PREFS
 	default ""
 	---help---
 		Where the desktop keeps the settings it remembers across boots
-		(the display mode, the wallpaper).  Empty: .fpcdesk in the home
-		directory ($HOME, else CONFIG_LIBC_HOMEDIR).
+		(the display mode, the wallpaper, the theme, the dock, ...).
+		Empty: .fpcdesk in the home directory ($HOME, else
+		CONFIG_LIBC_HOMEDIR).
+
+if GAMES_NXDOOM_DESKTOP
+
+config FPCDESK_DOOM_PRIORITY
+	int "Doom: priority"
+	default 90
+	---help---
+		The game's task, below the desktop's so that the desktop stays
+		quick to answer while it runs.
+
+config FPCDESK_DOOM_STACKSIZE
+	int "Doom: stack size"
+	default 8192
+
+config FPCDESK_DOOM_WADDIRS
+	string "Doom: where else to look for the game's data"
+	default ""
+	---help---
+		Directories, separated by spaces, where Doom's window looks for
+		an IWAD (doom1.wad, doom.wad, doom2.wad, freedoom1.wad, ...)
+		after the home directory ($HOME, else CONFIG_LIBC_HOMEDIR).
+		Doom keeps its configuration and saved games in .doom/ beside
+		the IWAD it found.
+
+config FPCDESK_GAME_CPUSCALE
+	bool "Games: scale frames on the CPU"
+	default n
+	---help---
+		A game's frames are scaled to its window across by the CPU (for
+		free: a palette lookup gives the pixel twice) and down by the
+		GPU (each row PUT once into a hidden window, then COPYed as many
+		times as the scale).  This scales down on the CPU too and PUTs
+		all of it: twice the bytes on the link at 2x.  For comparison.
+
+endif
 
 config FPCDESK_SOUND
 	bool "Sound: system sounds, the volume control, Settings' Sound page"
@@ -115,9 +152,10 @@ config FPCDESK_DESKCTL
 	default y
 	---help---
 		deskctl m X Y [BUTTONS]  move the pointer (and press buttons)
-		deskctl c X Y            click
+		deskctl c X Y [N]        click (N times)
 		deskctl k TEXT           type
 		deskctl shot FILE        screenshot (simulator)
+		deskctl freeze [SECONDS] stop the clock and the cursors' blink
 		For testing the desktop without a mouse and keyboard.
 
 endif

@@ -36,6 +36,10 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 
+#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
+#include <graphics/deskgame.h>
+#endif
+
 #include "config.h"
 #include "d_loop.h"
 #include "deh_str.h"
@@ -160,12 +164,20 @@ static const char *g_window_title = "";
 
 static struct argbcolor_s g_palette[256];
 
+#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
+/* The palette as the desktop takes it: 256 x R, G, B */
+
+static uint8_t g_rgbpalette[256 * 3];
+#endif
+
+#ifndef CONFIG_GAMES_NXDOOM_DESKTOP
 /* The same palette, pre-converted to the pixel format of the frame buffer.
  * Doing the conversion once per palette change instead of once per pixel
  * keeps blit_screen() down to a lookup and a store.
  */
 
 static uint32_t g_palette_native[256];
+#endif
 
 static boolean palette_to_set;
 
@@ -210,7 +222,9 @@ static grabmouse_callback_t grabmouse_callback = NULL;
 
 /* Does the window currently have focus? */
 
+#ifndef CONFIG_GAMES_NXDOOM_DESKTOP
 static boolean window_focused = true;
+#endif
 
 /* Window resize state. */
 
@@ -301,6 +315,7 @@ unsigned int joywait = 0;
  * Private Functions
  ****************************************************************************/
 
+#ifndef CONFIG_GAMES_NXDOOM_DESKTOP
 /****************************************************************************
  * Name: update_native_palette
  *
@@ -521,11 +536,73 @@ static void set_video_mode(void)
 {
 }
 
+#endif /* !CONFIG_GAMES_NXDOOM_DESKTOP */
+
+#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
+/****************************************************************************
+ * Name: i_get_desk_events
+ *
+ * Description:
+ *   Wait while the window is not active, quit if it has been closed, then
+ *   take the keys and the mouse.
+ *
+ ****************************************************************************/
+
+static void i_get_desk_events(void)
+{
+  FAR struct deskgame_s *g = i_deskgame();
+  struct deskgame_input_s in;
+  int waited;
+
+  waited = deskgame_wait(g);
+  if (waited < 0)
+    {
+      i_quit();
+    }
+  else if (waited > 0)
+    {
+      i_skip_time(waited);
+    }
+
+  while (deskgame_input(g, &in))
+    {
+      switch (in.type)
+        {
+          case DESKGAME_KEY:
+            i_handle_nx_key(&in.key);
+            break;
+
+          case DESKGAME_MOUSE:
+            if (usemouse && !nomouse &&
+                (grabmouse_callback == NULL || grabmouse_callback()))
+              {
+                i_handle_desk_mouse(in.buttons, in.dx, in.dy);
+              }
+            break;
+
+          case DESKGAME_FOCUS:
+            i_release_keys();
+            if (usemouse && !nomouse)
+              {
+                i_handle_desk_mouse(0, 0, 0);
+              }
+            break;
+
+          default:
+            break;
+        }
+    }
+}
+#endif
+
 static void i_get_event(void)
 {
-  int err;
-#if CONFIG_GAMES_NXDOOM_KEYBOARD
+#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
+  i_get_desk_events();
+#endif
+#ifdef CONFIG_GAMES_NXDOOM_KEYBOARD
   struct keyboard_event_s kbdevent;
+  int err;
 
   while ((err = get_kbd_event(&kbdevent)) == 0)
     {
@@ -561,6 +638,14 @@ void i_shutdown_graphics(void)
       return;
     }
 
+#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
+#ifndef CONFIG_GAMES_NXDOOM_STATIC_SCRNBUF
+  free(g_graphics_state.scrnbuf);
+#endif
+  g_graphics_state.inited = false;
+  return;
+#endif
+
   close(g_graphics_state.fd);
   munmap(g_graphics_state.fbmem, g_graphics_state.pinfo.fblen);
 #ifndef CONFIG_GAMES_NXDOOM_STATIC_SCRNBUF
@@ -588,10 +673,12 @@ void i_start_tic(void)
 
   i_get_event();
 
+#ifndef CONFIG_GAMES_NXDOOM_DESKTOP
   if (usemouse && !nomouse && window_focused)
     {
       i_read_mouse();
     }
+#endif
 
   if (joywait < i_get_time())
     {
@@ -647,6 +734,13 @@ void i_finish_update(void)
 
   v_draw_disk_icon();
 
+#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
+  /* To the desktop, which scales it to the window */
+
+  deskgame_frame(i_deskgame(), g_graphics_state.scrnbuf,
+                 palette_to_set ? g_rgbpalette : NULL);
+  palette_to_set = false;
+#else
   if (palette_to_set)
     {
       palette_to_set = false;
@@ -654,6 +748,7 @@ void i_finish_update(void)
     }
 
   blit_screen();
+#endif
 
   /* Draw! */
 
@@ -683,6 +778,11 @@ void i_set_palette(byte *doompalette)
       g_palette[i].r = gammatable[usegamma][*doompalette++] & ~3;
       g_palette[i].g = gammatable[usegamma][*doompalette++] & ~3;
       g_palette[i].b = gammatable[usegamma][*doompalette++] & ~3;
+#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
+      g_rgbpalette[3 * i]     = g_palette[i].r;
+      g_rgbpalette[3 * i + 1] = g_palette[i].g;
+      g_rgbpalette[3 * i + 2] = g_palette[i].b;
+#endif
     }
 
   palette_to_set = true;
@@ -914,6 +1014,47 @@ void i_get_window_position(int *x, int *y, int w, int h)
     }
 }
 
+#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
+/****************************************************************************
+ * Name: i_init_graphics
+ *
+ * Description:
+ *   In a window of the desktop: only the 8-bit screen DOOM draws into.
+ *   The desktop scales it, and the frame buffer is not touched.
+ *
+ ****************************************************************************/
+
+void i_init_graphics(void)
+{
+  byte *doompal;
+
+  if (i_deskgame() == NULL)
+    {
+      i_error("nxdoom draws in a window of the desktop: start Doom there");
+    }
+
+#ifdef CONFIG_GAMES_NXDOOM_STATIC_SCRNBUF
+  g_graphics_state.scrnbuf = g_scrnbuf;
+#else
+  g_graphics_state.scrnbuf = malloc(SCREENWIDTH * SCREENHEIGHT);
+#endif
+  if (g_graphics_state.scrnbuf == NULL)
+    {
+      i_error("Couldn't allocate screen buffer: %d\n", errno);
+    }
+
+  memset(g_graphics_state.scrnbuf, 0, SCREENHEIGHT * SCREENWIDTH);
+
+  doompal = w_cache_lump_name(("PLAYPAL"), PU_CACHE);
+  i_set_palette(doompal);
+
+  i_video_buffer = g_graphics_state.scrnbuf;
+  v_restore_buffer();
+
+  g_graphics_state.inited = true;
+  i_at_exit(i_shutdown_graphics, true);
+}
+#else
 void i_init_graphics(void)
 {
   uint8_t xscale;
@@ -1082,6 +1223,7 @@ void i_init_graphics(void)
 
   i_at_exit(i_shutdown_graphics, true);
 }
+#endif /* CONFIG_GAMES_NXDOOM_DESKTOP */
 
 /* Bind all variables controlling video options into the configuration
  * file system.

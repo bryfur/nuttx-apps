@@ -1571,7 +1571,7 @@ void d_doom_main(void)
   if (m_check_parm("-search"))
     {
       net_master_query();
-      exit(0);
+      i_exit(0);
     }
 
   /* @arg <address>
@@ -1587,7 +1587,7 @@ void d_doom_main(void)
   if (p)
     {
       net_query_address(myargv[p + 1]);
-      exit(0);
+      i_exit(0);
     }
 
   /* @category net
@@ -1599,7 +1599,7 @@ void d_doom_main(void)
   if (m_check_parm("-localsearch"))
     {
       net_lan_query();
-      exit(0);
+      i_exit(0);
     }
 #endif
 
@@ -1673,9 +1673,14 @@ void d_doom_main(void)
 
   /* find which dir to use for config files */
 
-  /* Auto-detect the configuration dir. */
+  /* @arg <directory>
+   *
+   * Keep the configuration and the saved games in this directory (ending
+   * in a slash); else the configured DOOM data directory.
+   */
 
-  m_set_config_dir(NULL);
+  p = m_check_parm_with_args("-configdir", 1);
+  m_set_config_dir(p > 0 ? myargv[p + 1] : NULL);
 
   /* @category game
    * @arg <x>
