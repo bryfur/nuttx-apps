@@ -39,6 +39,7 @@
 #include <nuttx/nx/nxbe.h>
 
 #include "desk.h"
+#include "desk_clock.h"
 #ifdef CONFIG_FPCDESK_SOUND
 #  include "desk_sound.h"
 #endif
@@ -580,6 +581,8 @@ void desk_topbar_draw(void)
   /* The clock */
 
   clock_text(buf, sizeof(buf), &tm);
+  desk_calpop_topbar(&g_ops, DESK_W / 2 - text_width(f, buf) / 2, ty,
+                     text_width(f, buf));
   ops_text_centre(&g_ops, f, DESK_W / 2, ty, buf, fg, 255);
 
   /* The volume at the right edge; the load left of it: a small meter and
@@ -640,6 +643,11 @@ void desk_topbar_mouse(int x, int y, uint8_t buttons)
       over = false;
     }
 #endif
+
+  if (desk_calpop_topbar_mouse(x, y, buttons))
+    {
+      over = false;
+    }
 
   if (over != g_desk.topbarhover)
     {
@@ -2002,6 +2010,7 @@ void desk_panels_relayout(void)
 #ifdef CONFIG_FPCDESK_SOUND
   desk_volume_relayout();                  /* The popover goes */
 #endif
+  desk_clock_relayout();                   /* The calendar's too */
 
   size.h = TOPBAR_H;
   nx_setsize(g_desk.topbar, &size);
