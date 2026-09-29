@@ -22,6 +22,7 @@ CSRCS    += desk_game.c
 CSRCS    += desk_image.c desk_viewer.c desk_paint.c
 CSRCS    += desk_kit.c desk_kit_paint.c desk_kit_dialog.c desk_kit_surface.c
 CSRCS    += desk_kitdemo.c
+CSRCS    += desk_alarm.c desk_clock.c desk_calendar.c
 
 ifeq ($(CONFIG_FPCDESK_PYTHON),y)
 CSRCS    += desk_client.c desk_python.c
@@ -38,11 +39,23 @@ CFLAGS   += ${INCDIR_PREFIX}$(APPDIR)/audioutils/libmad/libmad
 endif
 endif
 
+ifeq ($(CONFIG_FPCDESK_BENCH),y)
+CSRCS    += desk_bench.c desk_bench_run.c desk_bench_demo.c
+endif
+
 ifeq ($(CONFIG_FPCDESK_DESKCTL),y)
 PROGNAME  += deskctl
 PRIORITY  += 100
 STACKSIZE += 4096
 MAINSRC   += deskctl_main.c
+endif
+
+ifeq ($(CONFIG_FPCDESK_CHESS),y)
+CSRCS     += desk_chess.c desk_chess_engine.c desk_chess_pieces.c
+PROGNAME  += chess
+PRIORITY  += 100
+STACKSIZE += 16384
+MAINSRC   += desk_chess_main.c
 endif
 
 include $(APPDIR)/Application.mk
