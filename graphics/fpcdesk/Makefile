@@ -41,4 +41,12 @@ STACKSIZE += 4096
 MAINSRC   += deskctl_main.c
 endif
 
+ifeq ($(CONFIG_FPCDESK_CHESS),y)
+CSRCS     += desk_chess.c desk_chess_engine.c desk_chess_pieces.c
+PROGNAME  += chess
+PRIORITY  += 100
+STACKSIZE += 16384
+MAINSRC   += desk_chess_main.c
+endif
+
 include $(APPDIR)/Application.mk

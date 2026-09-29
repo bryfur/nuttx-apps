@@ -155,6 +155,10 @@ enum desk_app_e
                                     * window, and so their dither, stay
                                     * as they were) */
 #endif
+#ifdef CONFIG_FPCDESK_CHESS
+  APP_CHESS,                       /* (After the others, for the same
+                                    * reason) */
+#endif
   APP_COUNT
 };
 
@@ -415,6 +419,9 @@ extern const struct desk_app_s g_app_music;      /* desk_music.c */
 #endif
 #ifdef CONFIG_GAMES_NXDOOM_DESKTOP
 extern const struct desk_app_s g_app_doom;       /* desk_game.c */
+#endif
+#ifdef CONFIG_FPCDESK_CHESS
+extern const struct desk_app_s g_app_chess;      /* desk_chess.c */
 #endif
 
 extern const struct desk_app_s g_app_viewer;     /* desk_viewer.c */
