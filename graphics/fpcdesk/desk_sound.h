@@ -38,7 +38,9 @@
 #define SND_ALERT            3          /* A question, an error */
 #define SND_NOTIFY           4          /* Something has happened */
 #define SND_VOLUME           5          /* The volume was set: how loud */
-#define SND_COUNT            6
+#define SND_ALARM            6          /* An alarm rings (a chime) */
+#define SND_TIMER            7          /* The timer has ended */
+#define SND_COUNT            8
 
 /****************************************************************************
  * Public Function Prototypes

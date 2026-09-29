@@ -114,6 +114,29 @@ static const struct snd_def_s g_sounds[SND_COUNT] =
   /* SND_VOLUME: a short pop, at the new volume */
 
   { 1, { { 880, 880, 0, 70, 12000, 18, 25 } } },
+
+  /* SND_ALARM: a bright chime rising a major triad (A5, C#6, E6), rung
+   * every two seconds until the alarm is answered
+   */
+
+  {
+    3,
+    {
+      { 880, 880, 0, 420, 11000, 160, 25 },
+      { 1109, 1109, 140, 420, 11000, 160, 25 },
+      { 1319, 1319, 280, 800, 12000, 260, 25 },
+    }
+  },
+
+  /* SND_TIMER: ding-dong (E6, C6) */
+
+  {
+    2,
+    {
+      { 1319, 1319, 0, 600, 12000, 220, 30 },
+      { 1047, 1047, 300, 900, 12000, 320, 30 },
+    }
+  },
 };
 
 static struct

@@ -155,6 +155,12 @@ enum desk_app_e
                                     * window, and so their dither, stay
                                     * as they were) */
 #endif
+  APP_CLOCK,                       /* (New ones after the others, for the
+                                    * same reason) */
+  APP_CALENDAR,
+#ifdef CONFIG_FPCDESK_BENCH
+  APP_BENCH,
+#endif
   APP_COUNT
 };
 
@@ -182,7 +188,9 @@ enum desk_part_e
   PART_TIP,
   PART_MENU,                       /* A pop-up menu */
   PART_EDGE,                       /* Where the hidden dock comes out */
-  PART_SOUND                       /* The volume popover */
+  PART_SOUND,                      /* The volume popover */
+  PART_NOTIFY,                     /* A notification (desk_alarm.c) */
+  PART_CALPOP                      /* The top bar's calendar popover */
 };
 
 /****************************************************************************
@@ -420,6 +428,9 @@ extern const struct desk_app_s g_app_doom;       /* desk_game.c */
 extern const struct desk_app_s g_app_viewer;     /* desk_viewer.c */
 extern const struct desk_app_s g_app_paint;      /* desk_paint.c */
 extern const struct desk_app_s g_app_widgets;    /* desk_kitdemo.c */
+#ifdef CONFIG_FPCDESK_BENCH
+extern const struct desk_app_s g_app_bench;      /* desk_bench.c */
+#endif
 
 /****************************************************************************
  * Public Function Prototypes
