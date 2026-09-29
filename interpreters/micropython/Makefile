@@ -53,7 +53,15 @@ PORT_SRCS  += modfpc.c
 endif
 
 MAINSRC     = main.c
-CSRCS       = $(PORT_SRCS) $(MPY_SRCS)
+CSRCS       = $(PORT_SRCS) $(notdir $(MPY_SRCS))
+
+# MicroPython's sources by name (no two have the same), found in their
+# folders: so the dependencies on headers (the generated ones) are right
+
+MPY_DIRS    = $(MPY)/py $(MPY)/extmod $(MPY)/shared/readline
+MPY_DIRS   += $(MPY)/shared/runtime $(MPY)/shared/timeutils
+VPATH      += $(MPY_DIRS)
+DEPPATH    += $(addprefix --dep-path ,$(MPY_DIRS))
 
 # Flags: MicroPython's headers, the generated ones; its names that NuttX's
 # libraries have too

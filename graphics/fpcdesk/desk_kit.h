@@ -143,6 +143,9 @@
                                             * right; value: the offset) */
 #define KIT_F_DIRTY       0x1000           /* The kit's: to be drawn */
 #define KIT_F_RELAYOUT    0x2000           /* Box: to be laid out again */
+#define KIT_F_FREE        0x4000           /* Box: its widgets are where the
+                                            * application puts them (their
+                                            * x, y, w, h), not laid out */
 
 /* Box looks (style) */
 
@@ -629,9 +632,13 @@ int  kit_list_at(struct kit_s *k, int id, int x, int y);
 void kit_layout(struct kit_s *k);
 void kit_place(struct kit_s *k, int x, int y, int w, int h);
 
-/* The size the widgets would like (the root's natural size) */
+/* The size the widgets would like (the root's natural size); one
+ * widget's
+ */
 
 void kit_natural(struct kit_s *k, int *w, int *h);
+void kit_natural_of(struct kit_s *k, struct kit_widget_s *wg, int *w,
+                    int *h);
 
 /* Drawing what is marked; kit_redraw(): everything */
 

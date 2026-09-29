@@ -407,7 +407,12 @@ void *mp_nuttx_attach(size_t ctxsize)
       if (g_interp[i].pid == 0 || g_interp[i].pid == pid ||
           kill(g_interp[i].pid, 0) < 0)
         {
-          free(g_interp[i].port);
+          if (g_interp[i].port != NULL)
+            {
+              free(g_interp[i].port->fpc);
+              free(g_interp[i].port);
+            }
+
           p = calloc(1, MP_NUTTX_PORT_SIZE + ctxsize);
           g_interp[i].port = p;
           g_interp[i].pid  = p != NULL ? pid : 0;
@@ -435,6 +440,7 @@ void mp_nuttx_detach(void)
     {
       if (g_interp[i].pid == pid)
         {
+          free(g_interp[i].port->fpc);
           free(g_interp[i].port);
           g_interp[i].port = NULL;
           g_interp[i].pid  = 0;

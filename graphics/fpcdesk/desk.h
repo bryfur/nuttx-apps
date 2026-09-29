@@ -155,6 +155,9 @@ enum desk_app_e
                                     * window, and so their dither, stay
                                     * as they were) */
 #endif
+#ifdef CONFIG_FPCDESK_PYTHON
+  APP_PYTHON,                      /* Python: programs' windows (deskwin.h) */
+#endif
   APP_COUNT
 };
 
@@ -168,7 +171,8 @@ enum desk_evtype_e
   EV_BLOCKED,
   EV_REDRAW,
   EV_MODE,                         /* The display mode has changed */
-  EV_SOUND                         /* The mixer's state has changed */
+  EV_SOUND,                        /* The mixer's state has changed */
+  EV_CLIENT                        /* A program wants a window (deskwin.h) */
 };
 
 enum desk_part_e
@@ -416,6 +420,9 @@ extern const struct desk_app_s g_app_music;      /* desk_music.c */
 #ifdef CONFIG_GAMES_NXDOOM_DESKTOP
 extern const struct desk_app_s g_app_doom;       /* desk_game.c */
 #endif
+#ifdef CONFIG_FPCDESK_PYTHON
+extern const struct desk_app_s g_app_python;     /* desk_python.c */
+#endif
 
 extern const struct desk_app_s g_app_viewer;     /* desk_viewer.c */
 extern const struct desk_app_s g_app_paint;      /* desk_paint.c */
@@ -513,6 +520,8 @@ void desk_win_minimize(struct desk_win_s *w);
 void desk_win_restore(struct desk_win_s *w);
 void desk_win_maximize(struct desk_win_s *w);
 void desk_win_sync(struct desk_win_s *w);
+void desk_win_show(struct desk_win_s *w);  /* A window just opened (and
+                                            * drawn): it fades in, active */
 
 /* From any thread: have w's application's wake callback called on the
  * main thread soon (once, however many calls come before it runs).  The
@@ -644,6 +653,24 @@ void desk_settings_show(int page);
 void desk_settings_changed(int page);       /* What the page shows has
                                              * changed: drawn again if it
                                              * is showing */
+
+/* desk_term.c: a terminal whose tab runs a program (a builtin) instead of
+ * NSH; the window closes when it ends
+ */
+
+struct desk_win_s *desk_term_run(const char *program);
+
+/* desk_client.c: other tasks' windows (deskwin.h); desk_python.c: their
+ * application, Python.  The first word of such a window's w->priv says
+ * which kind of Python window it is.
+ */
+
+#define PYTHON_CLIENT     0x50594331               /* A program's (deskwin) */
+#define PYTHON_IDE        0x50594944               /* The IDE's */
+
+void desk_clients_init(void);
+void desk_clients_poll(void);                      /* EV_CLIENT */
+extern const struct desk_app_s g_app_client;
 
 /* desk_edit.c: open a file in a new editor window (NULL: a new file) */
 

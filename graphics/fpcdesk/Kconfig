@@ -126,6 +126,25 @@ config FPCDESK_GAME_CPUSCALE
 
 endif
 
+config FPCDESK_PYTHON
+	bool "Python: MicroPython programs' windows"
+	default y
+	depends on INTERPRETERS_MICROPYTHON
+	select FPCDESK_CLIENTS
+	---help---
+		The Python application: the windows that Python programs open
+		with the fpc module (a program of MicroPython's, started from a
+		terminal or anywhere), and in the launcher a terminal running
+		python.
+
+config FPCDESK_CLIENTS
+	bool
+	default n
+	---help---
+		Windows for other programs (apps/include/graphics/deskwin.h):
+		a task queues drawing commands and widget changes, the desktop
+		carries them out and hands back events.
+
 config FPCDESK_SOUND
 	bool "Sound: system sounds, the volume control, Settings' Sound page"
 	default y

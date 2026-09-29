@@ -23,6 +23,10 @@ CSRCS    += desk_image.c desk_viewer.c desk_paint.c
 CSRCS    += desk_kit.c desk_kit_paint.c desk_kit_dialog.c desk_kit_surface.c
 CSRCS    += desk_kitdemo.c
 
+ifeq ($(CONFIG_FPCDESK_PYTHON),y)
+CSRCS    += desk_client.c desk_python.c
+endif
+
 ifeq ($(CONFIG_FPCDESK_SOUND),y)
 CSRCS    += desk_sound.c desk_volume.c
 endif

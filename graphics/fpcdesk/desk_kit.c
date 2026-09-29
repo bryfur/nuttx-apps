@@ -833,7 +833,7 @@ static void place(struct kit_s *k, int i, int x, int y, int w, int h)
   wg->y = y;
   wg->w = w < 0 ? 0 : w;
   wg->h = h < 0 ? 0 : h;
-  if (wg->type != KIT_BOX)
+  if (wg->type != KIT_BOX || (wg->flags & KIT_F_FREE))
     {
       return;
     }
@@ -4353,6 +4353,12 @@ void kit_natural(struct kit_s *k, int *w, int *h)
     {
       measure(k, 0, w, h);
     }
+}
+
+void kit_natural_of(struct kit_s *k, struct kit_widget_s *wg, int *w,
+                    int *h)
+{
+  measure(k, index_of(k, wg), w, h);
 }
 
 void kit_layout(struct kit_s *k)
