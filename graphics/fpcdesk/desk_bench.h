@@ -30,7 +30,7 @@
 
 #define BENCH_NWG        48             /* Widgets */
 #define BENCH_HIST       60             /* Meters: samples kept (a minute) */
-#define BENCH_SDRAM      5              /* Scanout, blitter, DMA, CPU, codec */
+#define BENCH_SDRAM      4              /* Scanout, blitter, DMA, CPU */
 #define BENCH_MAXOBJ     200            /* Demos: things that move */
 
 /* The pages */

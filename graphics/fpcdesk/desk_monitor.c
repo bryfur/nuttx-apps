@@ -229,9 +229,9 @@ struct mon_heap_s
  * frames, and with a v6 GPU how busy it and its SDRAM are (0.1 %)
  */
 
-#define MON_GPU_MEMS     6              /* Buffers, windows, images, parked,
-                                         * other, free */
-#define MON_GPU_SDRAM    5              /* Scanout, blitter, DMA, CPU, codec */
+#define MON_GPU_MEMS     5              /* Buffers, windows, images, other,
+                                         * free */
+#define MON_GPU_SDRAM    4              /* Scanout, blitter, DMA, CPU */
 
 struct mon_gpu_s
 {
@@ -240,9 +240,7 @@ struct mon_gpu_s
   uint8_t  version;
   uint32_t space;
   uint32_t mem[MON_GPU_MEMS];
-  uint32_t parkedpx;                    /* What the parked windows had */
-  uint16_t nparked;
-  uint16_t nlost;                       /* Parked, to be drawn again */
+  uint16_t nparked;                     /* Parked, to be drawn again */
   uint16_t nmem;                        /* Windows in memory */
   uint16_t largew;
   uint16_t largeh;
@@ -893,26 +891,19 @@ static void mon_readgpu(struct mon_gpu_s *g)
       g->mem[2] = n[1];
     }
 
-  if (gpu_nums(buf, "Parked:", n, 3) == 3)
-    {
-      g->nparked  = n[0];
-      g->parkedpx = n[1];
-      g->mem[3]   = n[2];
-    }
-
   if (gpu_nums(buf, "Released:", n, 1) == 1)
     {
-      g->nlost = n[0];
+      g->nparked = n[0];
     }
 
   if (gpu_nums(buf, "Other:", n, 2) == 2)
     {
-      g->mem[4] = n[1];
+      g->mem[3] = n[1];
     }
 
   if (gpu_nums(buf, "Free:", n, 3) == 3)
     {
-      g->mem[5] = n[0];
+      g->mem[4] = n[0];
       g->largew = n[1];
       g->largeh = n[2];
     }
@@ -939,14 +930,14 @@ static void mon_readgpu(struct mon_gpu_s *g)
     }
 
   /* A v6 GPU with a clock: how busy it is, the SDRAM's time by client
-   * ("SDRAM: t.t % scanout a.a blitter b.b DMA c.c CPU d.d codec e.e")
+   * ("SDRAM: t.t % scanout a.a blitter b.b DMA c.c CPU d.d")
    */
 
   if (gpu_nums(buf, "GPU:", n, 3) == 3)
     {
       g->hw   = true;
       g->busy = n[1] * 10 + n[2];
-      if (gpu_nums(buf, "SDRAM:", n, 12) == 12)
+      if (gpu_nums(buf, "SDRAM:", n, 10) == 10)
         {
           for (i = 0; i < MON_GPU_SDRAM; i++)
             {
@@ -2382,17 +2373,17 @@ static void draw_gpu(struct mon_s *m)
 {
   const uint16_t memcol[MON_GPU_MEMS] =                /* The theme's */
   {
-    C_ACCENT, C_VIOLET, RGB(0x22, 0xd0, 0xb0), C_AMBER, C_FAINT, C_TRACK
+    C_ACCENT, C_VIOLET, RGB(0x22, 0xd0, 0xb0), C_FAINT, C_TRACK
   };
 
   const uint16_t sdcol[MON_GPU_SDRAM] =
   {
-    C_ACCENT, C_VIOLET, C_GREEN, C_AMBER, RGB(0x22, 0xd0, 0xb0)
+    C_ACCENT, C_VIOLET, C_GREEN, C_AMBER
   };
 
   static const char * const sdname[MON_GPU_SDRAM] =
   {
-    "scanout", "blitter", "DMA", "CPU", "codec"
+    "scanout", "blitter", "DMA", "CPU"
   };
 
   const struct mon_gpu_s *g = &m->snap.gpu;
@@ -2403,7 +2394,6 @@ static void draw_gpu(struct mon_s *m)
   uint16_t kc[MON_GPU_MEMS];
   char buf[64];
   char b1[16];
-  char b2[16];
   uint32_t v[MON_GPU_SDRAM];
   int x0 = c->x + INSET;
   int iw = c->w - 2 * INSET;
@@ -2444,7 +2434,7 @@ static void draw_gpu(struct mon_s *m)
    */
 
   lw = colw[0] - text_width(&g_desk_font_uib, "Memory") - 12;
-  fmt_px(b1, sizeof(b1), g->mem[5]);
+  fmt_px(b1, sizeof(b1), g->mem[4]);
   snprintf(buf, sizeof(buf), "%s free, largest %u x %u", b1, g->largew,
            g->largeh);
   if (text_width(&g_desk_font_small, buf) > lw)
@@ -2471,23 +2461,12 @@ static void draw_gpu(struct mon_s *m)
   fmt_px(b1, sizeof(b1), g->mem[1]);
   snprintf(keybuf[nk], sizeof(keybuf[nk]), "Windows %s", b1);
   kc[nk++] = memcol[1];
-  if (g->nparked + g->nlost > 0)
+  if (g->nparked > 0)
     {
-      /* What the parked windows had, in what they take, if it fits */
+      /* Windows parked: they take nothing, and are drawn again when seen */
 
-      fmt_px(b1, sizeof(b1), g->parkedpx);
-      fmt_px(b2, sizeof(b2), g->mem[3]);
-      snprintf(keybuf[nk], sizeof(keybuf[nk]), "%u parked: %s in %s",
-               g->nparked + g->nlost, b1, b2);
-      if (text_width(&g_desk_font_small, keybuf[0]) +
-          text_width(&g_desk_font_small, keybuf[1]) +
-          text_width(&g_desk_font_small, keybuf[nk]) + 3 * 22 > colw[0])
-        {
-          snprintf(keybuf[nk], sizeof(keybuf[nk]), "%u parked: %s",
-                   g->nparked + g->nlost, b2);
-        }
-
-      kc[nk++] = memcol[3];
+      snprintf(keybuf[nk], sizeof(keybuf[nk]), "%u parked", g->nparked);
+      kc[nk++] = C_AMBER;
     }
 
   if (g->mem[2] > 0)
@@ -2589,7 +2568,7 @@ static void draw_gpu(struct mon_s *m)
       key[0] = g->version >= 6 ? "SDRAM: the GPU has no clock" :
                                  "SDRAM: a v6 GPU tells";
       field_key(m, F_GPU_SDKEY, colx[2], c->y + 70, colw[2], 1, key,
-                &memcol[4], C_CARD);
+                &memcol[3], C_CARD);
     }
 
   flush();

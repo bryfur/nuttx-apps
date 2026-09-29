@@ -45,9 +45,6 @@
  *                                 has it; APP: a part of its name
  *   deskctl wins                  the windows, the top one first: the
  *                                 application, position, size, state
- *   deskctl codec on|off          parked windows kept compressed (a v6
- *                                 GPU), or dropped and drawn again by
- *                                 their clients as with a v5 GPU
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -88,7 +85,6 @@ struct fpc_gpu_stats_s
 };
 
 void fpc_gpu_stats(struct fpc_gpu_stats_s *st, bool clear);
-void fpc_nxaccel_codec(bool on);
 #endif
 #ifdef CONFIG_ARCH_SIM
 int fpc_simgpu_screenshot(FAR const char *path);
@@ -544,12 +540,6 @@ int main(int argc, FAR char *argv[])
   if (strcmp(argv[1], "stats") == 0)
     {
       deskctl_stats(argc >= 3 ? argv[2] : NULL);
-      return EXIT_SUCCESS;
-    }
-
-  if (strcmp(argv[1], "codec") == 0 && argc >= 3)
-    {
-      fpc_nxaccel_codec(strcmp(argv[2], "off") != 0);
       return EXIT_SUCCESS;
     }
 #endif
