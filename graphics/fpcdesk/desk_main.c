@@ -38,6 +38,7 @@
 #include <nuttx/nx/nxbe.h>
 
 #include "desk.h"
+#include "desk_clock.h"
 #ifdef CONFIG_FPCDESK_SOUND
 #  include "desk_sound.h"
 #endif
@@ -1384,9 +1385,18 @@ static void on_mouse(struct desk_event_s *ev)
 #ifdef CONFIG_FPCDESK_SOUND
   desk_volume_mouse_any(ev->part, ev->buttons);
 #endif
+  desk_clock_mouse_any(ev->part, ev->buttons);
 
   switch (ev->part)
     {
+      case PART_NOTIFY:
+        desk_notify_mouse(ev->pos.x, ev->pos.y, ev->buttons);
+        break;
+
+      case PART_CALPOP:
+        desk_calpop_mouse(ev->pos.x, ev->pos.y, ev->buttons);
+        break;
+
 #ifdef CONFIG_FPCDESK_SOUND
       case PART_SOUND:
         desk_volume_popover_mouse(ev->pos.x, ev->pos.y, ev->buttons);
@@ -1686,6 +1696,7 @@ static void tick(void)
 
   desk_load_sample();
   desk_panels_tick();
+  desk_clock_tick();
   for (w = g_desk.wins; w != NULL; w = next)
     {
       next = w->next;
@@ -1820,6 +1831,8 @@ int main(int argc, FAR char *argv[])
       desk_topbar_draw();
     }
 #endif
+
+  desk_clock_init();                      /* Alarms ring from now on */
 
   /* Start with a terminal */
 

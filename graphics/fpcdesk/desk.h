@@ -155,6 +155,9 @@ enum desk_app_e
                                     * window, and so their dither, stay
                                     * as they were) */
 #endif
+  APP_CLOCK,                       /* (New ones after the others, for the
+                                    * same reason) */
+  APP_CALENDAR,
   APP_COUNT
 };
 
@@ -182,7 +185,9 @@ enum desk_part_e
   PART_TIP,
   PART_MENU,                       /* A pop-up menu */
   PART_EDGE,                       /* Where the hidden dock comes out */
-  PART_SOUND                       /* The volume popover */
+  PART_SOUND,                      /* The volume popover */
+  PART_NOTIFY,                     /* A notification (desk_alarm.c) */
+  PART_CALPOP                      /* The top bar's calendar popover */
 };
 
 /****************************************************************************
