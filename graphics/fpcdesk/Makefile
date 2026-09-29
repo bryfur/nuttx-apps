@@ -34,6 +34,10 @@ CFLAGS   += ${INCDIR_PREFIX}$(APPDIR)/audioutils/libmad/libmad
 endif
 endif
 
+ifeq ($(CONFIG_FPCDESK_BENCH),y)
+CSRCS    += desk_bench.c desk_bench_run.c desk_bench_demo.c
+endif
+
 ifeq ($(CONFIG_FPCDESK_DESKCTL),y)
 PROGNAME  += deskctl
 PRIORITY  += 100

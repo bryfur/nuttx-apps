@@ -155,6 +155,10 @@ enum desk_app_e
                                     * window, and so their dither, stay
                                     * as they were) */
 #endif
+#ifdef CONFIG_FPCDESK_BENCH
+  APP_BENCH,                       /* (New applications go last, for the
+                                    * same reason) */
+#endif
   APP_COUNT
 };
 
@@ -420,6 +424,9 @@ extern const struct desk_app_s g_app_doom;       /* desk_game.c */
 extern const struct desk_app_s g_app_viewer;     /* desk_viewer.c */
 extern const struct desk_app_s g_app_paint;      /* desk_paint.c */
 extern const struct desk_app_s g_app_widgets;    /* desk_kitdemo.c */
+#ifdef CONFIG_FPCDESK_BENCH
+extern const struct desk_app_s g_app_bench;      /* desk_bench.c */
+#endif
 
 /****************************************************************************
  * Public Function Prototypes
