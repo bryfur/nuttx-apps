@@ -155,6 +155,19 @@ config FPCDESK_MUSIC_DIR
 		directory ($HOME, else CONFIG_LIBC_HOMEDIR), and its Music
 		folder if it has one.
 
+config FPCDESK_BENCH
+	bool "GPU Bench: benchmarks, meters and demonstrations of the GPU"
+	default y
+	depends on FPC_GPU && NX_COMPOSITOR
+	---help---
+		An application that measures the FPC's GPU (FILL, COPY, the
+		kinds of BLEND, EXPAND, BC1), its link (PUT, READ), the
+		compositor and the commands a second, by the GPU's own clock
+		where it has one (v6 STATS); graphs of how busy the GPU and
+		its SDRAM are and of the link, from /proc/gpu; and
+		demonstrations of what it draws.  It calls the board's GPU
+		driver (a flat build).
+
 config FPCDESK_CHESS
 	bool "Chess"
 	default y

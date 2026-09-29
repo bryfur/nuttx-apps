@@ -1418,16 +1418,22 @@ static void shift_lines(struct desk_win_s *w, struct lay_s *l, int from,
  * in view)
  */
 
-/* The lines marked, or all of them */
+/* The lines marked, or all of them; the band of the text area drawn,
+ * [*y0, *y1) (nothing: *y0 == *y1)
+ */
 
-static void lines_draw(struct desk_win_s *w, struct lay_s *l)
+static void lines_draw(struct desk_win_s *w, struct lay_s *l, int *y0,
+                       int *y1)
 {
   struct edit_s *e = w->priv;
   int i;
 
+  *y0 = l->ty;
+  *y1 = l->ty;
   if (e->full)
     {
       text_draw(w, l);
+      *y1 = l->ty + l->th;
     }
   else if (e->dlo <= e->dhi)
     {
@@ -1437,6 +1443,13 @@ static void lines_draw(struct desk_win_s *w, struct lay_s *l)
       for (i = a; i <= b; i++)
         {
           line_draw(w, l, i);
+        }
+
+      if (a <= b)
+        {
+          *y0 = l->ty + (a - e->top) * LH;
+          *y1 = l->ty + (b - e->top + 1) * LH;
+          *y1 = *y1 < l->ty + l->th ? *y1 : l->ty + l->th;
         }
     }
 
@@ -1449,6 +1462,9 @@ static void refresh(struct desk_win_s *w, bool follow)
 {
   struct edit_s *e = w->priv;
   struct lay_s l;
+  int top = e->top;
+  int y0;
+  int y1;
   int v;
 
   layout(w, &l);
@@ -1481,18 +1497,28 @@ static void refresh(struct desk_win_s *w, bool follow)
       e->full = true;
     }
 
-  lines_draw(w, &l);
+  lines_draw(w, &l, &y0, &y1);
   ops_draw((NXWINDOW)w->hwnd, &g_o);
+  if (e->top != top)
+    {
+      y0 = l.ty;                         /* Scrolled: all of it moved */
+      y1 = l.ty + l.th;
+    }
 
-  /* The kit's widgets; anything of it over the text (a tooltip, a
-   * dialog) again
+  /* The kit's widgets; anything of it over the text drawn (a tooltip, a
+   * dialog) again: only there, where it was drawn over (its round corners
+   * and shadows blend: over themselves they would come out darker)
    */
 
   scrollbar_sync(w, &l);
   status_sync(w);
   toolbar_sync(w);
   kit_flush(&e->kit);
-  kit_touched(&e->kit, 0, l.ty, l.xr, l.th);
+  if (y1 > y0)
+    {
+      kit_touched(&e->kit, 0, y0, l.xr, y1 - y0);
+    }
+
   set_title(w);
 }
 
@@ -2593,6 +2619,8 @@ static void edit_paint(struct kit_s *k, struct kit_widget_s *wg, int x0,
   struct desk_win_s *w = k->w;
   struct edit_s *e = w->priv;
   struct lay_s l;
+  int a;
+  int b;
 
   layout(w, &l);
   if (!e->full)
@@ -2600,7 +2628,7 @@ static void edit_paint(struct kit_s *k, struct kit_widget_s *wg, int x0,
       dirty(e, e->top + (y0 - l.ty) / LH, e->top + (y1 - 1 - l.ty) / LH);
     }
 
-  lines_draw(w, &l);
+  lines_draw(w, &l, &a, &b);
   ops_draw((NXWINDOW)w->hwnd, &g_o);
 }
 

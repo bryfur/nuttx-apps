@@ -8,7 +8,8 @@
  * The others have a file each: desk_term.c, desk_files.c, desk_edit.c,
  * desk_viewer.c, desk_paint.c, desk_monitor.c, desk_settings.c, desk_log.c,
  * desk_calc.c, desk_tetris.c, desk_solitaire.c, desk_breakout.c,
- * desk_game.c (Doom), desk_clock.c, desk_calendar.c, desk_chess.c.
+ * desk_game.c (Doom), desk_clock.c, desk_calendar.c, desk_bench.c (GPU
+ * Bench), desk_chess.c.
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -196,6 +197,9 @@ const struct desk_app_s * const g_apps[APP_COUNT] =
 #endif
   [APP_CLOCK]    = &g_app_clock,
   [APP_CALENDAR] = &g_app_calendar,
+#ifdef CONFIG_FPCDESK_BENCH
+  [APP_BENCH]    = &g_app_bench,
+#endif
 #ifdef CONFIG_FPCDESK_CHESS
   [APP_CHESS]    = &g_app_chess,
 #endif

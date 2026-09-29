@@ -158,6 +158,9 @@ enum desk_app_e
   APP_CLOCK,                       /* (New ones after the others, for the
                                     * same reason) */
   APP_CALENDAR,
+#ifdef CONFIG_FPCDESK_BENCH
+  APP_BENCH,
+#endif
 #ifdef CONFIG_FPCDESK_CHESS
   APP_CHESS,
 #endif
@@ -431,6 +434,9 @@ extern const struct desk_app_s g_app_chess;      /* desk_chess.c */
 extern const struct desk_app_s g_app_viewer;     /* desk_viewer.c */
 extern const struct desk_app_s g_app_paint;      /* desk_paint.c */
 extern const struct desk_app_s g_app_widgets;    /* desk_kitdemo.c */
+#ifdef CONFIG_FPCDESK_BENCH
+extern const struct desk_app_s g_app_bench;      /* desk_bench.c */
+#endif
 
 /****************************************************************************
  * Public Function Prototypes
