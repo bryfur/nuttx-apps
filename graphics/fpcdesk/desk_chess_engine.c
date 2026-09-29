@@ -1153,20 +1153,23 @@ void ch_unmake(struct ch_pos_s *p, ch_move_t m, const struct ch_undo_s *u)
 
 int ch_legal(struct ch_pos_s *p, ch_move_t *m)
 {
-  ch_move_t all[CH_MAXMOVES];
   struct ch_undo_s u;
-  int n = ch_generate(p, all, false);
+  int n = ch_generate(p, m, false);
   int k = 0;
   int i;
 
+  /* The legal ones kept in place: no second list on the stack */
+
   for (i = 0; i < n; i++)
     {
-      if (ch_make(p, all[i], &u))
+      ch_move_t mv = m[i];
+
+      if (ch_make(p, mv, &u))
         {
-          m[k++] = all[i];
+          m[k++] = mv;
         }
 
-      ch_unmake(p, all[i], &u);
+      ch_unmake(p, mv, &u);
     }
 
   return k;

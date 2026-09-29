@@ -193,7 +193,9 @@ bool ch_setfen(struct ch_pos_s *p, const char *fen);
 void ch_getfen(const struct ch_pos_s *p, char *buf, int size);
 void ch_startpos(struct ch_pos_s *p);
 
-/* Moves: pseudo-legal ones, legal ones, making and taking back */
+/* Moves: pseudo-legal ones, legal ones (m: room for CH_MAXMOVES), making
+ * and taking back
+ */
 
 int  ch_generate(const struct ch_pos_s *p, ch_move_t *m, bool captures);
 int  ch_legal(struct ch_pos_s *p, ch_move_t *m);

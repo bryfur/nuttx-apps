@@ -185,6 +185,10 @@ struct chess_s
   /* The game and the players */
 
   struct game_s g;
+  struct ch_pos_s tmp;                   /* A position being set up */
+  bool     over;                         /* The game has just ended: say
+                                          * so (from wake: the stack is
+                                          * shallow there) */
   int      mode;                         /* MODE_* */
   int      level;
   bool     flip;                         /* Black at the bottom */
@@ -1366,11 +1370,8 @@ static void play(struct chess_s *c, ch_move_t m)
   board_update(c, dirty, 0, 0, 0, 0);
   if (c->g.result != RES_NONE)
     {
-      panel_update(c);
-      kit_flush(&c->kit);
-      game_over_ask(c);
-      kit_flush(&c->kit);
-      return;
+      c->over = true;
+      desk_wake(c->w);
     }
 
   maybe_think(c);
@@ -1676,9 +1677,7 @@ static void step(struct chess_s *c, int dir)
 
 static void load_fen(struct chess_s *c, const char *fen)
 {
-  struct ch_pos_s p;
-
-  if (!ch_setfen(&p, fen))
+  if (!ch_setfen(&c->tmp, fen))
     {
       kit_dialog(&c->kit, 0, KIT_DLG_MESSAGE, "Not a position",
                  "The FEN could not be read, or the position is not "
@@ -1687,7 +1686,7 @@ static void load_fen(struct chess_s *c, const char *fen)
       return;
     }
 
-  new_game(c, &p);
+  new_game(c, &c->tmp);
 }
 
 static void copy_moves(struct chess_s *c)
@@ -1736,12 +1735,7 @@ static void chess_event(struct kit_s *k, struct kit_widget_s *wg, int ev)
         switch (id)
           {
             case W_NEW:
-              {
-                struct ch_pos_s p;
-
-                ch_setfen(&p, g_start);
-                new_game(c, &p);
-              }
+              load_fen(c, g_start);
               break;
 
             case W_UNDO:
@@ -1830,10 +1824,7 @@ static void chess_event(struct kit_s *k, struct kit_widget_s *wg, int ev)
           }
         else if (k->key == DLG_OVER && k->arg == KIT_ANS_OK)
           {
-            struct ch_pos_s p;
-
-            ch_setfen(&p, g_start);
-            new_game(c, &p);
+            load_fen(c, g_start);
           }
         break;
 
@@ -2089,6 +2080,15 @@ static void chess_wake(struct desk_win_s *w)
       return;
     }
 
+  if (c->over)
+    {
+      c->over = false;
+      if (c->g.result != RES_NONE && !kit_dialog_open(&c->kit))
+        {
+          game_over_ask(c);
+        }
+    }
+
   if (c->surf.lost && c->made != 0)
     {
       surface_make(c);
@@ -2197,7 +2197,6 @@ static struct desk_win_s *chess_open(void)
 {
   struct desk_win_s *w;
   struct chess_s *c;
-  struct ch_pos_s p;
 
   c = calloc(1, sizeof(*c));
   if (c == NULL)
@@ -2243,8 +2242,8 @@ static struct desk_win_s *chess_open(void)
   c->list.empty   = "No moves yet";
 
   ch_init();
-  ch_setfen(&p, g_start);
-  game_new(&c->g, &p);
+  ch_setfen(&c->tmp, g_start);
+  game_new(&c->g, &c->tmp);
   position_changed(c);
 
   chess_build(c);
