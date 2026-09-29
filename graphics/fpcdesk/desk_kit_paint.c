@@ -549,6 +549,13 @@ void kit_paint_thumb(struct desk_ops_s *o, int x, int y, int h, bool hot,
             LUT_R3, 3, g_theme.thumb, drag ? 255 : hot ? 220 : 170);
 }
 
+void kit_paint_thumb_across(struct desk_ops_s *o, int x, int y, int w,
+                            bool hot, bool drag)
+{
+  ops_rrect(o, x + 2, y + (hot || drag ? 2 : 3), w - 4, hot || drag ? 8 : 6,
+            LUT_R3, 3, g_theme.thumb, drag ? 255 : hot ? 220 : 170);
+}
+
 int kit_tooltip_size(const char *text, int *h)
 {
   *h = text_height(KIT_FONT_SMALL) + 10;

@@ -164,6 +164,7 @@ enum desk_app_e
 #ifdef CONFIG_FPCDESK_CHESS
   APP_CHESS,
 #endif
+  APP_SHEET,
   APP_COUNT
 };
 
@@ -437,6 +438,7 @@ extern const struct desk_app_s g_app_widgets;    /* desk_kitdemo.c */
 #ifdef CONFIG_FPCDESK_BENCH
 extern const struct desk_app_s g_app_bench;      /* desk_bench.c */
 #endif
+extern const struct desk_app_s g_app_sheet;      /* desk_sheet.c */
 
 /****************************************************************************
  * Public Function Prototypes
@@ -665,6 +667,12 @@ void desk_settings_changed(int page);       /* What the page shows has
 /* desk_edit.c: open a file in a new editor window (NULL: a new file) */
 
 int desk_editor_open(const char *path);
+
+/* desk_sheet.c: open a spreadsheet (.csv, .tsv, .sheet) in a new window
+ * (NULL: a new one)
+ */
+
+int desk_sheet_open(const char *path);
 
 /* desk_viewer.c: show an image; desk_paint.c: edit one (NULL: a new one) */
 

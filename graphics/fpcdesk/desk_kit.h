@@ -193,6 +193,11 @@
 #define KIT_LIST_PLAIN    1                /* A scroll bar */
 #define KIT_LIST_SIDEBAR  2                /* Neither: places, pages */
 
+/* Scroll bar looks */
+
+#define KIT_SCROLL_VERT   0                /* Up and down (kit_scroll()) */
+#define KIT_SCROLL_HORIZ  1                /* Across: set its style */
+
 /* Columns */
 
 #define KIT_COL_RIGHT     0x01             /* Right-aligned */
@@ -742,6 +747,8 @@ void kit_paint_icon(struct desk_ops_s *o, int icon, int x, int y,
                     uint16_t c, uint16_t bg);
 void kit_paint_thumb(struct desk_ops_s *o, int x, int y, int h, bool hot,
                      bool drag);
+void kit_paint_thumb_across(struct desk_ops_s *o, int x, int y, int w,
+                            bool hot, bool drag);
 void kit_paint_tooltip(struct desk_ops_s *o, int x, int y, int w, int h,
                        const char *text);
 void kit_paint_stepper(struct desk_ops_s *o, int x, int y, int w,

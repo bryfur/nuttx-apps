@@ -218,4 +218,12 @@ config FPCDESK_DESKCTL
 		deskctl wins             the windows, top first
 		For testing the desktop without a mouse and keyboard.
 
+config FPCDESK_SHEET_CMD
+	bool "sheet: the Spreadsheet's engine from NSH"
+	default y
+	---help---
+		sheet --selftest [DIR]  the formula engine's tests
+		sheet --bench [ROWS]    a big sheet's memory and recalculation
+		sheet FILE              a .csv or .sheet file's values
+
 endif
