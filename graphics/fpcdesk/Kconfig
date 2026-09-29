@@ -127,15 +127,16 @@ config FPCDESK_GAME_CPUSCALE
 endif
 
 config FPCDESK_PYTHON
-	bool "Python: MicroPython programs' windows"
+	bool "Python: the IDE, and Python programs' windows"
 	default y
 	depends on INTERPRETERS_MICROPYTHON
 	select FPCDESK_CLIENTS
 	---help---
-		The Python application: the windows that Python programs open
-		with the fpc module (a program of MicroPython's, started from a
-		terminal or anywhere), and in the launcher a terminal running
-		python.
+		The Python application: an IDE (the Text Editor with Python's
+		colours and indents, Run and Stop, a console for the program's
+		output and input, a REPL, examples, recent files), and the
+		windows that Python programs open with the fpc module (started
+		from the IDE, a terminal, or anywhere).
 
 config FPCDESK_CLIENTS
 	bool

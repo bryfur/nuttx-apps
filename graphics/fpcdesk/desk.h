@@ -693,6 +693,67 @@ extern const struct desk_app_s g_app_client;
 
 int desk_editor_open(const char *path);
 
+/* An editor with more, for another application (the Python IDE,
+ * desk_ide.c): widgets at the tool bar's start and below the text (ids
+ * from EDIT_EXT_ID), whose events, drawing (custom widgets) and dialogs
+ * (ids from EDIT_EXT_ID) and menus come to the extension; the text's keys
+ * go to it first.  The window is the extension's application's, which
+ * forwards to g_app_editor's callbacks.
+ */
+
+#define EDIT_EXT_ID       100
+
+struct kit_s;
+struct kit_widget_s;
+
+struct edit_ext_s
+{
+  uint32_t kind;                   /* The first word of w->priv */
+  int app;                         /* The window's application */
+  int w;                           /* Its client area */
+  int h;
+  void (*toolbar)(struct desk_win_s *w, struct kit_s *k);
+  void (*pane)(struct desk_win_s *w, struct kit_s *k);
+  void (*event)(struct desk_win_s *w, struct kit_s *k,
+                struct kit_widget_s *wg, int ev);
+  void (*paint)(struct desk_win_s *w, struct kit_s *k,
+                struct kit_widget_s *wg, int x0, int y0, int x1, int y1);
+  bool python;                     /* A new document is Python */
+  bool (*key)(struct desk_win_s *w, int key);  /* true: taken */
+  void (*newdoc)(struct desk_win_s *w);        /* New (Ctrl-N) */
+  void (*saved)(struct desk_win_s *w);         /* A file has been saved */
+  void (*close)(struct desk_win_s *w);         /* The window is going */
+};
+
+struct desk_win_s *desk_edit_open_ext(const char *path,
+                                      const struct edit_ext_s *ext,
+                                      void *priv);
+void *desk_edit_extpriv(struct desk_win_s *w);
+const char *desk_edit_path(struct desk_win_s *w);   /* "": untitled */
+bool desk_edit_modified(struct desk_win_s *w);
+void desk_edit_save(struct desk_win_s *w);          /* Save As if untitled */
+int  desk_edit_load(struct desk_win_s *w, const char *path);
+void desk_edit_goto(struct desk_win_s *w, int line);  /* 1: the first */
+void desk_edit_message(struct desk_win_s *w, bool err, const char *msg);
+struct kit_s *desk_edit_kit(struct desk_win_s *w);
+
+/* desk_ide.c: the Python IDE (an editor with a console); the examples it
+ * offers (desk_pyexamples.c, made at build time)
+ */
+
+struct desk_pyexample_s
+{
+  const char *name;
+  const char *text;
+};
+
+extern const struct desk_pyexample_s g_desk_pyexamples[];
+extern const int g_desk_npyexamples;
+
+struct desk_win_s *desk_ide_open(const char *path);  /* Not shown yet */
+void desk_ide_wake(struct desk_win_s *w);
+void desk_ide_tick(struct desk_win_s *w);
+
 /* desk_viewer.c: show an image; desk_paint.c: edit one (NULL: a new one) */
 
 int desk_viewer_open(const char *path);

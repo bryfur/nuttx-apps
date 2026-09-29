@@ -16,9 +16,11 @@
 #include <alloca.h>
 #include <limits.h>
 
-/* The level: the unix port's standard variant, less what NuttX has not */
+/* The level: the unix port's standard variant, and t-strings (PEP 750),
+ * less what NuttX has not
+ */
 
-#define MICROPY_CONFIG_ROM_LEVEL      (MICROPY_CONFIG_ROM_LEVEL_EXTRA_FEATURES)
+#define MICROPY_CONFIG_ROM_LEVEL      (MICROPY_CONFIG_ROM_LEVEL_FULL_FEATURES)
 
 /* The heap: garbage collected, from the C heap (the PSRAM on the board) */
 

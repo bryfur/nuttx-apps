@@ -23,6 +23,16 @@
  * before closing?, Save As: the kit's file dialog) are the widget kit's
  * (desk_kit.h); the text is a custom widget of it that takes every key,
  * drawn here.
+ *
+ * Python files: colours (keywords, builtins, strings, triple-quoted ones
+ * across lines, comments, decorators, numbers), Enter after a ':' indents
+ * four more, Tab puts spaces to the next four, Backspace in an indent takes
+ * four back.
+ *
+ * Another application can have an editor with more (struct edit_ext_s,
+ * desk.h: the Python IDE, desk_ide.c): buttons at the tool bar's start,
+ * widgets below the text, their events and keys, a word when a file has
+ * been saved.
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -47,7 +57,8 @@
 #define EDIT_W         680
 #define EDIT_H         460
 
-#define NWG            16                /* The kit's widgets */
+#define NWG            40                /* The kit's widgets (with an
+                                          * extension's) */
 #define LH             20                /* A line */
 #define CW             9                 /* A character (Plex Mono 15) */
 #define TABW           4
@@ -72,6 +83,9 @@
 #define LANG_PLAIN     0
 #define LANG_C         1
 #define LANG_SHELL     2
+#define LANG_PYTHON    3
+
+#define PY_INDENT      4
 
 /* The widgets */
 
@@ -121,6 +135,9 @@ struct undo_s
 
 struct edit_s
 {
+  uint32_t kind;                         /* The extension's (0: none) */
+  const struct edit_ext_s *ext;          /* An application's additions */
+  void *extpriv;
   char path[PATH_MAX];                   /* "": untitled */
   struct line_s *ln;
   int nl;
@@ -243,6 +260,26 @@ static const char * const g_ctype[] =
   "unsigned", "bool", "size_t", "ssize_t", "off_t", "uint8_t", "uint16_t",
   "uint32_t", "uint64_t", "int8_t", "int16_t", "int32_t", "int64_t",
   "uintptr_t", "FAR", "FILE", NULL
+};
+
+static const char * const g_pykw[] =
+{
+  "False", "None", "True", "and", "as", "assert", "async", "await",
+  "break", "class", "continue", "def", "del", "elif", "else", "except",
+  "finally", "for", "from", "global", "if", "import", "in", "is", "lambda",
+  "nonlocal", "not", "or", "pass", "raise", "return", "try", "while",
+  "with", "yield", NULL
+};
+
+static const char * const g_pybi[] =
+{
+  "self", "print", "len", "range", "int", "str", "float", "bool", "list",
+  "dict", "tuple", "set", "bytes", "bytearray", "object", "type", "open",
+  "input", "isinstance", "enumerate", "zip", "map", "filter", "sorted",
+  "min", "max", "sum", "abs", "round", "super", "iter", "next", "hex",
+  "ord", "chr", "repr", "hasattr", "getattr", "setattr", "Exception",
+  "ValueError", "TypeError", "KeyError", "IndexError", "OSError",
+  "RuntimeError", "StopIteration", "KeyboardInterrupt", NULL
 };
 
 static const char * const g_shkw[] =
@@ -582,6 +619,162 @@ static bool in_words(const char *s, int n, const char * const *list)
  * state at its end); returns whether it ends in a block comment
  */
 
+/* Python: st is the triple quote a line starts in (1 \'\'\', 2 """, 0 none);
+ * the one the next starts in is returned
+ */
+
+static int syn_python(struct edit_s *e, const char *s, int n, int st,
+                      uint8_t *cls)
+{
+  int i = 0;
+  int j;
+  bool first = true;
+
+#define PMARK(a, b, c) do { if (cls) memset(cls + (a), (c), (b) - (a)); } \
+                       while (0)
+
+  while (i < n)
+    {
+      uint8_t c = s[i];
+
+      if (st)
+        {
+          char q = st == 1 ? '\'' : '"';
+
+          for (j = i; j + 2 < n && !(s[j] == q && s[j + 1] == q &&
+                                     s[j + 2] == q); j++)
+            {
+              j += s[j] == '\\';
+            }
+
+          if (j + 2 < n)
+            {
+              PMARK(i, j + 3, S_STRING);
+              i  = j + 3;
+              st = 0;
+            }
+          else
+            {
+              PMARK(i, n, S_STRING);
+              i = n;
+            }
+
+          continue;
+        }
+
+      if (c == ' ' || c == '\t')
+        {
+          i++;
+          continue;
+        }
+
+      if (c == '#')
+        {
+          PMARK(i, n, S_COMMENT);
+          break;
+        }
+
+      if (c == '@' && first)
+        {
+          for (j = i + 1; j < n && (is_word(s[j]) || s[j] == '.'); j++)
+            {
+            }
+
+          PMARK(i, j, S_PREPROC);
+          i = j;
+          first = false;
+          continue;
+        }
+
+      first = false;
+
+      /* Strings, with a prefix (r, b, f, u and pairs of them) */
+
+      j = i;
+      while (j < n && j - i < 2 && strchr("rRbBfFuUtT", s[j]) != NULL)
+        {
+          j++;
+        }
+
+      if (j < n && (s[j] == '"' || s[j] == '\'') &&
+          (j == i || i == 0 || !is_word(s[i - 1])))
+        {
+          char q = s[j];
+          int k;
+
+          if (j + 2 < n && s[j + 1] == q && s[j + 2] == q)
+            {
+              st = q == '\'' ? 1 : 2;
+              for (k = j + 3; k + 2 < n && !(s[k] == q && s[k + 1] == q &&
+                                             s[k + 2] == q); k++)
+                {
+                  k += s[k] == '\\';
+                }
+
+              if (k + 2 < n)
+                {
+                  PMARK(i, k + 3, S_STRING);
+                  i  = k + 3;
+                  st = 0;
+                }
+              else
+                {
+                  PMARK(i, n, S_STRING);
+                  i = n;
+                }
+
+              continue;
+            }
+
+          for (k = j + 1; k < n && s[k] != q; k++)
+            {
+              k += s[k] == '\\';
+            }
+
+          k += k < n;
+          PMARK(i, k > n ? n : k, S_STRING);
+          i = k;
+          continue;
+        }
+
+      if (isdigit(c) && (i == 0 || !is_word(s[i - 1])))
+        {
+          for (j = i; j < n && (is_word(s[j]) || s[j] == '.'); j++)
+            {
+            }
+
+          PMARK(i, j, S_NUMBER);
+          i = j;
+          continue;
+        }
+
+      if (isalpha(c) || c == '_')
+        {
+          for (j = i; j < n && is_word(s[j]); j++)
+            {
+            }
+
+          if (in_words(s + i, j - i, g_pykw))
+            {
+              PMARK(i, j, S_KEYWORD);
+            }
+          else if (in_words(s + i, j - i, g_pybi))
+            {
+              PMARK(i, j, S_TYPE);
+            }
+
+          i = j;
+          continue;
+        }
+
+      i++;
+    }
+
+#undef PMARK
+
+  return st;
+}
+
 static int syn_line(struct edit_s *e, int li, uint8_t *cls)
 {
   struct line_s *l = &e->ln[li];
@@ -604,6 +797,11 @@ static int syn_line(struct edit_s *e, int li, uint8_t *cls)
   if (e->lang == LANG_PLAIN)
     {
       return 0;
+    }
+
+  if (e->lang == LANG_PYTHON)
+    {
+      return syn_python(e, s, n, st, cls);
     }
 
   while (i < n)
@@ -784,7 +982,7 @@ static void syn_update(struct edit_s *e, int a, int b)
 {
   int i;
 
-  if (e->lang != LANG_C)
+  if (e->lang != LANG_C && e->lang != LANG_PYTHON)
     {
       return;
     }
@@ -826,8 +1024,13 @@ static int lang_of(const char *path)
       return LANG_C;
     }
 
+  if (ext != NULL && strcasecmp(ext, ".py") == 0)
+    {
+      return LANG_PYTHON;
+    }
+
   if ((ext != NULL && (strcasecmp(ext, ".sh") == 0 ||
-      strcasecmp(ext, ".mk") == 0 || strcasecmp(ext, ".py") == 0 ||
+      strcasecmp(ext, ".mk") == 0 ||
       strcasecmp(ext, ".cfg") == 0 || strcasecmp(ext, ".conf") == 0 ||
       strcasecmp(ext, ".nsh") == 0 || strcasecmp(ext, ".toml") == 0 ||
       strcasecmp(ext, ".yml") == 0 || strcasecmp(ext, ".yaml") == 0)) ||
@@ -1197,7 +1400,8 @@ static void scrollbar_sync(struct desk_win_s *w, struct lay_s *l)
 
 static const char *lang_name(int lang)
 {
-  return lang == LANG_C ? "C" : lang == LANG_SHELL ? "Shell" : "Plain Text";
+  return lang == LANG_C ? "C" : lang == LANG_SHELL ? "Shell" :
+         lang == LANG_PYTHON ? "Python" : "Plain Text";
 }
 
 static void status_sync(struct desk_win_s *w)
@@ -1904,6 +2108,12 @@ static void do_save(struct desk_win_s *w, const char *path)
     {
       e->modified = false;
       desk_win_close(w);
+      return;
+    }
+
+  if (e->ext != NULL && e->ext->saved != NULL)
+    {
+      e->ext->saved(w);
     }
 }
 
@@ -1952,7 +2162,8 @@ static void ask(struct desk_win_s *w, int prompt)
                  access("/tmp", F_OK) == 0 ? "/tmp" : "";
         }
 
-      snprintf(p, PATH_MAX, "%s/Untitled.txt", home);
+      snprintf(p, PATH_MAX, "%s/%s", home, e->lang == LANG_PYTHON ?
+               "untitled.py" : "Untitled.txt");
       kit_dialog(&e->kit, P_SAVEAS, KIT_DLG_SAVE, "Save As", p, NULL, 0);
       free(p);
     }
@@ -2107,6 +2318,88 @@ static void word_move(struct desk_win_s *w, int dir, bool shift)
   e->want = vcol(&e->ln[e->cl], e->cc);
 }
 
+/* Python: whether a line (to column n) opens a block (ends in ':', not
+ * in a string or a comment)
+ */
+
+static bool py_opens(const char *s, int n)
+{
+  char q = 0;
+  int last = -1;
+  int i;
+
+  for (i = 0; i < n; i++)
+    {
+      char c = s[i];
+
+      if (q != 0)
+        {
+          if (c == '\\')
+            {
+              i++;
+            }
+          else if (c == q)
+            {
+              q = 0;
+            }
+        }
+      else if (c == '#')
+        {
+          break;
+        }
+      else if (c == '"' || c == '\'')
+        {
+          q = c;
+          last = i;
+        }
+      else if (c != ' ' && c != '\t')
+        {
+          last = i;
+        }
+    }
+
+  return last >= 0 && s[last] == ':';
+}
+
+/* The cursor is in the line's indent (spaces only before it) */
+
+static bool py_indent_only(struct edit_s *e)
+{
+  struct line_s *ln = &e->ln[e->cl];
+  int i;
+
+  if (e->sel)
+    {
+      return false;
+    }
+
+  for (i = 0; i < e->cc; i++)
+    {
+      if (ln->s[i] != ' ')
+        {
+          return false;
+        }
+    }
+
+  return true;
+}
+
+/* New: another window of the editor's, or of the extension's */
+
+static void new_document(struct desk_win_s *w)
+{
+  struct edit_s *e = w->priv;
+
+  if (e->ext != NULL && e->ext->newdoc != NULL)
+    {
+      e->ext->newdoc(w);
+    }
+  else
+    {
+      desk_editor_open(NULL);
+    }
+}
+
 static void edit_keyone(struct desk_win_s *w, int k)
 {
   struct edit_s *e = w->priv;
@@ -2116,6 +2409,11 @@ static void edit_keyone(struct desk_win_s *w, int k)
   struct lay_s l;
   int page;
   int want = e->want;
+
+  if (e->ext != NULL && e->ext->key != NULL && e->ext->key(w, k))
+    {
+      return;
+    }
 
   layout(w, &l);
   page = l.full > 1 ? l.full - 1 : 1;
@@ -2277,7 +2575,15 @@ static void edit_keyone(struct desk_win_s *w, int k)
             break;
           }
 
-        if (e->cc > 0)
+        if (e->cc > 0 && e->lang == LANG_PYTHON && py_indent_only(e))
+          {
+            /* In the indent: back to the one before */
+
+            int to = (e->cc - 1) / PY_INDENT * PY_INDENT;
+
+            ed_delete(w, e->cl, to, e->cl, e->cc, true);
+          }
+        else if (e->cc > 0)
           {
             ed_delete(w, e->cl, e->cc - 1, e->cl, e->cc, true);
           }
@@ -2325,13 +2631,41 @@ static void edit_keyone(struct desk_win_s *w, int k)
               n++;
             }
 
+          /* Python: a block starts after a ':' (the line's last, before
+           * any comment): four more
+           */
+
+          if (e->lang == LANG_PYTHON && py_opens(ln->s, e->cc))
+            {
+              char *t = realloc(s, n + PY_INDENT);
+
+              if (t != NULL)
+                {
+                  s = t;
+                  memset(s + n, ' ', PY_INDENT);
+                  n += PY_INDENT;
+                }
+            }
+
           ed_insert(w, s, n, false);
           free(s);
         }
         break;
 
       case '\t':
-        ed_insert(w, "\t", 1, true);
+        if (e->lang == LANG_PYTHON)
+          {
+            /* Spaces to the next indent */
+
+            int v = vcol(&e->ln[e->cl], e->cc);
+
+            delete_sel(w);
+            ed_insert(w, "    ", PY_INDENT - v % PY_INDENT, true);
+          }
+        else
+          {
+            ed_insert(w, "\t", 1, true);
+          }
         break;
 
       case KEY_ESC:
@@ -2381,7 +2715,7 @@ static void edit_keyone(struct desk_win_s *w, int k)
         break;
 
       case KEY_CTL('n'):
-        desk_editor_open(NULL);
+        new_document(w);
         return;
 
       default:
@@ -2542,7 +2876,18 @@ static void text_mouse(struct desk_win_s *w, int x, int y, uint8_t buttons)
 static void edit_event(struct kit_s *k, struct kit_widget_s *wg, int ev)
 {
   struct desk_win_s *w = k->w;
+  struct edit_s *e = w->priv;
   int id = wg != NULL ? wg->id : 0;
+
+  /* An extension's widgets, menus and dialogs */
+
+  if (e->ext != NULL && e->ext->event != NULL &&
+      (id >= EDIT_EXT_ID || ev == KIT_EV_MENU ||
+       (ev == KIT_EV_DIALOG && k->key >= EDIT_EXT_ID)))
+    {
+      e->ext->event(w, k, wg, ev);
+      return;
+    }
 
   switch (ev)
     {
@@ -2550,7 +2895,7 @@ static void edit_event(struct kit_s *k, struct kit_widget_s *wg, int ev)
         switch (id)
           {
             case E_NEW:
-              desk_editor_open(NULL);
+              new_document(w);
               break;
 
             case E_SAVE:
@@ -2621,6 +2966,16 @@ static void edit_paint(struct kit_s *k, struct kit_widget_s *wg, int x0,
   struct lay_s l;
   int a;
   int b;
+
+  if (wg->id >= EDIT_EXT_ID)
+    {
+      if (e->ext != NULL && e->ext->paint != NULL)
+        {
+          e->ext->paint(w, k, wg, x0, y0, x1, y1);
+        }
+
+      return;
+    }
 
   layout(w, &l);
   if (!e->full)
@@ -2726,6 +3081,11 @@ static void edit_close(struct desk_win_s *w)
       return;
     }
 
+  if (e->ext != NULL && e->ext->close != NULL)
+    {
+      e->ext->close(w);
+    }
+
   ln_free(e);
   undo_free(e->undo, e->nundo);
   undo_free(e->redo, e->nredo);
@@ -2751,6 +3111,11 @@ static void edit_build(struct desk_win_s *w, struct edit_s *e)
 
   kit_col(k, KIT_BOX_WINDOW);
     kit_row(k, KIT_BOX_BAR);
+      if (e->ext != NULL && e->ext->toolbar != NULL)
+        {
+          e->ext->toolbar(w, k);
+        }
+
       kit_button(k, E_NEW, "New", KIT_ICON_NONE, KIT_BTN_NORMAL);
       kit_tip(k, "A new document (Ctrl-N)");
       kit_button(k, E_SAVE, "Save", KIT_ICON_NONE, KIT_BTN_NORMAL);
@@ -2774,6 +3139,11 @@ static void edit_build(struct desk_win_s *w, struct edit_s *e)
       kit_grow(k, 1);
       kit_scroll(k, E_SCROLL);
     kit_end(k);
+
+    if (e->ext != NULL && e->ext->pane != NULL)
+      {
+        e->ext->pane(w, k);
+      }
 
     kit_row(k, KIT_BOX_STATUS)->ph = 26;
       kit_label(k, E_LEFT, e->lefttext, KIT_TEXT_DIM);
@@ -2801,9 +3171,10 @@ static void edit_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
     }
 }
 
-static struct desk_win_s *edit_open(void)
+static struct desk_win_s *edit_open_with(const char *path,
+                                         const struct edit_ext_s *ext,
+                                         void *priv)
 {
-  const char *path = g_openpath;
   struct desk_win_s *w;
   struct edit_s *e;
   int ret = 0;
@@ -2812,6 +3183,14 @@ static struct desk_win_s *edit_open(void)
   if (e == NULL)
     {
       return NULL;
+    }
+
+  if (ext != NULL)
+    {
+      e->kind    = ext->kind;
+      e->ext     = ext;
+      e->extpriv = priv;
+      e->lang    = ext->python ? LANG_PYTHON : LANG_PLAIN;
     }
 
   if (path != NULL)
@@ -2841,7 +3220,9 @@ static struct desk_win_s *edit_open(void)
       return NULL;
     }
 
-  w = desk_win_open(APP_EDITOR, "Text Editor", EDIT_W, EDIT_H);
+  w = desk_win_open(ext != NULL ? ext->app : APP_EDITOR, "Text Editor",
+                    ext != NULL ? ext->w : EDIT_W,
+                    ext != NULL ? ext->h : EDIT_H);
   if (w == NULL)
     {
       ln_free(e);
@@ -2858,6 +3239,11 @@ static struct desk_win_s *edit_open(void)
   edit_build(w, e);
   edit_draw(w);
   return w;
+}
+
+static struct desk_win_s *edit_open(void)
+{
+  return edit_open_with(g_openpath, NULL, NULL);
 }
 
 /****************************************************************************
@@ -2886,6 +3272,133 @@ int desk_editor_open(const char *path)
   desk_launch(APP_EDITOR);
   g_openpath = NULL;
   return 0;
+}
+
+/* An editor with more, for another application (desk.h) */
+
+struct desk_win_s *desk_edit_open_ext(const char *path,
+                                      const struct edit_ext_s *ext,
+                                      void *priv)
+{
+  return edit_open_with(path, ext, priv);
+}
+
+struct kit_s *desk_edit_kit(struct desk_win_s *w)
+{
+  struct edit_s *e = w->priv;
+
+  return &e->kit;
+}
+
+void *desk_edit_extpriv(struct desk_win_s *w)
+{
+  struct edit_s *e = w->priv;
+
+  return e != NULL ? e->extpriv : NULL;
+}
+
+const char *desk_edit_path(struct desk_win_s *w)
+{
+  struct edit_s *e = w->priv;
+
+  return e != NULL ? e->path : "";
+}
+
+bool desk_edit_modified(struct desk_win_s *w)
+{
+  struct edit_s *e = w->priv;
+
+  return e != NULL && e->modified;
+}
+
+void desk_edit_save(struct desk_win_s *w)
+{
+  save(w);
+}
+
+/* Another file in the window (the text so far is let go of) */
+
+int desk_edit_load(struct desk_win_s *w, const char *path)
+{
+  struct edit_s *e = w->priv;
+  int ret;
+
+  ln_free(e);
+  undo_free(e->undo, e->nundo);
+  undo_free(e->redo, e->nredo);
+  e->nundo    = 0;
+  e->nredo    = 0;
+  e->savedid  = 0;
+  e->modified = false;
+  e->sel      = false;
+  e->cl       = 0;
+  e->cc       = 0;
+  e->top      = 0;
+  e->left     = 0;
+  e->path[0]  = '\0';
+  e->msg[0]   = '\0';
+  ret = ed_load(e, path);
+  if (ret < 0)
+    {
+      ln_free(e);
+      snprintf(e->msg, sizeof(e->msg), "Cannot open %s: %s", path,
+               strerror(-ret));
+      e->msgerr = true;
+    }
+
+  if (e->nl == 0 && ln_make(e, 0, 1) < 0)
+    {
+      return -ENOMEM;
+    }
+
+  edit_draw(w);
+  set_title(w);
+  return ret;
+}
+
+void desk_edit_goto(struct desk_win_s *w, int line)
+{
+  struct edit_s *e = w->priv;
+  struct line_s *ln;
+  int c = 0;
+
+  line = line < 1 ? 1 : line > e->nl ? e->nl : line;
+  ln = &e->ln[line - 1];
+  while (c < ln->len && (ln->s[c] == ' ' || ln->s[c] == '\t'))
+    {
+      c++;
+    }
+
+  sel_none(e);
+  move(w, line - 1, c, false);
+  e->want = vcol(ln, c);
+
+  /* The line in the middle of the view, if it was not in it */
+
+  if (line - 1 < e->top || line - 1 >= e->top + 8)
+    {
+      struct lay_s l;
+
+      layout(w, &l);
+      if (line - 1 < e->top || line - 1 >= e->top + l.full)
+        {
+          int top = line - 1 - l.full / 2;
+
+          scroll_to(w, &l, top < 0 ? 0 : top);
+        }
+    }
+
+  kit_focus(&e->kit, E_TEXT);
+  refresh(w, true);
+}
+
+void desk_edit_message(struct desk_win_s *w, bool err, const char *msg)
+{
+  struct edit_s *e = w->priv;
+
+  strlcpy(e->msg, msg, sizeof(e->msg));
+  e->msgerr = err;
+  refresh(w, false);
 }
 
 /****************************************************************************

@@ -3,9 +3,10 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Python: the application of the windows Python programs open (MicroPython's
- * fpc module, through deskwin.h: desk_client.c).  From the launcher or the
- * dock it opens a terminal running python.  Each callback goes to the
+ * Python: the application of the Python IDE's windows (desk_ide.c: the
+ * Text Editor with a console) and of the windows Python programs open
+ * (MicroPython's fpc module, through deskwin.h: desk_client.c).  The
+ * launcher's tile and the dock open an IDE.  Each callback goes to the
  * kind of window it is for (the first word of w->priv).
  ****************************************************************************/
 
@@ -21,16 +22,26 @@
  * Private Functions
  ****************************************************************************/
 
-/* The application of a window's kind */
+static uint32_t kind_of(struct desk_win_s *w)
+{
+  return w->priv != NULL ? *(const uint32_t *)w->priv : 0;
+}
+
+/* The application of a window's kind: a program's, or the IDE's editor */
 
 static const struct desk_app_s *kind(struct desk_win_s *w)
 {
-  if (w->priv != NULL && *(const uint32_t *)w->priv == PYTHON_CLIENT)
+  switch (kind_of(w))
     {
-      return &g_app_client;
-    }
+      case PYTHON_CLIENT:
+        return &g_app_client;
 
-  return NULL;
+      case PYTHON_IDE:
+        return &g_app_editor;
+
+      default:
+        return NULL;
+    }
 }
 
 /* Two snakes' heads, blue and yellow, round a tile */
@@ -57,7 +68,7 @@ static void python_icon(struct desk_ops_s *o, int x, int y, int s,
 
 static struct desk_win_s *python_open(void)
 {
-  return desk_term_run("python");
+  return desk_ide_open(NULL);
 }
 
 static void python_draw(struct desk_win_s *w)
@@ -89,6 +100,76 @@ static void python_expose(struct desk_win_s *w, int x, int y, int cw,
     }
 }
 
+static void python_resize(struct desk_win_s *w)
+{
+  const struct desk_app_s *a = kind(w);
+
+  if (a != NULL && a->resize != NULL)
+    {
+      a->resize(w);
+    }
+  else
+    {
+      python_draw(w);
+    }
+}
+
+/* Key events: a program's window takes them; the editor, what they type */
+
+static void python_keyev(struct desk_win_s *w, const struct nx_key_s *k)
+{
+  const struct desk_app_s *a = kind(w);
+
+  if (a != NULL && a->keyev != NULL)
+    {
+      a->keyev(w, k);
+    }
+  else if (a != NULL && a->key != NULL)
+    {
+      uint8_t bytes[NX_KEY_MAXBYTES];
+      int n = nx_key_bytes(k, bytes);
+
+      if (n > 0)
+        {
+          a->key(w, bytes, n);
+        }
+    }
+}
+
+static void python_wake(struct desk_win_s *w)
+{
+  if (kind_of(w) == PYTHON_IDE)
+    {
+      desk_ide_wake(w);
+    }
+  else if (kind_of(w) == PYTHON_CLIENT)
+    {
+      g_app_client.wake(w);
+    }
+}
+
+static void python_tick(struct desk_win_s *w)
+{
+  const struct desk_app_s *a = kind(w);
+
+  if (a != NULL && a->tick != NULL)
+    {
+      a->tick(w);
+    }
+
+  if (kind_of(w) == PYTHON_IDE)
+    {
+      desk_ide_tick(w);
+    }
+}
+
+static bool python_canclose(struct desk_win_s *w)
+{
+  const struct desk_app_s *a = kind(w);
+
+  return a == NULL || a->canclose == NULL || a->canclose(w);
+}
+
 #define FORWARD(name, args, call) \
   static void python_##name args \
   { \
@@ -99,14 +180,10 @@ static void python_expose(struct desk_win_s *w, int x, int y, int cw,
       } \
   }
 
-FORWARD(resize, (struct desk_win_s *w), (w))
-FORWARD(tick, (struct desk_win_s *w), (w))
 FORWARD(mouse, (struct desk_win_s *w, int x, int y, uint8_t buttons),
         (w, x, y, buttons))
 FORWARD(key, (struct desk_win_s *w, const uint8_t *ch, int n), (w, ch, n))
-FORWARD(keyev, (struct desk_win_s *w, const struct nx_key_s *k), (w, k))
 FORWARD(close, (struct desk_win_s *w), (w))
-FORWARD(wake, (struct desk_win_s *w), (w))
 FORWARD(focus, (struct desk_win_s *w), (w))
 FORWARD(button, (struct desk_win_s *w), (w))
 FORWARD(frame, (struct desk_win_s *w), (w))
@@ -117,21 +194,22 @@ FORWARD(frame, (struct desk_win_s *w), (w))
 
 const struct desk_app_s g_app_python =
 {
-  .name   = "Python",
-  .icon   = python_icon,
-  .open   = python_open,
-  .draw   = python_draw,
-  .expose = python_expose,
-  .resize = python_resize,
-  .tick   = python_tick,
-  .mouse  = python_mouse,
-  .key    = python_key,
-  .keyev  = python_keyev,
-  .close  = python_close,
-  .wake   = python_wake,
-  .focus  = python_focus,
-  .button = python_button,
-  .frame  = python_frame,
+  .name     = "Python",
+  .icon     = python_icon,
+  .open     = python_open,
+  .draw     = python_draw,
+  .expose   = python_expose,
+  .resize   = python_resize,
+  .tick     = python_tick,
+  .mouse    = python_mouse,
+  .key      = python_key,
+  .keyev    = python_keyev,
+  .close    = python_close,
+  .wake     = python_wake,
+  .focus    = python_focus,
+  .button   = python_button,
+  .frame    = python_frame,
+  .canclose = python_canclose,
 };
 
 #endif /* CONFIG_FPCDESK_PYTHON */

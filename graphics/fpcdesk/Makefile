@@ -25,7 +25,7 @@ CSRCS    += desk_kitdemo.c
 CSRCS    += desk_alarm.c desk_clock.c desk_calendar.c
 
 ifeq ($(CONFIG_FPCDESK_PYTHON),y)
-CSRCS    += desk_client.c desk_python.c
+CSRCS    += desk_client.c desk_python.c desk_ide.c desk_pyexamples.c
 endif
 
 ifeq ($(CONFIG_FPCDESK_SOUND),y)
@@ -59,3 +59,21 @@ MAINSRC   += desk_chess_main.c
 endif
 
 include $(APPDIR)/Application.mk
+
+ifeq ($(CONFIG_FPCDESK_PYTHON),y)
+
+# The IDE's examples: the MicroPython port's, made into C
+
+PYEXAMPLES = $(sort $(wildcard $(APPDIR)/interpreters/micropython/examples/*.py))
+
+desk_pyexamples.c: $(PYEXAMPLES) tools/mkpyexamples.py
+	$(Q) python3 tools/mkpyexamples.py $(PYEXAMPLES) > $@.tmp
+	$(Q) mv $@.tmp $@
+
+context:: desk_pyexamples.c
+
+depend:: desk_pyexamples.c
+
+distclean::
+	$(call DELFILE, desk_pyexamples.c)
+endif
