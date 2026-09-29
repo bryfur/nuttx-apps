@@ -1060,6 +1060,11 @@ static mp_obj_t make_widget(size_t n_args, const mp_obj_t *pos,
     MP_QSTR_x, MP_QSTR_y, MP_QSTR_w, MP_QSTR_h, MP_QSTR_items
   };
 
+  static const qstr dropdown_xy[] =
+  {
+    MP_QSTR_x, MP_QSTR_y, MP_QSTR_items, MP_QSTR_value, MP_QSTR_w
+  };
+
   mp_arg_val_t a[W_N];
   mp_obj_t text;
   mp_obj_t on_change;
@@ -1073,9 +1078,13 @@ static mp_obj_t make_widget(size_t n_args, const mp_obj_t *pos,
     {
       widget_args(n_args - 1, pos + 1, kw, text_xy, 5, a);
     }
-  else if (type == DESKWIN_LIST || type == DESKWIN_DROPDOWN)
+  else if (type == DESKWIN_LIST)
     {
       widget_args(n_args - 1, pos + 1, kw, list_xy, 5, a);
+    }
+  else if (type == DESKWIN_DROPDOWN)
+    {
+      widget_args(n_args - 1, pos + 1, kw, dropdown_xy, 5, a);
     }
   else
     {
