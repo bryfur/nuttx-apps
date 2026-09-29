@@ -164,8 +164,9 @@ enum desk_app_e
 #ifdef CONFIG_FPCDESK_CHESS
   APP_CHESS,
 #endif
+  APP_SHEET,
 #ifdef CONFIG_FPCDESK_PYTHON
-  APP_PYTHON,                      /* Python: programs' windows (deskwin.h) */
+  APP_PYTHON,                      /* Python: the IDE, programs' windows */
 #endif
   APP_COUNT
 };
@@ -444,6 +445,7 @@ extern const struct desk_app_s g_app_widgets;    /* desk_kitdemo.c */
 #ifdef CONFIG_FPCDESK_BENCH
 extern const struct desk_app_s g_app_bench;      /* desk_bench.c */
 #endif
+extern const struct desk_app_s g_app_sheet;      /* desk_sheet.c */
 
 /****************************************************************************
  * Public Function Prototypes
@@ -692,6 +694,12 @@ extern const struct desk_app_s g_app_client;
 /* desk_edit.c: open a file in a new editor window (NULL: a new file) */
 
 int desk_editor_open(const char *path);
+
+/* desk_sheet.c: open a spreadsheet (.csv, .tsv, .sheet) in a new window
+ * (NULL: a new one)
+ */
+
+int desk_sheet_open(const char *path);
 
 /* An editor with more, for another application (the Python IDE,
  * desk_ide.c): widgets at the tool bar's start and below the text (ids
