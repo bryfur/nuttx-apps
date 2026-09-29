@@ -89,13 +89,13 @@ static const struct kit_col_s g_cols[] =
 
 static const char * const g_clients[BENCH_SDRAM] =
 {
-  "scanout", "blitter", "DMA", "CPU", "codec"
+  "scanout", "blitter", "DMA", "CPU"
 };
 
 static const uint16_t g_clientc[BENCH_SDRAM] =
 {
   RGB(0x40, 0x9c, 0xff), RGB(0x30, 0xd1, 0x58), RGB(0xff, 0x9f, 0x0a),
-  RGB(0xbf, 0x5a, 0xf2), RGB(0xff, 0x37, 0x5f)
+  RGB(0xbf, 0x5a, 0xf2)
 };
 
 /****************************************************************************
@@ -187,7 +187,7 @@ static void bench_sample(struct bench_s *b)
     }
 
   /* A v6 GPU with a clock: "GPU: kHz busy b.b % ...", "SDRAM: t.t %
-   * scanout a.a blitter b.b DMA c.c CPU d.d codec e.e"; without: "GPU:
+   * scanout a.a blitter b.b DMA c.c CPU d.d"; without: "GPU:
    * no clock ..."
    */
 
@@ -195,7 +195,8 @@ static void bench_sample(struct bench_s *b)
     {
       s->hw   = true;
       s->busy = n[1] * 10 + n[2];
-      if (gpu_nums(buf, "SDRAM:", n, 12) == 12)
+      if (gpu_nums(buf, "SDRAM:", n, 2 + 2 * BENCH_SDRAM) ==
+          2 + 2 * BENCH_SDRAM)
         {
           for (i = 0; i < BENCH_SDRAM; i++)
             {
