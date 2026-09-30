@@ -756,8 +756,8 @@ static void measure(struct kit_s *k, int i, int *nw, int *nh)
         break;
 
       case KIT_SCROLL:
-        w = KIT_SB_W;
-        h = 40;
+        w = wg->style == KIT_SCROLL_HORIZ ? 40 : KIT_SB_W;
+        h = wg->style == KIT_SCROLL_HORIZ ? KIT_SB_W : 40;
         break;
 
       case KIT_CRUMBS:
@@ -833,7 +833,7 @@ static void place(struct kit_s *k, int i, int x, int y, int w, int h)
   wg->y = y;
   wg->w = w < 0 ? 0 : w;
   wg->h = h < 0 ? 0 : h;
-  if (wg->type != KIT_BOX)
+  if (wg->type != KIT_BOX || (wg->flags & KIT_F_FREE))
     {
       return;
     }
@@ -1605,20 +1605,31 @@ static void crumbs_draw(struct kit_s *k, int i)
  * Private Functions: scroll bars
  ****************************************************************************/
 
+/* A scroll bar's thumb: where along it (y, or x across) and how long */
+
 static bool sb_thumb(struct kit_widget_s *wg, int *ty, int *th)
 {
+  bool across = wg->style == KIT_SCROLL_HORIZ;
+  int len = across ? wg->w : wg->h;
   int page = wg->min;
   int total = wg->max;
 
-  if (total <= page || page <= 0 || wg->h <= 0)
+  if (total <= page || page <= 0 || len <= 0)
     {
       return false;
     }
 
-  *th = wg->h * page / total;
-  *th = *th < KIT_THUMB_MIN ? KIT_THUMB_MIN : *th > wg->h ? wg->h : *th;
-  *ty = wg->y + (wg->h - *th) * wg->value / (total - page);
+  *th = len * page / total;
+  *th = *th < KIT_THUMB_MIN ? KIT_THUMB_MIN : *th > len ? len : *th;
+  *ty = (across ? wg->x : wg->y) + (len - *th) * wg->value / (total - page);
   return true;
+}
+
+/* A point along a scroll bar */
+
+static int sb_along(struct kit_widget_s *wg, int x, int y)
+{
+  return wg->style == KIT_SCROLL_HORIZ ? x : y;
 }
 
 static void sb_set(struct kit_s *k, int i, int pos)
@@ -2079,7 +2090,13 @@ static void widget_draw(struct kit_s *k, int i,
           int ty;
           int th;
 
-          if (sb_thumb(wg, &ty, &th))
+          if (sb_thumb(wg, &ty, &th) && wg->style == KIT_SCROLL_HORIZ)
+            {
+              kit_paint_thumb_across(o, ty, y + (h - KIT_SB_W) / 2, th,
+                                     k->hot == i, k->down == i &&
+                                     k->downpart == PART_THUMB);
+            }
+          else if (sb_thumb(wg, &ty, &th))
             {
               kit_paint_thumb(o, x + (w - KIT_SB_W) / 2, ty, th,
                               k->hot == i, k->down == i &&
@@ -2747,7 +2764,9 @@ static int hit(struct kit_s *k, int x, int y, int *part)
               int ty;
               int th;
 
-              *part = sb_thumb(wg, &ty, &th) && y >= ty && y < ty + th ?
+              int a = sb_along(wg, x, y);
+
+              *part = sb_thumb(wg, &ty, &th) && a >= ty && a < ty + th ?
                       PART_THUMB : PART_SB;
             }
             break;
@@ -2957,11 +2976,12 @@ static void press_at(struct kit_s *k, int i, int part, int x, int y)
 
           if (part == PART_THUMB)
             {
-              k->grab = y - ty;
+              k->grab = sb_along(wg, x, y) - ty;
             }
           else
             {
-              sb_set(k, i, wg->value + (y < ty ? -wg->min : wg->min));
+              sb_set(k, i, wg->value + (sb_along(wg, x, y) < ty ?
+                                        -wg->min : wg->min));
             }
         }
         break;
@@ -3080,11 +3100,13 @@ static void drag(struct kit_s *k, int x, int y)
           int ty;
           int th;
 
+          int len = wg->style == KIT_SCROLL_HORIZ ? wg->w : wg->h;
+
           if (k->downpart == PART_THUMB && sb_thumb(wg, &ty, &th) &&
-              wg->h > th)
+              len > th)
             {
-              sb_set(k, i, (y - k->grab - wg->y) * (wg->max - wg->min) /
-                           (wg->h - th));
+              sb_set(k, i, (sb_along(wg, x - wg->x, y - wg->y) - k->grab) *
+                           (wg->max - wg->min) / (len - th));
             }
         }
         break;
@@ -4353,6 +4375,12 @@ void kit_natural(struct kit_s *k, int *w, int *h)
     {
       measure(k, 0, w, h);
     }
+}
+
+void kit_natural_of(struct kit_s *k, struct kit_widget_s *wg, int *w,
+                    int *h)
+{
+  measure(k, index_of(k, wg), w, h);
 }
 
 void kit_layout(struct kit_s *k)

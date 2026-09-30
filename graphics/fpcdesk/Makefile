@@ -23,6 +23,11 @@ CSRCS    += desk_image.c desk_viewer.c desk_paint.c
 CSRCS    += desk_kit.c desk_kit_paint.c desk_kit_dialog.c desk_kit_surface.c
 CSRCS    += desk_kitdemo.c
 CSRCS    += desk_alarm.c desk_clock.c desk_calendar.c
+CSRCS    += desk_num.c desk_sheet.c desk_sheet_eng.c desk_sheet_io.c
+
+ifeq ($(CONFIG_FPCDESK_PYTHON),y)
+CSRCS    += desk_client.c desk_python.c desk_ide.c desk_pyexamples.c
+endif
 
 ifeq ($(CONFIG_FPCDESK_SOUND),y)
 CSRCS    += desk_sound.c desk_volume.c
@@ -54,4 +59,29 @@ STACKSIZE += 16384
 MAINSRC   += desk_chess_main.c
 endif
 
+ifeq ($(CONFIG_FPCDESK_SHEET_CMD),y)
+PROGNAME  += sheet
+PRIORITY  += 100
+STACKSIZE += 8192
+MAINSRC   += sheet_main.c
+endif
+
 include $(APPDIR)/Application.mk
+
+ifeq ($(CONFIG_FPCDESK_PYTHON),y)
+
+# The IDE's examples: the MicroPython port's, made into C
+
+PYEXAMPLES = $(sort $(wildcard $(APPDIR)/interpreters/micropython/examples/*.py))
+
+desk_pyexamples.c: $(PYEXAMPLES) tools/mkpyexamples.py
+	$(Q) python3 tools/mkpyexamples.py $(PYEXAMPLES) > $@.tmp
+	$(Q) mv $@.tmp $@
+
+context:: desk_pyexamples.c
+
+depend:: desk_pyexamples.c
+
+distclean::
+	$(call DELFILE, desk_pyexamples.c)
+endif

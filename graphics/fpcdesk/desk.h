@@ -164,6 +164,10 @@ enum desk_app_e
 #ifdef CONFIG_FPCDESK_CHESS
   APP_CHESS,
 #endif
+  APP_SHEET,
+#ifdef CONFIG_FPCDESK_PYTHON
+  APP_PYTHON,                      /* Python: the IDE, programs' windows */
+#endif
   APP_COUNT
 };
 
@@ -177,7 +181,8 @@ enum desk_evtype_e
   EV_BLOCKED,
   EV_REDRAW,
   EV_MODE,                         /* The display mode has changed */
-  EV_SOUND                         /* The mixer's state has changed */
+  EV_SOUND,                        /* The mixer's state has changed */
+  EV_CLIENT                        /* A program wants a window (deskwin.h) */
 };
 
 enum desk_part_e
@@ -430,6 +435,9 @@ extern const struct desk_app_s g_app_doom;       /* desk_game.c */
 #ifdef CONFIG_FPCDESK_CHESS
 extern const struct desk_app_s g_app_chess;      /* desk_chess.c */
 #endif
+#ifdef CONFIG_FPCDESK_PYTHON
+extern const struct desk_app_s g_app_python;     /* desk_python.c */
+#endif
 
 extern const struct desk_app_s g_app_viewer;     /* desk_viewer.c */
 extern const struct desk_app_s g_app_paint;      /* desk_paint.c */
@@ -437,6 +445,7 @@ extern const struct desk_app_s g_app_widgets;    /* desk_kitdemo.c */
 #ifdef CONFIG_FPCDESK_BENCH
 extern const struct desk_app_s g_app_bench;      /* desk_bench.c */
 #endif
+extern const struct desk_app_s g_app_sheet;      /* desk_sheet.c */
 
 /****************************************************************************
  * Public Function Prototypes
@@ -530,6 +539,8 @@ void desk_win_minimize(struct desk_win_s *w);
 void desk_win_restore(struct desk_win_s *w);
 void desk_win_maximize(struct desk_win_s *w);
 void desk_win_sync(struct desk_win_s *w);
+void desk_win_show(struct desk_win_s *w);  /* A window just opened (and
+                                            * drawn): it fades in, active */
 
 /* From any thread: have w's application's wake callback called on the
  * main thread soon (once, however many calls come before it runs).  The
@@ -662,9 +673,94 @@ void desk_settings_changed(int page);       /* What the page shows has
                                              * changed: drawn again if it
                                              * is showing */
 
+/* desk_term.c: a terminal whose tab runs a program (a builtin) instead of
+ * NSH; the window closes when it ends
+ */
+
+struct desk_win_s *desk_term_run(const char *program);
+
+/* desk_client.c: other tasks' windows (deskwin.h); desk_python.c: their
+ * application, Python.  The first word of such a window's w->priv says
+ * which kind of Python window it is.
+ */
+
+#define PYTHON_CLIENT     0x50594331               /* A program's (deskwin) */
+#define PYTHON_IDE        0x50594944               /* The IDE's */
+
+void desk_clients_init(void);
+void desk_clients_poll(void);                      /* EV_CLIENT */
+extern const struct desk_app_s g_app_client;
+
 /* desk_edit.c: open a file in a new editor window (NULL: a new file) */
 
 int desk_editor_open(const char *path);
+
+/* desk_sheet.c: open a spreadsheet (.csv, .tsv, .sheet) in a new window
+ * (NULL: a new one)
+ */
+
+int desk_sheet_open(const char *path);
+
+/* An editor with more, for another application (the Python IDE,
+ * desk_ide.c): widgets at the tool bar's start and below the text (ids
+ * from EDIT_EXT_ID), whose events, drawing (custom widgets) and dialogs
+ * (ids from EDIT_EXT_ID) and menus come to the extension; the text's keys
+ * go to it first.  The window is the extension's application's, which
+ * forwards to g_app_editor's callbacks.
+ */
+
+#define EDIT_EXT_ID       100
+
+struct kit_s;
+struct kit_widget_s;
+
+struct edit_ext_s
+{
+  uint32_t kind;                   /* The first word of w->priv */
+  int app;                         /* The window's application */
+  int w;                           /* Its client area */
+  int h;
+  void (*toolbar)(struct desk_win_s *w, struct kit_s *k);
+  void (*pane)(struct desk_win_s *w, struct kit_s *k);
+  void (*event)(struct desk_win_s *w, struct kit_s *k,
+                struct kit_widget_s *wg, int ev);
+  void (*paint)(struct desk_win_s *w, struct kit_s *k,
+                struct kit_widget_s *wg, int x0, int y0, int x1, int y1);
+  bool python;                     /* A new document is Python */
+  bool (*key)(struct desk_win_s *w, int key);  /* true: taken */
+  void (*newdoc)(struct desk_win_s *w);        /* New (Ctrl-N) */
+  void (*saved)(struct desk_win_s *w);         /* A file has been saved */
+  void (*close)(struct desk_win_s *w);         /* The window is going */
+};
+
+struct desk_win_s *desk_edit_open_ext(const char *path,
+                                      const struct edit_ext_s *ext,
+                                      void *priv);
+void *desk_edit_extpriv(struct desk_win_s *w);
+const char *desk_edit_path(struct desk_win_s *w);   /* "": untitled */
+bool desk_edit_modified(struct desk_win_s *w);
+void desk_edit_save(struct desk_win_s *w);          /* Save As if untitled */
+int  desk_edit_load(struct desk_win_s *w, const char *path);
+void desk_edit_goto(struct desk_win_s *w, int line);  /* 1: the first */
+void desk_edit_message(struct desk_win_s *w, bool err, const char *msg);
+struct kit_s *desk_edit_kit(struct desk_win_s *w);
+
+/* desk_ide.c: the Python IDE (an editor with a console); the examples it
+ * offers (desk_pyexamples.c, made at build time)
+ */
+
+struct desk_pyexample_s
+{
+  const char *name;
+  const char *text;
+};
+
+extern const struct desk_pyexample_s g_desk_pyexamples[];
+extern const int g_desk_npyexamples;
+
+struct desk_win_s *desk_ide_open(const char *path);  /* Not shown yet */
+void desk_ide_wake(struct desk_win_s *w);
+void desk_ide_tick(struct desk_win_s *w);
 
 /* desk_viewer.c: show an image; desk_paint.c: edit one (NULL: a new one) */
 

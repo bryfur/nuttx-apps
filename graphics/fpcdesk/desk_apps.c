@@ -203,6 +203,10 @@ const struct desk_app_s * const g_apps[APP_COUNT] =
 #ifdef CONFIG_FPCDESK_CHESS
   [APP_CHESS]    = &g_app_chess,
 #endif
+  [APP_SHEET]    = &g_app_sheet,
+#ifdef CONFIG_FPCDESK_PYTHON
+  [APP_PYTHON]   = &g_app_python,
+#endif
 };
 
 /****************************************************************************

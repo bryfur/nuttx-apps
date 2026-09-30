@@ -745,7 +745,7 @@ void desk_win_sync(struct desk_win_s *w)
 
 /* Show a window just opened (and drawn): it fades in, active */
 
-static void win_show(struct desk_win_s *w)
+void desk_win_show(struct desk_win_s *w)
 {
 #ifdef CONFIG_FPCDESK_SOUND
   desk_sound_play(SND_OPEN);
@@ -1019,7 +1019,7 @@ void desk_launch(int app)
 
   if (a->open != NULL && (w = a->open()) != NULL)
     {
-      win_show(w);
+      desk_win_show(w);
     }
 }
 
@@ -1592,6 +1592,12 @@ static void on_event(struct desk_event_s *ev)
         break;
 #endif
 
+#ifdef CONFIG_FPCDESK_CLIENTS
+      case EV_CLIENT:
+        desk_clients_poll();
+        break;
+#endif
+
       case EV_REDRAW:
         if (!ev->win->closing && ev->part == PART_TITLE)
           {
@@ -1833,6 +1839,9 @@ int main(int argc, FAR char *argv[])
 #endif
 
   desk_clock_init();                      /* Alarms ring from now on */
+#ifdef CONFIG_FPCDESK_CLIENTS
+  desk_clients_init();
+#endif
 
   /* Start with a terminal */
 

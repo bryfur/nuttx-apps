@@ -126,6 +126,26 @@ config FPCDESK_GAME_CPUSCALE
 
 endif
 
+config FPCDESK_PYTHON
+	bool "Python: the IDE, and Python programs' windows"
+	default y
+	depends on INTERPRETERS_MICROPYTHON
+	select FPCDESK_CLIENTS
+	---help---
+		The Python application: an IDE (the Text Editor with Python's
+		colours and indents, Run and Stop, a console for the program's
+		output and input, a REPL, examples, recent files), and the
+		windows that Python programs open with the fpc module (started
+		from the IDE, a terminal, or anywhere).
+
+config FPCDESK_CLIENTS
+	bool
+	default n
+	---help---
+		Windows for other programs (apps/include/graphics/deskwin.h):
+		a task queues drawing commands and widget changes, the desktop
+		carries them out and hands back events.
+
 config FPCDESK_SOUND
 	bool "Sound: system sounds, the volume control, Settings' Sound page"
 	default y
@@ -217,5 +237,13 @@ config FPCDESK_DESKCTL
 		deskctl dock APP [r]     click an application's dock icon
 		deskctl wins             the windows, top first
 		For testing the desktop without a mouse and keyboard.
+
+config FPCDESK_SHEET_CMD
+	bool "sheet: the Spreadsheet's engine from NSH"
+	default y
+	---help---
+		sheet --selftest [DIR]  the formula engine's tests
+		sheet --bench [ROWS]    a big sheet's memory and recalculation
+		sheet FILE              a .csv or .sheet file's values
 
 endif

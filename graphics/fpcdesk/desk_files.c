@@ -194,6 +194,13 @@ static const char * const g_execext[] =
   "elf", "bin", "uf2", "hex", "nxf", NULL
 };
 
+/* Opened in the Spreadsheet (desk_sheet.c) */
+
+static const char * const g_sheetext[] =
+{
+  "csv", "tsv", "sheet", NULL
+};
+
 /****************************************************************************
  * Private Functions: paths and folders
  ****************************************************************************/
@@ -1110,6 +1117,11 @@ static void files_open_sel(struct desk_win_s *w)
           files_go(w, p, true, NULL);
           free(p);
         }
+    }
+  else if (strrchr(e->name, '.') != NULL &&
+           in_list(strrchr(e->name, '.') + 1, g_sheetext, true))
+    {
+      desk_sheet_open(f->tmp);
     }
   else if (e->kind == K_IMAGE)
     {

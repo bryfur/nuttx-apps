@@ -22,6 +22,7 @@
 
 #include <nuttx/config.h>
 
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -33,6 +34,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
+
+#include <nuttx/lib/builtin.h>
 
 #include "nshlib/nshlib.h"
 #include "desk.h"
@@ -139,6 +142,12 @@ struct term_s
 /****************************************************************************
  * Private Data
  ****************************************************************************/
+
+/* The next tab runs this program (a builtin) instead of NSH
+ * (desk_term_run())
+ */
+
+static const char *g_runcmd;
 
 static struct desk_ops_s g_o;
 static NXWINDOW g_hwnd;                /* Where g_o goes */
@@ -761,6 +770,26 @@ static int term_task(int argc, char *argv[])
       close(fd);
     }
 
+  /* A program of its own (desk_term_run()), else NSH */
+
+  if (argc >= 3)
+    {
+      int index = builtin_isavail(argv[2]);
+      const struct builtin_s *b = index >= 0 ? builtin_for_index(index) :
+                                               NULL;
+      char *av[2];
+
+      if (b == NULL || b->main == NULL)
+        {
+          printf("%s: not in this system\n", argv[2]);
+          return EXIT_FAILURE;
+        }
+
+      av[0] = argv[2];
+      av[1] = NULL;
+      return b->main(1, av);
+    }
+
   return nsh_consolemain(0, NULL);
 }
 
@@ -888,8 +917,9 @@ static struct term_tab_s *tab_new(struct desk_win_s *w)
   struct term_io_s *io;
   pthread_attr_t attr;
   pthread_t thread;
+  const struct builtin_s *b = NULL;
   char path[32];
-  char *argv[2];
+  char *argv[3];
   int one = 1;
 
   tab = calloc(1, sizeof(*tab));
@@ -906,6 +936,15 @@ static struct term_tab_s *tab_new(struct desk_win_s *w)
   tab->io  = io;
   tab->num = ++t->nextnum;
   snprintf(tab->title, sizeof(tab->title), "Terminal %d", tab->num);
+  if (g_runcmd != NULL)
+    {
+      int index = builtin_isavail(g_runcmd);
+
+      b = index >= 0 ? builtin_for_index(index) : NULL;
+      snprintf(tab->title, sizeof(tab->title), "%c%s",
+               toupper((unsigned char)g_runcmd[0]), g_runcmd + 1);
+    }
+
   pthread_mutex_init(&io->lock, NULL);
   sem_init(&io->space, 0, 0);
   io->w   = w;
@@ -934,8 +973,21 @@ static struct term_tab_s *tab_new(struct desk_win_s *w)
 
   argv[0] = path;
   argv[1] = NULL;
-  io->pid = task_create("Terminal", CONFIG_FPCDESK_TERM_PRIORITY,
-                        CONFIG_FPCDESK_TERM_STACKSIZE, term_task, argv);
+  argv[2] = NULL;
+  if (b != NULL)
+    {
+      /* The program's own priority and stack */
+
+      argv[1] = (char *)g_runcmd;
+      io->pid = task_create(g_runcmd, b->priority, b->stacksize, term_task,
+                            argv);
+    }
+  else
+    {
+      io->pid = task_create("Terminal", CONFIG_FPCDESK_TERM_PRIORITY,
+                            CONFIG_FPCDESK_TERM_STACKSIZE, term_task, argv);
+    }
+
   if (io->pid < 0)
     {
       fprintf(stderr, "desk: no shell: %d\n", errno);
@@ -1451,6 +1503,24 @@ static void term_mouse(struct desk_win_s *w, int x, int y, uint8_t buttons)
 /****************************************************************************
  * Public Data
  ****************************************************************************/
+
+/****************************************************************************
+ * Public Functions
+ ****************************************************************************/
+
+/* A terminal window whose tab runs program (a builtin) rather than NSH:
+ * the window closes when it ends
+ */
+
+struct desk_win_s *desk_term_run(const char *program)
+{
+  struct desk_win_s *w;
+
+  g_runcmd = program;
+  w = term_open();
+  g_runcmd = NULL;
+  return w;
+}
 
 const struct desk_app_s g_app_terminal =
 {

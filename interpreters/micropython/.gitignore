@@ -1,0 +1,4 @@
+/micropython
+/micropython-*.tar.gz
+/micropython-*.tar.gz.part
+/build

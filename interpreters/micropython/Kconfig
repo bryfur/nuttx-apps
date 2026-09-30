@@ -1,0 +1,102 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+menuconfig INTERPRETERS_MICROPYTHON
+	bool "MicroPython"
+	default n
+	---help---
+		MicroPython (micropython.org), a small Python 3 for
+		microcontrollers, as a NuttX program: a REPL with line editing
+		and history on the terminal it is started from (the serial
+		console, a pseudo-terminal: the desktop's Terminal), scripts
+		(python FILE.py) and -c.  The version the Makefile pins is
+		downloaded, patched (patches/) and built at build time.  The
+		files are those of NuttX (open(), os), and with the FPC desktop
+		the fpc module opens windows on it.
+
+if INTERPRETERS_MICROPYTHON
+
+config INTERPRETERS_MICROPYTHON_PROGNAME
+	string "Program name"
+	default "python"
+
+config INTERPRETERS_MICROPYTHON_PRIORITY
+	int "Priority"
+	default 90
+	---help---
+		Below the desktop's (100), so that it stays quick while a
+		Python program computes.
+
+config INTERPRETERS_MICROPYTHON_STACKSIZE
+	int "Stack size"
+	default 16384
+	---help---
+		The stack of the task that runs the interpreter.  Python code
+		does not use it for its objects (they are in the heap below)
+		but the compiler and the VM recurse on it: 16 KB takes a few
+		dozen nested calls and expressions as deep as people write.
+		Stacks are in the SRAM on the FPC board (ARM_STACKS_KERNEL_HEAP),
+		which is small: see INTERPRETERS_MICROPYTHON_PSRAM_STACK.
+
+config INTERPRETERS_MICROPYTHON_PSRAM_STACK
+	int "Stack from the heap (0: none)"
+	default 0
+	---help---
+		Run the interpreter on a thread whose stack, this many bytes, is
+		allocated from the heap (the PSRAM on the FPC board) instead of
+		the task's own stack: the task's stack
+		(INTERPRETERS_MICROPYTHON_STACKSIZE) can then be small (4 KB).
+		The PSRAM is behind the XIP cache, so a stack there is slower.
+
+config INTERPRETERS_MICROPYTHON_HEAPSIZE
+	int "Heap size (KB)"
+	default 1024
+	---help---
+		The garbage-collected heap for Python's objects, allocated from
+		the heap when the interpreter starts (the PSRAM on the FPC
+		board) and freed when it ends.  python -X heapsize=N[K|M]
+		changes it for a run.
+
+config INTERPRETERS_MICROPYTHON_PATH
+	string "sys.path"
+	default "/mnt/sd0/lib"
+	---help---
+		Where import looks for modules after the script's own folder,
+		separated by colons.  ~/ is the home directory.  The
+		MICROPYPATH environment variable replaces it.
+
+config INTERPRETERS_MICROPYTHON_DOUBLE
+	bool "Floats are double precision"
+	default y if ARCH_SIM
+	default n
+	---help---
+		Python's float as a C double (as CPython) rather than a float.
+		The Cortex-M33's FPU has single precision only: doubles are done
+		in software, larger and slower.
+
+config INTERPRETERS_MICROPYTHON_NATIVE
+	bool "Native code emitters (native, viper, asm_thumb)"
+	default y
+	depends on (ARCH_ARMV7M || ARCH_ARMV8M) && !ARCH_SIM
+	---help---
+		The @micropython.native and @micropython.viper decorators compile
+		a function to Thumb-2 machine code, and @micropython.asm_thumb
+		takes inline assembly.  The code goes in the heap (the PSRAM on
+		the FPC board, which the Cortex-M33 executes from).  Only for
+		ARMv7-M and ARMv8-M-mainline (Thumb-2) processors: not the
+		simulator.
+
+config INTERPRETERS_MICROPYTHON_FPC
+	bool "The fpc module: windows on the FPC desktop"
+	default y
+	depends on GRAPHICS_FPCDESK && FPCDESK_CLIENTS
+	---help---
+		import fpc: open windows on the desktop, draw into them with the
+		GPU (rectangles, round ones, gradients, text in the desktop's
+		fonts, images), take their events (mouse, keys, resizes, frames)
+		and put the widget kit's controls in them (buttons, labels,
+		fields, sliders, check boxes, lists, ...).
+
+endif

@@ -143,6 +143,9 @@
                                             * right; value: the offset) */
 #define KIT_F_DIRTY       0x1000           /* The kit's: to be drawn */
 #define KIT_F_RELAYOUT    0x2000           /* Box: to be laid out again */
+#define KIT_F_FREE        0x4000           /* Box: its widgets are where the
+                                            * application puts them (their
+                                            * x, y, w, h), not laid out */
 
 /* Box looks (style) */
 
@@ -192,6 +195,11 @@
 #define KIT_LIST_TABLE    0                /* Column names, a scroll bar */
 #define KIT_LIST_PLAIN    1                /* A scroll bar */
 #define KIT_LIST_SIDEBAR  2                /* Neither: places, pages */
+
+/* Scroll bar looks */
+
+#define KIT_SCROLL_VERT   0                /* Up and down (kit_scroll()) */
+#define KIT_SCROLL_HORIZ  1                /* Across: set its style */
 
 /* Columns */
 
@@ -629,9 +637,13 @@ int  kit_list_at(struct kit_s *k, int id, int x, int y);
 void kit_layout(struct kit_s *k);
 void kit_place(struct kit_s *k, int x, int y, int w, int h);
 
-/* The size the widgets would like (the root's natural size) */
+/* The size the widgets would like (the root's natural size); one
+ * widget's
+ */
 
 void kit_natural(struct kit_s *k, int *w, int *h);
+void kit_natural_of(struct kit_s *k, struct kit_widget_s *wg, int *w,
+                    int *h);
 
 /* Drawing what is marked; kit_redraw(): everything */
 
@@ -742,6 +754,8 @@ void kit_paint_icon(struct desk_ops_s *o, int icon, int x, int y,
                     uint16_t c, uint16_t bg);
 void kit_paint_thumb(struct desk_ops_s *o, int x, int y, int h, bool hot,
                      bool drag);
+void kit_paint_thumb_across(struct desk_ops_s *o, int x, int y, int w,
+                            bool hot, bool drag);
 void kit_paint_tooltip(struct desk_ops_s *o, int x, int y, int w, int h,
                        const char *text);
 void kit_paint_stepper(struct desk_ops_s *o, int x, int y, int w,
