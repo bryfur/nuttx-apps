@@ -11,10 +11,13 @@
 
 #include <nuttx/config.h>
 
+#include <inttypes.h>
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #ifdef CONFIG_FPC_GPU
 
@@ -59,6 +62,17 @@ void fpc_gpu_blend(const struct fpc_gpu_blend_s *b);
 void fpc_gpu_set_lut(int slot, const uint8_t lut[32][32]);
 void fpc_gpu_flush(void);
 int  fpc_gpu_read(int x, int y, int w, int h, uint16_t *dst, size_t stride);
+int  fpc_link_send(uint8_t type, const uint32_t *payload, size_t nwords);
+void fpc_link_flush(void);
+int  fpc_gpu_hwstats(uint32_t *st);
+int  fpc_link_timing(int setup, int cycles);
+
+#define LINK_TYPE_TEST   3            /* the GPU counts and drops it */
+#define LINK_MAX_WORDS   512
+#define ST_WORDS         41
+#define ST_LINK_PKTS     7
+#define ST_LINK_CRC      9
+#define ST_LINK_RESYNC   10
 
 /****************************************************************************
  * Private Data
@@ -305,6 +319,131 @@ int desk_gputest(void)
 
   printf("%s\n", fails ? "BLEND: FAIL" : "BLEND: all good");
   return fails;
+}
+
+/* The link's soak: MB megabytes of TEST packets (random bytes, and every
+ * data line toggling each byte), then the GPU's CRC error and resync
+ * counts from STATS, which must not move.  SETUP, CYCLES (> 0): the link's
+ * timing first (fpc_link_timing()); RB: READs running beside it all the
+ * while (the readback line's edges beside the link's).  0 if the counts
+ * did not move and every READ came back right.
+ */
+
+static uint16_t g_rbpat[8][256];
+static volatile bool g_rbrun;
+static int g_rbbad;
+static int g_rbn;
+
+static void *rb_thread(void *arg)
+{
+  static uint16_t got[8][256];
+  int i;
+
+  while (g_rbrun)
+    {
+      if (fpc_gpu_read(0, 2048 - 8, 256, 8, &got[0][0], sizeof(got[0])) < 0)
+        {
+          g_rbbad++;
+        }
+
+      for (i = 0; i < 256; i++)
+        {
+          if (got[0][i] != g_rbpat[0][i])
+            {
+              g_rbbad++;
+              break;
+            }
+        }
+
+      g_rbn++;
+    }
+
+  return NULL;
+}
+
+int desk_linktest(int mb, int setup, int cycles, bool rb)
+{
+  static uint32_t pkt[LINK_MAX_WORDS];
+  static uint32_t st0[ST_WORDS];
+  static uint32_t st1[ST_WORDS];
+  struct timespec t0;
+  struct timespec t1;
+  pthread_t th;
+  long n = (long)mb * 1024 * 1024 / sizeof(pkt);
+  long ms;
+  long i;
+  int k;
+  int ret = 0;
+
+  if (cycles > 0 && fpc_link_timing(setup, cycles) < 0)
+    {
+      printf("link: no timing %d / %d\n", setup, cycles);
+      return 1;
+    }
+
+  if (fpc_gpu_hwstats(st0) < 0)
+    {
+      printf("link: no STATS\n");
+      return 1;
+    }
+
+  if (rb)
+    {
+      /* A pattern off-screen (the last lines of the space) to read back */
+
+      for (i = 0; i < 8 * 256; i++)
+        {
+          (&g_rbpat[0][0])[i] = (uint16_t)rnd();
+        }
+
+      fpc_gpu_put(0, 2048 - 8, 256, 8, &g_rbpat[0][0], sizeof(g_rbpat[0]));
+      fpc_gpu_flush();
+      g_rbrun = true;
+      g_rbbad = 0;
+      g_rbn = 0;
+      pthread_create(&th, NULL, rb_thread, NULL);
+    }
+
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+  for (i = 0; i < n && ret >= 0; i++)
+    {
+      for (k = 0; k < LINK_MAX_WORDS; k++)
+        {
+          pkt[k] = (i & 1) ? rnd() : (((k & 1) ? 0x55aa55aa : 0xaa55aa55) ^
+                                      (uint32_t)(i >> 1) * 0x01010101u);
+        }
+
+      ret = fpc_link_send(LINK_TYPE_TEST, pkt, LINK_MAX_WORDS);
+    }
+
+  fpc_link_flush();
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+  if (rb)
+    {
+      g_rbrun = false;
+      pthread_join(th, NULL);
+    }
+
+  ms = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+  if (ret < 0 || fpc_gpu_hwstats(st1) < 0)
+    {
+      printf("link: stopped at packet %ld: %d\n", i, ret);
+      return 1;
+    }
+
+  printf("link: %ld packets in %ld ms (%ld KB/s), GPU: packets +%" PRIu32
+         ", CRC errors +%" PRIu32 " (%" PRIu32 "), resync +%" PRIu32 "\n",
+         i, ms, ms ? (long)((int64_t)i * sizeof(pkt) / ms * 1000 / 1024)
+                   : 0,
+         st1[ST_LINK_PKTS] - st0[ST_LINK_PKTS],
+         st1[ST_LINK_CRC] - st0[ST_LINK_CRC], st1[ST_LINK_CRC],
+         st1[ST_LINK_RESYNC] - st0[ST_LINK_RESYNC]);
+  if (rb)
+    {
+      printf("link: %d READs beside it, %d wrong\n", g_rbn, g_rbbad);
+    }
+
+  return st1[ST_LINK_CRC] != st0[ST_LINK_CRC] || g_rbbad != 0;
 }
 
 #endif

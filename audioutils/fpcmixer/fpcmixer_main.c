@@ -172,7 +172,23 @@ static int cmd_tone(int argc, char **argv)
   int bpf = nch * bits / 8;
   long frames = (long)rate * ms / 1000;
   long i = 0;
+  static int16_t sine[1024];
+  uint64_t step;
+  int n0;
   int fd;
+
+  /* A table of one period and a phase that steps through it (integer
+   * work a frame: the CPU has no double-precision unit, and msin() a
+   * frame cannot keep up with 48 kHz)
+   */
+
+  for (n0 = 0; n0 < 1024; n0++)
+    {
+      double v = 32767 * msin(2 * 3.14159265358979323846 * n0 / 1024);
+      sine[n0] = (int16_t)(v < 0 ? v - 0.5 : v + 0.5);
+    }
+
+  step = (uint64_t)(f / rate * 4294967296.0);
 
   fd = chan_open(rate, nch, bits, name, vol);
   if (fd < 0)
@@ -186,8 +202,11 @@ static int cmd_tone(int argc, char **argv)
 
       for (; i < frames && n + bpf <= sizeof(buf); i++)
         {
-          double v = amp * msin(2 * 3.14159265358979323846 * f * i / rate);
-          int32_t s = (int32_t)(v < 0 ? v - 0.5 : v + 0.5);
+          uint32_t ph = (uint32_t)(i * step);
+          int32_t a0 = sine[ph >> 22];
+          int32_t a1 = sine[((ph >> 22) + 1) & 1023];
+          int32_t s = (int32_t)((a0 + (((a1 - a0) * (int32_t)((ph >> 6) & 0xffff))
+                                  >> 16)) * amp) >> 15;
           int c;
 
           for (c = 0; c < nch; c++)

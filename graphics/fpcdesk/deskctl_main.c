@@ -27,6 +27,12 @@
  *                                 simulator's: as a keyboard has them)
  *   deskctl shot FILE             the screen as a PPM file (simulator)
  *   deskctl test                  BLEND on the GPU, checked pixel by pixel
+ *   deskctl link [MB [SETUP CYCLES [rb]]]
+ *                                 the link's soak: MB (16) megabytes of
+ *                                 test packets; the GPU's CRC errors must
+ *                                 not move.  SETUP CYCLES: the link's
+ *                                 timing first (0 0: as it is); rb: READs
+ *                                 beside it
  *   deskctl stats [clear|N]       GPU commands and pixels since the last
  *                                 clear, with the GPU time they take (the
  *                                 costs in docs/desktop.md); N: per N steps
@@ -90,6 +96,7 @@ void fpc_gpu_stats(struct fpc_gpu_stats_s *st, bool clear);
 int fpc_simgpu_screenshot(FAR const char *path);
 #endif
 int desk_gputest(void);
+int desk_linktest(int mb, int setup, int cycles, bool rb);
 
 /****************************************************************************
  * Private Functions
@@ -512,7 +519,7 @@ static void deskctl_usage(void)
   fprintf(stderr,
           "usage: deskctl m X Y [BUTTONS] | c X Y | d X0 Y0 X1 Y1 [N] |\n"
           "               k TEXT | key [+|-]NAME|@MS... | shot FILE |\n"
-          "               stats [clear|N] | mode [N] | redraw | test |\n"
+          "               stats [clear|N] | mode [N] | redraw | test | link [MB [S C [rb]]] |\n"
           "               freeze [SECONDS|off] | dock APP [r] | wins\n");
 }
 
@@ -535,6 +542,15 @@ int main(int argc, FAR char *argv[])
   if (strcmp(argv[1], "test") == 0)
     {
       return desk_gputest() ? EXIT_FAILURE : EXIT_SUCCESS;
+    }
+
+  if (strcmp(argv[1], "link") == 0)
+    {
+      return desk_linktest(argc >= 3 ? atoi(argv[2]) : 16,
+                           argc >= 5 ? atoi(argv[3]) : 0,
+                           argc >= 5 ? atoi(argv[4]) : 0,
+                           argc >= 6 && strcmp(argv[5], "rb") == 0) ?
+             EXIT_FAILURE : EXIT_SUCCESS;
     }
 
   if (strcmp(argv[1], "stats") == 0)
