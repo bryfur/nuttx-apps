@@ -17,7 +17,8 @@
 #include "fpcgame.h"
 
 #define FG_IMAGES      64
-#define FG_CELL_MAX    64                 /* The GPU's SPRITE cell (each way) */
+#define FG_CELL_W      64                 /* The GPU's SPRITE cell */
+#define FG_CELL_H      32
 
 /* A rectangle of the GPU's space */
 

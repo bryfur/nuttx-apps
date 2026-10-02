@@ -10,7 +10,7 @@
  *
  * Sprites: plain ones (any size) are a BLEND from the image, keyed on
  * FG_KEY; flipped, scaled and rotated ones the GPU's SPRITE (fg_affine():
- * an affine map from the box to the cell, cells of more than 64 x 64 drawn
+ * an affine map from the box to the cell, cells of more than 64 x 32 drawn
  * in pieces, each over the same box with the map moved by its offset, so
  * that together they are exact).
  *
@@ -285,9 +285,9 @@ void fg_affine(int cx, int cy, int cw, int ch, int bx, int by, int bw,
    * with the map moved by its place in the cell
    */
 
-  for (oy = 0; oy < ch; oy += FG_CELL_MAX)
+  for (oy = 0; oy < ch; oy += FG_CELL_H)
     {
-      for (ox = 0; ox < cw; ox += FG_CELL_MAX)
+      for (ox = 0; ox < cw; ox += FG_CELL_W)
         {
           int32_t u = u0 - ox * 256;
           int32_t v = v0 - oy * 256;
@@ -299,8 +299,8 @@ void fg_affine(int cx, int cy, int cw, int ch, int bx, int by, int bw,
 
           s.cx = cx + ox;
           s.cy = cy + oy;
-          s.cw = cw - ox < FG_CELL_MAX ? cw - ox : FG_CELL_MAX;
-          s.ch = ch - oy < FG_CELL_MAX ? ch - oy : FG_CELL_MAX;
+          s.cw = cw - ox < FG_CELL_W ? cw - ox : FG_CELL_W;
+          s.ch = ch - oy < FG_CELL_H ? ch - oy : FG_CELL_H;
           s.u0 = (int16_t)u;
           s.v0 = (int16_t)v;
           fpc_gpu_sprite(&s);
@@ -518,7 +518,7 @@ int fg_layer_init(int layer, int tileset, int tw, int th, int mapw, int maph)
   int y;
 
   if (layer < 0 || layer >= FG_LAYERS || tw <= 0 || th <= 0 ||
-      tw > FG_CELL_MAX || th > FG_CELL_MAX || mapw <= 0 || maph <= 0 ||
+      tw > FG_CELL_W || th > FG_CELL_H || mapw <= 0 || maph <= 0 ||
       mapw * tw > FPC_GPU_SPACE_W || maph * th > FPC_GPU_SPACE_H)
     {
       return -EINVAL;

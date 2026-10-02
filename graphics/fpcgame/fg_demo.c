@@ -8,7 +8,9 @@
  * a ship flown with the pad and turned towards where it goes (SPRITE,
  * rotated and scaled), orbs added on and halved, a sprite larger than the
  * GPU's cell flipped, rectangles, text in changing colours, a sample on A
- * and an FM tune.  "fgdemo N" ends after N frames (tests), else Escape.
+ * and an FM tune.  "fgdemo N" ends after N frames (tests), else Escape;
+ * "fgdemo N freeze" stops the picture at frame N and goes on showing it
+ * (the board's picture compared with the simulator's: tools grab it).
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -24,6 +26,8 @@
 static int g_tiles;                       /* Tileset: 8 tiles across, 2 rows */
 static int g_sheet;                       /* Ship 32 x 32, orb 16 x 16, banner 96 x 40 */
 static int g_frames = -1;
+static bool g_freeze;
+static uint32_t g_f;                      /* The picture's frame */
 static int32_t g_x = 200 << 8;
 static int32_t g_y = 120 << 8;
 static int g_angle;
@@ -196,15 +200,18 @@ static void demo_update(void)
       fg_sfx_play(g_shots++ & 3, 0, 65536, 200, 200);
     }
 
-  if (g_frames > 0 && (int)fg_frame() >= g_frames)
+  if (g_frames > 0 && (int)fg_frame() >= g_frames && !g_freeze)
     {
       fg_exit();
     }
+
+  g_f = g_freeze && g_frames > 0 && (int)fg_frame() >= g_frames ?
+        (uint32_t)g_frames : fg_frame();
 }
 
 static void demo_draw(void)
 {
-  uint32_t f = fg_frame();
+  uint32_t f = g_f;
   int k;
 
   fg_clear(FG_RGB(10, 10, 30));
@@ -231,8 +238,7 @@ static void demo_draw(void)
   fg_sprite_rot(g_sheet, 0, 0, 32, 32, -6, 160, 0, (int)f * 30, 256);   /* Cut by the edge */
 
   fg_text_color(FG_RGB(128 + (int)((fg_sin((int)f * 8) * 127) >> 8), 255, 128));
-  fg_text_print(1, 1, "FPC GAME SDK  frame %5u  %2u us", (unsigned)f,
-                (unsigned)(fg_stats()->frame_us % 100));
+  fg_text_print(1, 1, "FPC GAME SDK  frame %5u", (unsigned)f);
   fg_text_center(28, "arrows: fly   Z: blip   Esc: quit");
   fg_text_draw();
 }
@@ -247,6 +253,7 @@ int main(int argc, FAR char *argv[])
   int ret;
 
   g_frames = argc > 1 ? atoi(argv[1]) : -1;
+  g_freeze = argc > 2 && strcmp(argv[2], "freeze") == 0;
   ret = fg_run(&g_demo);
   if (ret < 0)
     {

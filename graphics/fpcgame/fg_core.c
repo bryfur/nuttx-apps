@@ -325,9 +325,12 @@ static int display_open(int w, int h)
   g_fg.back = 1;
   g_fg.ox = g_fg.canvas[1].x + g_fg.mx;
   g_fg.oy = g_fg.canvas[1].y + g_fg.my;
-  syslog(LOG_INFO, "fpcgame: %s: %d x %d in mode %d at %d x %d\n",
+  syslog(LOG_INFO, "fpcgame: %s: %d x %d in mode %d at %d x %d, "
+         "canvases at (%d, %d) and (%d, %d)\n",
          g_fg.game->name ? g_fg.game->name : "game", w, h, g_fg.mode,
-         g_fg.scale, g_fg.scale);
+         g_fg.scale, g_fg.scale, g_fg.canvas[0].x + g_fg.mx,
+         g_fg.canvas[0].y + g_fg.my, g_fg.canvas[1].x + g_fg.mx,
+         g_fg.canvas[1].y + g_fg.my);
   return OK;
 }
 
@@ -376,6 +379,7 @@ int fg_run(FAR const struct fg_game_s *game)
 {
   uint64_t tsec;
   uint32_t maxus = 0;
+  uint32_t worst = 0;
   int ret;
 
   if (fpc_gpu_version() < 8)
@@ -442,6 +446,7 @@ int fg_run(FAR const struct fg_game_s *game)
       g_fg.st.sprites  = g_fg.sprites;
       g_fg.st.tiles    = g_fg.tiles;
       maxus = g_fg.st.frame_us > maxus ? g_fg.st.frame_us : maxus;
+      worst = g_fg.st.frame_us > worst ? g_fg.st.frame_us : worst;
       if (fg_now_us() - tsec >= 1000000)
         {
           g_fg.st.frame_us_max = maxus;
@@ -459,6 +464,9 @@ int fg_run(FAR const struct fg_game_s *game)
       game->quit();
     }
 
+  syslog(LOG_INFO, "fpcgame: %s: %u frames, %u late; the worst frame took "
+         "%u us to draw\n", game->name ? game->name : "game",
+         (unsigned)g_fg.frame, (unsigned)g_fg.st.late, (unsigned)worst);
   ret = OK;
 
 out:

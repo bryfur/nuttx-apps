@@ -242,21 +242,35 @@ static const struct
 
 /* A volume key through the keyboard itself (/dev/kbd, the headless
  * simulator's FPC_SIM_VKBD), where the desktop session takes it for the
- * mixer; any key while a full-screen game has the keyboard (the session
- * hands it to the game, drivers/gpu/fpc_game.c); false if there is none
+ * mixer; false if there is none.  While a full-screen game has the
+ * keyboard, any other key goes to the game's queue (drivers/gpu/fpc_game.c)
  */
 
 bool fpc_gpu_game_keys_owned(void);
+bool fpc_gpu_game_keytap(uint8_t flags, uint8_t code, uint8_t ch);
 
-static bool deskctl_kbddev(uint8_t code, bool release)
+static bool deskctl_kbddev(uint8_t code, uint8_t ch, bool release)
 {
   struct keyboard_event_s ev;
   bool ok;
   int fd;
 
+  if (fpc_gpu_game_keys_owned() &&
+      code != NX_KEY_SPECIAL(KEYCODE_VOLUP) &&
+      code != NX_KEY_SPECIAL(KEYCODE_VOLDOWN) &&
+      code != NX_KEY_SPECIAL(KEYCODE_MUTE))
+    {
+      /* Straight into the game's queue, as the desktop session would
+       * put it (there may be no /dev/kbd: the board's keyboards are USB)
+       */
+
+      return fpc_gpu_game_keytap(release ? NX_KEY_RELEASE : 0, code,
+                                 release ? 0 : ch);
+    }
+
   if (code != NX_KEY_SPECIAL(KEYCODE_VOLUP) &&
       code != NX_KEY_SPECIAL(KEYCODE_VOLDOWN) &&
-      code != NX_KEY_SPECIAL(KEYCODE_MUTE) && !fpc_gpu_game_keys_owned())
+      code != NX_KEY_SPECIAL(KEYCODE_MUTE))
     {
       return false;
     }
@@ -267,16 +281,8 @@ static bool deskctl_kbddev(uint8_t code, bool release)
       return false;
     }
 
-  if (NX_KEY_ISSPECIAL(code))
-    {
-      ev.code = NX_KEY_KEYCODE(code);
-      ev.type = release ? KEYBOARD_SPECREL : KEYBOARD_SPECPRESS;
-    }
-  else
-    {
-      ev.code = code;
-      ev.type = release ? KEYBOARD_RELEASE : KEYBOARD_PRESS;
-    }
+  ev.code = NX_KEY_KEYCODE(code);
+  ev.type = release ? KEYBOARD_SPECREL : KEYBOARD_SPECPRESS;
 
   ok = write(fd, &ev, sizeof(ev)) == sizeof(ev);
   close(fd);
@@ -289,7 +295,7 @@ static void deskctl_keyev(NXHANDLE h, uint8_t *mods, uint8_t code,
   uint8_t rec[NX_KEY_SIZE];
   struct nx_key_s key;
 
-  if (deskctl_kbddev(code, release))
+  if (deskctl_kbddev(code, ch, release))
     {
       return;
     }
