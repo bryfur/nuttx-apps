@@ -1,0 +1,32 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+menuconfig GRAPHICS_FPCGAME
+	bool "FPC game SDK (full-screen 2D games on the GPU)"
+	default n
+	depends on FPC_GPU && NX_ACCEL
+	---help---
+		Full-screen 2D games on the FPC's GPU (protocol v8): a canvas
+		shown scaled up (SET_SCALE), images, sprites (plain, flipped,
+		scaled, rotated: SPRITE), tile layers, text, a pad from the
+		keyboard and TRI's sixteen-voice sound engine (samples and FM)
+		into the mixer.  docs/games.md.
+
+if GRAPHICS_FPCGAME
+
+config FPCGAME_TRI
+	bool "TRI games' runtime"
+	default y
+	---help---
+		TRI's game API (tri_sdk.h, TRI's own SDK sources) on the FPC:
+		its VDP command lists run on the GPU (sprites, tile layers),
+		its sound commands on the same engine.  TRI games build as
+		they are.
+
+config FPCGAME_DEMO
+	tristate "fgdemo: the SDK's demonstration"
+	default n
+
+endif

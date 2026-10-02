@@ -1,0 +1,15 @@
+############################################################################
+# apps/graphics/fpcgame/Make.defs
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+############################################################################
+
+ifneq ($(CONFIG_GRAPHICS_FPCGAME),)
+CONFIGURED_APPS += $(APPDIR)/graphics/fpcgame
+
+# Games include fpcgame.h, the TRI layer's tri/ and the GPU driver's header
+CFLAGS += ${INCDIR_PREFIX}$(APPDIR)/graphics/fpcgame
+CFLAGS += ${INCDIR_PREFIX}$(APPDIR)/graphics/fpcgame/tri
+CFLAGS += ${INCDIR_PREFIX}$(TOPDIR)/../drivers/gpu
+endif

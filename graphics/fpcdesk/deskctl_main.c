@@ -242,8 +242,11 @@ static const struct
 
 /* A volume key through the keyboard itself (/dev/kbd, the headless
  * simulator's FPC_SIM_VKBD), where the desktop session takes it for the
- * mixer; false if there is none
+ * mixer; any key while a full-screen game has the keyboard (the session
+ * hands it to the game, drivers/gpu/fpc_game.c); false if there is none
  */
+
+bool fpc_gpu_game_keys_owned(void);
 
 static bool deskctl_kbddev(uint8_t code, bool release)
 {
@@ -253,7 +256,7 @@ static bool deskctl_kbddev(uint8_t code, bool release)
 
   if (code != NX_KEY_SPECIAL(KEYCODE_VOLUP) &&
       code != NX_KEY_SPECIAL(KEYCODE_VOLDOWN) &&
-      code != NX_KEY_SPECIAL(KEYCODE_MUTE))
+      code != NX_KEY_SPECIAL(KEYCODE_MUTE) && !fpc_gpu_game_keys_owned())
     {
       return false;
     }
@@ -264,8 +267,17 @@ static bool deskctl_kbddev(uint8_t code, bool release)
       return false;
     }
 
-  ev.code = NX_KEY_KEYCODE(code);
-  ev.type = release ? KEYBOARD_SPECREL : KEYBOARD_SPECPRESS;
+  if (NX_KEY_ISSPECIAL(code))
+    {
+      ev.code = NX_KEY_KEYCODE(code);
+      ev.type = release ? KEYBOARD_SPECREL : KEYBOARD_SPECPRESS;
+    }
+  else
+    {
+      ev.code = code;
+      ev.type = release ? KEYBOARD_RELEASE : KEYBOARD_PRESS;
+    }
+
   ok = write(fd, &ev, sizeof(ev)) == sizeof(ev);
   close(fd);
   return ok;

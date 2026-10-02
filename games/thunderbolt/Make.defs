@@ -1,0 +1,10 @@
+############################################################################
+# apps/games/thunderbolt/Make.defs
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+############################################################################
+
+ifneq ($(CONFIG_GAMES_THUNDERBOLT),)
+CONFIGURED_APPS += $(APPDIR)/games/thunderbolt
+endif
