@@ -529,7 +529,15 @@ int main(int argc, char **argv)
           for (char *w = strtok(text, " \t\r\n"); w != NULL;
                w = strtok(NULL, " \t\r\n"))
             {
+              /* (nxdoom_realloc: myargv is the game heap's, and this file
+               * has the C library's realloc, i_heap.h's macros undone)
+               */
+
+#if CONFIG_GAMES_NXDOOM_HEAPSIZE > 0
+              more = nxdoom_realloc(myargv, (myargc + 1) * sizeof(char *));
+#else
               more = realloc(myargv, (myargc + 1) * sizeof(char *));
+#endif
               if (more == NULL)
                 {
                   break;
