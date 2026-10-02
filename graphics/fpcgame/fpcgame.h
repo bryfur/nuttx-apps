@@ -56,7 +56,10 @@ struct fg_game_s
   int width;                      /* The canvas, pixels (0: 424 x 240) */
   int height;
   void (*load)(void);             /* Images, layers, sounds (once) */
-  void (*init)(void);             /* Game state (once, after load) */
+  void (*init)(void);             /* Game state (once, after load): set it
+                                   * here, not in static initialisers, which
+                                   * a second run finds as the first left
+                                   * them (a flat build) */
   void (*update)(void);           /* Logic, once a frame */
   void (*draw)(void);             /* Drawing, once a frame, after update */
   void (*quit)(void);             /* Before the display is given back (may be NULL) */

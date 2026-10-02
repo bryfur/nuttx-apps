@@ -21,4 +21,10 @@ skyrocks.c_CFLAGS    += -Wno-unused-variable -Wno-unused-function
 spritebench.c_CFLAGS += -Wno-unused-variable -Wno-unused-function
 fmsynth.c_CFLAGS     += -Wno-unused-variable -Wno-unused-function
 
+# a fresh start at every run, as from TRI's ROM (tri_sdk.h, TRI_GAME): each
+# game's statics in one section each, in the file's order
+skyrocks.c_CFLAGS    += -fno-data-sections -fno-toplevel-reorder
+spritebench.c_CFLAGS += -fno-data-sections -fno-toplevel-reorder
+fmsynth.c_CFLAGS     += -fno-data-sections -fno-toplevel-reorder
+
 include $(APPDIR)/Application.mk

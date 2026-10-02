@@ -1175,8 +1175,72 @@ static void tri_quit(void)
   free(g_tri.obj);
 }
 
+/* A game's file's statics as they were before it first ran (tri_sdk.h):
+ * the .data kept at the first start and put back at the others, the .bss
+ * cleared.  The ranges are checked to be sane (a file built without the
+ * flags would give nonsense: then nothing is done).
+ */
+
+#define TRI_STATES      8
+
+static struct
+{
+  const void *key;
+  char *copy;
+  size_t len;
+} g_states[TRI_STATES];
+
+void tri_state_fresh(const void *key, const struct tri_state_s *s)
+{
+  size_t dl = (size_t)(s->d1 - s->d0);
+  size_t bl = (size_t)(s->b1 - s->b0);
+  int i;
+
+  if (s->d1 <= s->d0 || s->b1 <= s->b0 || dl > 64 * 1024 ||
+      bl > 256 * 1024)
+    {
+      syslog(LOG_WARNING, "tri: a game file's statics: %p-%p, %p-%p: "
+             "left as they are\n", s->d0, s->d1, s->b0, s->b1);
+      return;
+    }
+
+  for (i = 0; i < TRI_STATES && g_states[i].key != NULL &&
+              g_states[i].key != key; i++);
+  if (i == TRI_STATES)
+    {
+      return;
+    }
+
+  if (g_states[i].key == NULL)
+    {
+      g_states[i].copy = malloc(dl);
+      if (g_states[i].copy == NULL)
+        {
+          return;
+        }
+
+      memcpy(g_states[i].copy, s->d0, dl);
+      g_states[i].len = dl;
+      g_states[i].key = key;
+    }
+  else if (g_states[i].len == dl)
+    {
+      memcpy(s->d0, g_states[i].copy, dl);
+    }
+
+  memset(s->b0, 0, bl);
+}
+
+void tri_state_gfx(void);
+void tri_state_text(void);
+void tri_state_audio(void);
+
 int tri_game_main(const tri_game_t *game, int argc, char *argv[])
 {
+  tri_state_gfx();                        /* The SDK's files fresh too */
+  tri_state_text();
+  tri_state_audio();
+
   if (argc == 3 && strcmp(argv[1], "-s") == 0)
     {
       fg_script(argv[2]);

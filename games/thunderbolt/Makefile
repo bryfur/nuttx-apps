@@ -23,6 +23,10 @@ CSRCS     = assets.c
 CFLAGS   += ${INCDIR_PREFIX}assets ${INCDIR_PREFIX}.
 game.c_CFLAGS += -Wno-unused-variable -Wno-unused-function
 
+# a fresh start at every run, as from TRI's ROM (tri_sdk.h, TRI_GAME): the
+# game's statics in one section each, in the file's order
+game.c_CFLAGS += -fno-data-sections -fno-toplevel-reorder
+
 MKASSETS  = $(APPDIR)/graphics/fpcgame/tri/mkassets.py
 
 assets.c assets.h: assets/assets.toml $(wildcard assets/*.png assets/*.csv assets/*.wav) $(MKASSETS)

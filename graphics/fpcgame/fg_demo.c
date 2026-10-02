@@ -29,8 +29,8 @@ static int g_sheet;                       /* Ship 32 x 32, orb 16 x 16, banner 9
 static int g_frames = -1;
 static bool g_freeze;
 static uint32_t g_f;                      /* The picture's frame */
-static int32_t g_x = 200 << 8;
-static int32_t g_y = 120 << 8;
+static int32_t g_x;                       /* The ship (init(): statics keep */
+static int32_t g_y;                       /* their values from run to run) */
 static int g_angle;
 static uint32_t g_shots;
 
@@ -182,6 +182,14 @@ static void demo_load(void)
   fg_music_play(&g_song);
 }
 
+static void demo_init(void)
+{
+  g_x = 200 << 8;
+  g_y = 120 << 8;
+  g_angle = 0;
+  g_shots = 0;
+}
+
 static void demo_update(void)
 {
   int ax = fg_axis_x();
@@ -246,7 +254,7 @@ static void demo_draw(void)
 
 static const struct fg_game_s g_demo =
 {
-  "fgdemo", 424, 240, demo_load, NULL, demo_update, demo_draw, NULL
+  "fgdemo", 424, 240, demo_load, demo_init, demo_update, demo_draw, NULL
 };
 
 int main(int argc, FAR char *argv[])

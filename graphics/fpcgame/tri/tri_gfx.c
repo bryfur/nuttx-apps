@@ -293,3 +293,6 @@ static const int16_t sin_table[1024] = {
 };
 int tri_sin(int angle) { return sin_table[((unsigned)angle >> 2) & 1023]; }
 int tri_cos(int angle) { return sin_table[(((unsigned)angle >> 2) + 256) & 1023]; }
+
+// FPC: this file's statics as at boot at each game's start (tri_sdk.h)
+TRI_STATE(gfx)

@@ -36,6 +36,26 @@
 
 #define TRI_SDK_VERSION 2
 
+// FPC: a game starts fresh each time it is run, as from its ROM on TRI (in
+// a NuttX flat build a program's statics keep their values from one run to
+// the next). The statics of a file built with -fno-data-sections and
+// -fno-toplevel-reorder (the games' Makefiles) lie in one .data and one
+// .bss section, in the file's order, from these markers (the first
+// statics: this header comes first) to those of the file's last function,
+// whose own statics come out last: TRI_GAME's main(), or TRI_STATE() at the
+// end of the SDK's files. tri_fpc.c keeps the first run's .data and puts
+// it back, and clears the .bss, at every start (tri_state_fresh()).
+struct tri_state_s { char *d0, *d1, *b0, *b1; };
+static char tri_state_d0 __attribute__((used)) = 1;
+static char tri_state_b0 __attribute__((used));
+void tri_state_fresh(const void *key, const struct tri_state_s *s);
+#define TRI_STATE(name) \
+	void tri_state_##name(void); \
+	void tri_state_##name(void) { \
+		static char d1 __attribute__((used)) = 1; static char b1 __attribute__((used)); \
+		struct tri_state_s s = { &tri_state_d0, &d1, &tri_state_b0, &b1 }; \
+		tri_state_fresh((const void *)tri_state_##name, &s); }
+
 // ============================================================================
 // Game descriptor
 // ============================================================================
@@ -55,7 +75,11 @@ typedef struct {
 // Games that adapt to any canvas width pass TRI_VIDEO_ANY.
 #define TRI_GAME(gname, mode, fload, finit, fupdate, fdraw) \
 	static const tri_game_t tri_game_desc = { gname, (mode), fload, finit, fupdate, fdraw }; \
-	int main(int argc, char *argv[]) { return tri_game_main(&tri_game_desc, argc, argv); }
+	int main(int argc, char *argv[]) { \
+		static char d1 __attribute__((used)) = 1; static char b1 __attribute__((used)); \
+		struct tri_state_s s = { &tri_state_d0, &d1, &tri_state_b0, &b1 }; \
+		tri_state_fresh(&tri_game_desc, &s); \
+		return tri_game_main(&tri_game_desc, argc, argv); }
 
 // The two command destinations, for the calls that take a `vdp` argument.
 #define TRI_VDP1 TRI_DEST_VDP1   // objects: sprite sheets, 16 palettes, 48 KB VRAM

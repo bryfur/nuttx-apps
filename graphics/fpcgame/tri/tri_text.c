@@ -79,3 +79,6 @@ void tri_text_center(int row, const char *fmt, ...) {
 	int n = (int)strlen(buf), col = (tri_text_columns() - n) / 2;
 	put(col < 0 ? 0 : col, row, buf);
 }
+
+// FPC: this file's statics as at boot at each game's start (tri_sdk.h)
+TRI_STATE(text)

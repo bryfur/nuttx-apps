@@ -147,3 +147,6 @@ void tri_music_tick(void) {
 		}
 	}
 }
+
+// FPC: this file's statics as at boot at each game's start (tri_sdk.h)
+TRI_STATE(audio)

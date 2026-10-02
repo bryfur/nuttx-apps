@@ -26,7 +26,7 @@ config FPCGAME_TRI
 		they are.
 
 config FPCGAME_DEMO
-	tristate "fgdemo: the SDK's demonstration"
+	tristate "fgdemo and fgbench: the SDK's demonstration, the sprites a frame"
 	default n
 
 endif
