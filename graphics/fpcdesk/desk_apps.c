@@ -9,7 +9,7 @@
  * desk_viewer.c, desk_paint.c, desk_monitor.c, desk_settings.c, desk_log.c,
  * desk_calc.c, desk_tetris.c, desk_solitaire.c, desk_breakout.c,
  * desk_game.c (Doom), desk_clock.c, desk_calendar.c, desk_bench.c (GPU
- * Bench), desk_chess.c.
+ * Bench), desk_chess.c, desk_games.c (the full-screen games).
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -206,6 +206,9 @@ const struct desk_app_s * const g_apps[APP_COUNT] =
   [APP_SHEET]    = &g_app_sheet,
 #ifdef CONFIG_FPCDESK_PYTHON
   [APP_PYTHON]   = &g_app_python,
+#endif
+#ifdef CONFIG_GAMES_THUNDERBOLT
+  [APP_THUNDERBOLT] = &g_app_thunderbolt,
 #endif
 };
 
