@@ -196,6 +196,43 @@ endif # GAMES_NXDOOM_KEYBOARD
 
 endif # GAMES_NXDOOM_FB
 
+config GAMES_NXDOOM_SRAM
+	bool "What the renderer touches most in the internal SRAM"
+	default y
+	depends on GAMES_NXDOOM_DESKTOP && !GAMES_NXDOOM_STATIC_SCRNBUF
+	---help---
+		From the kernel's heap (the internal SRAM) while the game runs,
+		not from the game's heap in the PSRAM, whose 16 KB cache the
+		code from the flash shares: the 64000-byte screen buffer (the
+		renderer writes it a column at a time, 320 bytes apart, each
+		in a different cache line) and the light tables (COLORMAP,
+		every pixel drawn goes through them).  Without the room, the
+		game's heap as before.
+
+config GAMES_NXDOOM_ZONE
+	bool "Doom's own zone allocator"
+	default y
+	---help---
+		The zone as the game was written for (src/z_zone.c): one block
+		of the heap, the cache purged inside it as a new allocation
+		needs room.  Without it (src/z_native.c) every block is the C
+		library's and the cache is freed into the heap when it fills,
+		whose bookkeeping then lands in freed blocks at once: the game
+		corrupted its heap that way within minutes on the board.
+
+config GAMES_NXDOOM_FULLSCREEN
+	bool "Full screen on the FPC's GPU"
+	default y
+	depends on GAMES_NXDOOM_DESKTOP && FPC_GPU
+	---help---
+		The game takes the display and the keyboard from the desktop
+		(the FPC GPU's game display, protocol v8) and shows its 320 x
+		200 frame at 4 x 4 in the 1280 x 800 mode, one PUT a frame
+		through its palette (src/i_fpcscreen.c): the desktop's window
+		path costs about as much CPU as the game.  Quit Game in Doom's
+		menu gives them back; "-window" (the args file in the
+		configuration directory) keeps the window.
+
 comment "Memory"
 
 config GAMES_NXDOOM_HEAPSIZE

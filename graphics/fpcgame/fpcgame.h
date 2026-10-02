@@ -86,6 +86,17 @@ void fg_exit(void);                       /* End after this frame */
 
 void fg_script(FAR const char *script);
 
+/* Large static arrays a game only needs now and then (loading, tables)
+ * belong in the board's PSRAM, not its 520 KB of SRAM, which every
+ * program's statics share for good in this flat build: FG_PSRAM
+ */
+
+#ifdef CONFIG_ARCH_SIM
+#  define FG_PSRAM __attribute__((aligned(4)))
+#else
+#  define FG_PSRAM __attribute__((section(".psram_bss"), aligned(4)))
+#endif
+
 int fg_width(void);                       /* The canvas */
 int fg_height(void);
 uint32_t fg_frame(void);                  /* Frames since init() */

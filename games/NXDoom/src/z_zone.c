@@ -555,3 +555,19 @@ unsigned int z_zone_size(void)
 {
   return mainzone->size;
 }
+
+/****************************************************************************
+ * Name: z_purge_cache
+ *
+ * Description:
+ *  For the game's heap (i_main.c) when it is full: the zone purges its
+ *  cache within itself, so nothing outside it is freed.
+ *
+ ****************************************************************************/
+
+int z_purge_cache(int size, unsigned long *purged)
+{
+  (void)size;
+  (void)purged;
+  return false;
+}

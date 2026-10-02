@@ -55,7 +55,7 @@ static int8_t g_blip[2000];
 
 static void make_tiles(void)
 {
-  static uint16_t px[16 * 8 * 16 * TW];   /* 128 x 16 */
+  static uint16_t px[16 * 8 * 16 * TW] FG_PSRAM;   /* 128 x 16 */
   int t;
   int x;
   int y;
@@ -94,7 +94,7 @@ static void make_tiles(void)
 
 static void make_sheet(void)
 {
-  static uint16_t px[96 * 72];            /* 96 wide: ship, orb; banner below */
+  static uint16_t px[96 * 72] FG_PSRAM;   /* 96 wide: ship, orb; banner below */
   int x;
   int y;
 

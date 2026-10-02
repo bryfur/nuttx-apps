@@ -26,6 +26,7 @@
 
 #include <math.h>
 #include <stdlib.h>
+#include <syslog.h>
 #include <string.h>
 
 #include "doomdef.h"
@@ -146,6 +147,7 @@ boolean sendsave;  /* send a save event next tic */
 boolean usergame;  /* ok to save / end game */
 
 boolean timingdemo; /* if true, exit with report on completion */
+static int benchtics; /* -benchtics N: the timed demo ends after N gametics */
 boolean nodrawers;  /* for comparative timing purposes */
 int starttime;      /* for comparative timing purposes */
 
@@ -1756,6 +1758,11 @@ void g_ticker(void)
   int buf;
   ticcmd_t *cmd;
 
+  if (timingdemo && benchtics > 0 && gametic >= benchtics)
+    {
+      g_check_demo_status();              /* -benchtics: the report */
+    }
+
   /* do player reborns if needed */
 
   for (i = 0; i < MAXPLAYERS; i++)
@@ -2394,6 +2401,16 @@ void g_time_demo(char *name)
 
   nodrawers = m_check_parm("-nodraw");
 
+  /* -benchtics N: end the timed demo after N gametics (a benchmark of
+   * the first N, however long the demo)
+   */
+
+  {
+    int p = m_check_parm_with_args("-benchtics", 1);
+
+    benchtics = p ? atoi(myargv[p + 1]) : 0;
+  }
+
   timingdemo = true;
   singletics = true;
 
@@ -2419,6 +2436,9 @@ boolean g_check_demo_status(void)
       endtime = i_get_time();
       realtics = endtime - starttime;
       fps = ((float)gametic * TICRATE) / realtics;
+      syslog(LOG_INFO, "nxdoom: timed %i gametics in %i realtics "
+             "(%d.%02d fps)\n", gametic, realtics, (int)fps,
+             (int)(fps * 100) % 100);
 
       /* Prevent recursive calls */
 

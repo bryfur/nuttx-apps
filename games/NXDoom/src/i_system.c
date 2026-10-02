@@ -204,6 +204,14 @@ byte *i_zone_base(int *size)
 
   p = m_check_parm_with_args("-mb", 1);
 
+#if defined(CONFIG_GAMES_NXDOOM_ZONE) && CONFIG_GAMES_NXDOOM_HEAPSIZE > 0
+  /* With a heap of its own (whose size -mb gives) the zone is the most
+   * whole MiB that fits in it, beside the game's other allocations
+   */
+
+  p = 0;
+#endif
+
   if (p > 0)
     {
       default_ram = atoi(myargv[p + 1]);

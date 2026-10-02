@@ -27,6 +27,10 @@
  ****************************************************************************/
 
 #include <stdio.h>
+#include <string.h>
+#include <syslog.h>
+
+#include <nuttx/kmalloc.h>
 
 #include "deh_main.h"
 #include "i_swap.h"
@@ -589,6 +593,16 @@ static void r_init_sprite_lumps(void)
  * Name: r_init_colourmaps
  ****************************************************************************/
 
+#ifdef CONFIG_GAMES_NXDOOM_SRAM
+static lighttable_t *g_sram_colormaps;    /* A copy in the internal SRAM */
+
+static void r_free_colourmaps(void)
+{
+  kmm_free(g_sram_colormaps);
+  g_sram_colormaps = NULL;
+}
+#endif
+
 static void r_init_colourmaps(void)
 {
   int lump;
@@ -597,6 +611,20 @@ static void r_init_colourmaps(void)
 
   lump = w_get_num_for_name(("COLORMAP"));
   colormaps = w_cache_lump_num(lump, PU_STATIC);
+
+#ifdef CONFIG_GAMES_NXDOOM_SRAM
+  /* Every pixel drawn is looked up in them: a copy in the internal SRAM
+   * (kmm_malloc() is 8-byte aligned; the tables index by byte)
+   */
+
+  g_sram_colormaps = kmm_malloc(w_lump_length(lump));
+  if (g_sram_colormaps != NULL)
+    {
+      memcpy(g_sram_colormaps, colormaps, w_lump_length(lump));
+      colormaps = g_sram_colormaps;
+      i_at_exit(r_free_colourmaps, true);
+    }
+#endif
 }
 
 /****************************************************************************

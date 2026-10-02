@@ -33,11 +33,17 @@
 #include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
+#include <syslog.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 
+#include <nuttx/kmalloc.h>
+
 #ifdef CONFIG_GAMES_NXDOOM_DESKTOP
 #include <graphics/deskgame.h>
+#endif
+#ifdef CONFIG_GAMES_NXDOOM_FULLSCREEN
+#include "i_fpcscreen.h"
 #endif
 
 #include "config.h"
@@ -159,6 +165,9 @@ static uint32_t g_rowbuf[SCREENWIDTH * BLIT_MAX_STAGED_SCALE];
 /* Window title */
 
 static const char *g_window_title = "";
+#ifdef CONFIG_GAMES_NXDOOM_SRAM
+static bool g_scrnbuf_sram;               /* scrnbuf from kmm_malloc() */
+#endif
 
 /* Colour palette map from 8-bit colour to 32-bit */
 
@@ -554,6 +563,24 @@ static void i_get_desk_events(void)
   struct deskgame_input_s in;
   int waited;
 
+#ifdef CONFIG_GAMES_NXDOOM_FULLSCREEN
+  if (fpcscreen_active())
+    {
+      struct nx_key_s key;
+
+      /* Full screen: the keys are the game's (no pause: the window that
+       * would say is hidden; the mouse stays the desktop's)
+       */
+
+      while (fpcscreen_key(&key))
+        {
+          i_handle_nx_key(&key);
+        }
+
+      return;
+    }
+#endif
+
   waited = deskgame_wait(g);
   if (waited < 0)
     {
@@ -639,6 +666,16 @@ void i_shutdown_graphics(void)
     }
 
 #ifdef CONFIG_GAMES_NXDOOM_DESKTOP
+#ifdef CONFIG_GAMES_NXDOOM_FULLSCREEN
+  fpcscreen_close();                       /* The display back to the desktop */
+#endif
+#ifdef CONFIG_GAMES_NXDOOM_SRAM
+  if (g_scrnbuf_sram)
+    {
+      kmm_free(g_graphics_state.scrnbuf);
+    }
+  else
+#endif
 #ifndef CONFIG_GAMES_NXDOOM_STATIC_SCRNBUF
   free(g_graphics_state.scrnbuf);
 #endif
@@ -735,6 +772,14 @@ void i_finish_update(void)
   v_draw_disk_icon();
 
 #ifdef CONFIG_GAMES_NXDOOM_DESKTOP
+#ifdef CONFIG_GAMES_NXDOOM_FULLSCREEN
+  if (fpcscreen_active())
+    {
+      fpcscreen_frame(g_graphics_state.scrnbuf,
+                      palette_to_set ? g_rgbpalette : NULL);
+    }
+  else
+#endif
   /* To the desktop, which scales it to the window */
 
   deskgame_frame(i_deskgame(), g_graphics_state.scrnbuf,
@@ -1035,6 +1080,18 @@ void i_init_graphics(void)
 
 #ifdef CONFIG_GAMES_NXDOOM_STATIC_SCRNBUF
   g_graphics_state.scrnbuf = g_scrnbuf;
+#elif defined(CONFIG_GAMES_NXDOOM_SRAM)
+  /* In the internal SRAM (the kernel's heap; the game's own is in the
+   * PSRAM): the renderer writes columns, 320 bytes apart, each in another
+   * line of the PSRAM's cache
+   */
+
+  g_graphics_state.scrnbuf = kmm_malloc(SCREENWIDTH * SCREENHEIGHT);
+  g_scrnbuf_sram = g_graphics_state.scrnbuf != NULL;
+  if (!g_scrnbuf_sram)
+    {
+      g_graphics_state.scrnbuf = malloc(SCREENWIDTH * SCREENHEIGHT);
+    }
 #else
   g_graphics_state.scrnbuf = malloc(SCREENWIDTH * SCREENHEIGHT);
 #endif
@@ -1050,6 +1107,16 @@ void i_init_graphics(void)
 
   i_video_buffer = g_graphics_state.scrnbuf;
   v_restore_buffer();
+
+#ifdef CONFIG_GAMES_NXDOOM_FULLSCREEN
+  /* Full screen unless -window (or the GPU or the desktop will not) */
+
+  if (!m_check_parm("-window") && fpcscreen_open())
+    {
+      deskgame_status(i_deskgame(), "Doom is playing full screen: "
+                      "Quit Game in its menu ends it");
+    }
+#endif
 
   g_graphics_state.inited = true;
   i_at_exit(i_shutdown_graphics, true);

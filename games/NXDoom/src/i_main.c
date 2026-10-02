@@ -45,6 +45,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #if CONFIG_GAMES_NXDOOM_HEAPSIZE > 0
 #  include <nuttx/mm/mm.h>
@@ -497,6 +499,48 @@ int main(int argc, char **argv)
   for (int i = 0; i < argc; i++)
     {
       myargv[i] = m_string_duplicate(argv[i]);
+    }
+
+  /* More arguments from the file "args" in -configdir, if there is one
+   * (the desktop starts the game with its own: this adds "-timedemo
+   * demo1", "-mb 6" and the like): read whole, split at white space
+   */
+
+  for (int i = 1; i + 1 < argc; i++)
+    {
+      if (strcmp(argv[i], "-configdir") == 0)
+        {
+          char path[160];
+          char text[256];
+          FAR char **more;
+          int fd;
+          int n = 0;
+
+          snprintf(path, sizeof(path), "%s%sargs", argv[i + 1],
+                   argv[i + 1][strlen(argv[i + 1]) - 1] == '/' ? "" : "/");
+          fd = open(path, O_RDONLY);
+          if (fd >= 0)
+            {
+              n = read(fd, text, sizeof(text) - 1);
+              close(fd);
+            }
+
+          text[n > 0 ? n : 0] = '\0';
+          for (char *w = strtok(text, " \t\r\n"); w != NULL;
+               w = strtok(NULL, " \t\r\n"))
+            {
+              more = realloc(myargv, (myargc + 1) * sizeof(char *));
+              if (more == NULL)
+                {
+                  break;
+                }
+
+              myargv = more;
+              myargv[myargc++] = m_string_duplicate(w);
+            }
+
+          break;
+        }
     }
 
   /* Print the program version and exit. */

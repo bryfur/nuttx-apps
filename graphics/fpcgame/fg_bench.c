@@ -47,8 +47,8 @@ static const struct kind_s g_kinds[] =
 #define NKINDS (int)(sizeof(g_kinds) / sizeof(g_kinds[0]))
 
 static int g_sheet;
-static int16_t g_x[MAXN];
-static int16_t g_y[MAXN];
+static int16_t g_x[MAXN] FG_PSRAM;
+static int16_t g_y[MAXN] FG_PSRAM;
 static bool g_want[NKINDS];
 static int g_kind = -1;                   /* Being measured */
 static int g_n;                           /* Sprites a frame now */
@@ -63,7 +63,7 @@ static uint32_t g_result_us[NKINDS];
 
 static void bench_load(void)
 {
-  static uint16_t px[48 * 32];            /* An orb 16 x 16, a ship 32 x 32 */
+  static uint16_t px[48 * 32] FG_PSRAM;   /* An orb 16 x 16, a ship 32 x 32 */
   int x;
   int y;
 
