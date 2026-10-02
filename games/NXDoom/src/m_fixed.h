@@ -25,6 +25,12 @@
 #define __M_FIXED__
 
 /****************************************************************************
+ * Included Files
+ ****************************************************************************/
+
+#include <stdint.h>
+
+/****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
 
@@ -40,10 +46,22 @@
 typedef int fixed_t;
 
 /****************************************************************************
+ * Inline Functions
+ ****************************************************************************/
+
+/* Inline: one SMULL and a shift where it is used (the renderer calls it
+ * thousands of times a frame)
+ */
+
+static inline fixed_t fixed_mul(fixed_t a, fixed_t b)
+{
+  return ((int64_t)a * (int64_t)b) >> FRACBITS;
+}
+
+/****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
 
-fixed_t fixed_mul(fixed_t a, fixed_t b);
 fixed_t fixed_div(fixed_t a, fixed_t b);
 
 #endif /* __M_FIXED__ */

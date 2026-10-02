@@ -36,13 +36,6 @@
  * Public Functions
  ****************************************************************************/
 
-/* Fixme. __USE_C_FIXED__ or something. */
-
-NXDOOM_FAST fixed_t fixed_mul(fixed_t a, fixed_t b)
-{
-  return ((int64_t)a * (int64_t)b) >> FRACBITS;
-}
-
 /* fixed_div, C version. */
 
 NXDOOM_FAST fixed_t fixed_div(fixed_t a, fixed_t b)
