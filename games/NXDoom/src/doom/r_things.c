@@ -72,15 +72,15 @@ typedef struct
  * (protractor). There was a lot of stuff grabbed wrong, so I changed it...
  */
 
-fixed_t pspritescale;
-fixed_t pspriteiscale;
+NXDOOM_SRAM fixed_t pspritescale;
+NXDOOM_SRAM fixed_t pspriteiscale;
 
-lighttable_t **spritelights;
+NXDOOM_SRAM lighttable_t **spritelights;
 
 /* constant arrays used for psprite clipping and initializing clipping */
 
-short negonearray[SCREENWIDTH];
-short screenheightarray[SCREENWIDTH];
+NXDOOM_SRAM short negonearray[SCREENWIDTH];
+NXDOOM_SRAM short screenheightarray[SCREENWIDTH];
 
 /* INITIALIZATION FUNCTIONS */
 
@@ -99,11 +99,11 @@ int newvissprite;
 
 vissprite_t overflowsprite;
 
-short *mfloorclip;
-short *mceilingclip;
+NXDOOM_SRAM short *mfloorclip;
+NXDOOM_SRAM short *mceilingclip;
 
-fixed_t spryscale;
-fixed_t sprtopscreen;
+NXDOOM_SRAM fixed_t spryscale;
+NXDOOM_SRAM fixed_t sprtopscreen;
 
 vissprite_t vsprsortedhead;
 
@@ -862,7 +862,7 @@ void r_clear_sprites(void)
  * pixels.
  */
 
-void r_draw_masked_column(column_t *column)
+NXDOOM_FAST void r_draw_masked_column(column_t *column)
 {
   int topscreen;
   int bottomscreen;

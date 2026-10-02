@@ -56,6 +56,29 @@
 
 #define arrlen(array) (sizeof(array) / sizeof(*array))
 
+/* CONFIG_GAMES_NXDOOM_FASTCODE: a function the renderer spends its time in,
+ * run from the SRAM (.time_critical, copied there with .data at boot) rather
+ * than from the flash through the XIP cache the game's PSRAM data thrashes
+ */
+
+#ifdef CONFIG_GAMES_NXDOOM_FASTCODE
+#  define NXDOOM_FAST __attribute__((section(".time_critical.nxdoom")))
+#else
+#  define NXDOOM_FAST
+#endif
+
+/* ...and a variable it uses all the time, in the SRAM's .bss (the board's
+ * linker script, .sram_bss.nxdoom) rather than with the game's other data
+ * in the PSRAM.  Only for a variable that starts at zero: r_init() clears
+ * them at every start, as the restarting game's .bss is.
+ */
+
+#ifdef CONFIG_GAMES_NXDOOM_FASTCODE
+#  define NXDOOM_SRAM __attribute__((section(".sram_bss.nxdoom")))
+#else
+#  define NXDOOM_SRAM
+#endif
+
 /* The packed attribute forces structures to be packed into the minimum
  * space necessary.  If this is not done, the compiler may align structure
  * fields differently to optimize memory access, inflating the overall

@@ -79,6 +79,12 @@ void *z_malloc(int size, int tag, void *ptr);
 void z_free(void *ptr);
 void z_free_tags(int lowtag, int hightag);
 int z_purge_cache(int size, unsigned long *purged);
+
+/* Called before a purgeable block is freed for room (the renderer's draw
+ * queue: a column it has yet to draw may be reading the block)
+ */
+
+extern void (*z_purge_hook)(void);
 void z_dump_heap(int lowtag, int hightag);
 void z_file_dump_heap(FILE *f);
 void z_check_heap(void);

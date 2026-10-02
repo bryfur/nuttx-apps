@@ -28,6 +28,7 @@
 
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "d_loop.h"
 #include "doomdef.h"
@@ -59,14 +60,14 @@ int viewangleoffset;
 
 int validcount = 1;
 
-lighttable_t *fixedcolormap;
+NXDOOM_SRAM lighttable_t *fixedcolormap;
 
-int centerx;
-int centery;
+NXDOOM_SRAM int centerx;
+NXDOOM_SRAM int centery;
 
-fixed_t centerxfrac;
-fixed_t centeryfrac;
-fixed_t projection;
+NXDOOM_SRAM fixed_t centerxfrac;
+NXDOOM_SRAM fixed_t centeryfrac;
+NXDOOM_SRAM fixed_t projection;
 
 /* just for profiling purposes */
 
@@ -76,14 +77,14 @@ int sscount;
 int linecount;
 int loopcount;
 
-fixed_t viewx;
-fixed_t viewy;
-fixed_t viewz;
+NXDOOM_SRAM fixed_t viewx;
+NXDOOM_SRAM fixed_t viewy;
+NXDOOM_SRAM fixed_t viewz;
 
-angle_t viewangle;
+NXDOOM_SRAM angle_t viewangle;
 
-fixed_t viewcos;
-fixed_t viewsin;
+NXDOOM_SRAM fixed_t viewcos;
+NXDOOM_SRAM fixed_t viewsin;
 
 player_t *viewplayer;
 
@@ -93,7 +94,7 @@ int detailshift;
 
 /* precalculated math tables */
 
-angle_t clipangle;
+NXDOOM_SRAM angle_t clipangle;
 
 /* The viewangletox[viewangle + FINEANGLES/4] lookup
  * maps the visible view angles to screen X coordinates,
@@ -108,21 +109,21 @@ int viewangletox[FINEANGLES / 2];
  * from clipangle to -clipangle.
  */
 
-angle_t xtoviewangle[SCREENWIDTH + 1];
+NXDOOM_SRAM angle_t xtoviewangle[SCREENWIDTH + 1];
 
-lighttable_t *scalelight[LIGHTLEVELS][MAXLIGHTSCALE];
-lighttable_t *scalelightfixed[MAXLIGHTSCALE];
-lighttable_t *zlight[LIGHTLEVELS][MAXLIGHTZ];
+NXDOOM_SRAM lighttable_t *scalelight[LIGHTLEVELS][MAXLIGHTSCALE];
+NXDOOM_SRAM lighttable_t *scalelightfixed[MAXLIGHTSCALE];
+NXDOOM_SRAM lighttable_t *zlight[LIGHTLEVELS][MAXLIGHTZ];
 
 /* bumped light from gun blasts */
 
-int extralight;
+NXDOOM_SRAM int extralight;
 
-void (*colfunc)(void);
-void (*basecolfunc)(void);
-void (*fuzzcolfunc)(void);
-void (*transcolfunc)(void);
-void (*spanfunc)(void);
+NXDOOM_SRAM void (*colfunc)(void);
+NXDOOM_SRAM void (*basecolfunc)(void);
+NXDOOM_SRAM void (*fuzzcolfunc)(void);
+NXDOOM_SRAM void (*transcolfunc)(void);
+NXDOOM_SRAM void (*spanfunc)(void);
 
 boolean setsizeneeded;
 int setblocks;
@@ -408,7 +409,7 @@ static void r_init_texture_mapping(void)
  *   Side 0 (front) or 1 (back).
  ****************************************************************************/
 
-int r_point_on_side(fixed_t x, fixed_t y, node_t *node)
+NXDOOM_FAST int r_point_on_side(fixed_t x, fixed_t y, node_t *node)
 {
   fixed_t dx;
   fixed_t dy;
@@ -465,7 +466,7 @@ int r_point_on_side(fixed_t x, fixed_t y, node_t *node)
  * Name: r_point_on_seg_side
  ****************************************************************************/
 
-int r_point_on_seg_side(fixed_t x, fixed_t y, seg_t *line)
+NXDOOM_FAST int r_point_on_seg_side(fixed_t x, fixed_t y, seg_t *line)
 {
   fixed_t lx;
   fixed_t ly;
@@ -539,7 +540,7 @@ int r_point_on_seg_side(fixed_t x, fixed_t y, seg_t *line)
  *
  ****************************************************************************/
 
-angle_t r_point_to_angle(fixed_t x, fixed_t y)
+NXDOOM_FAST angle_t r_point_to_angle(fixed_t x, fixed_t y)
 {
   x -= viewx;
   y -= viewy;
@@ -871,6 +872,17 @@ void r_execute_set_view_size(void)
 
 void r_init(void)
 {
+#ifdef CONFIG_GAMES_NXDOOM_FASTCODE
+  /* The renderer's variables in the SRAM (NXDOOM_SRAM) to zero, as the
+   * rest of the game's .bss is at every start
+   */
+
+  extern char __nxdoom_sram_start[];
+  extern char __nxdoom_sram_end[];
+
+  memset(__nxdoom_sram_start, 0, __nxdoom_sram_end - __nxdoom_sram_start);
+#endif
+
   r_init_data();
   printf(".");
   r_init_point_to_angle();
@@ -930,6 +942,12 @@ void r_render_player_view(player_t *player)
 {
   r_setup_frame(player);
 
+#ifdef CONFIG_GAMES_NXDOOM_DRAWQ
+  /* The drawing on the other core (r_draw.c), from here to the end */
+
+  r_drawq_begin();
+#endif
+
   /* Clear buffers. */
 
   r_clear_clip_segs();
@@ -956,6 +974,10 @@ void r_render_player_view(player_t *player)
   net_update();
 
   r_draw_masked();
+
+#ifdef CONFIG_GAMES_NXDOOM_DRAWQ
+  r_drawq_end();
+#endif
 
   /* Check for new console commands. */
 

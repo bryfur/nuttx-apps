@@ -51,56 +51,56 @@
 
 /* True if any of the segs textures might be visible. */
 
-boolean segtextured;
+NXDOOM_SRAM boolean segtextured;
 
 /* False if the back side is the same plane. */
 
-boolean markfloor;
-boolean markceiling;
+NXDOOM_SRAM boolean markfloor;
+NXDOOM_SRAM boolean markceiling;
 
-boolean maskedtexture;
-int toptexture;
-int bottomtexture;
-int midtexture;
+NXDOOM_SRAM boolean maskedtexture;
+NXDOOM_SRAM int toptexture;
+NXDOOM_SRAM int bottomtexture;
+NXDOOM_SRAM int midtexture;
 
-angle_t rw_normalangle;
+NXDOOM_SRAM angle_t rw_normalangle;
 
 /* angle to line origin */
 
-int rw_angle1;
+NXDOOM_SRAM int rw_angle1;
 
 /* regular wall */
 
-int rw_x;
-int rw_stopx;
-angle_t rw_centerangle;
-fixed_t rw_offset;
-fixed_t rw_distance;
-fixed_t rw_scale;
-fixed_t rw_scalestep;
-fixed_t rw_midtexturemid;
-fixed_t rw_toptexturemid;
-fixed_t rw_bottomtexturemid;
+NXDOOM_SRAM int rw_x;
+NXDOOM_SRAM int rw_stopx;
+NXDOOM_SRAM angle_t rw_centerangle;
+NXDOOM_SRAM fixed_t rw_offset;
+NXDOOM_SRAM fixed_t rw_distance;
+NXDOOM_SRAM fixed_t rw_scale;
+NXDOOM_SRAM fixed_t rw_scalestep;
+NXDOOM_SRAM fixed_t rw_midtexturemid;
+NXDOOM_SRAM fixed_t rw_toptexturemid;
+NXDOOM_SRAM fixed_t rw_bottomtexturemid;
 
-int worldtop;
-int worldbottom;
-int worldhigh;
-int worldlow;
+NXDOOM_SRAM int worldtop;
+NXDOOM_SRAM int worldbottom;
+NXDOOM_SRAM int worldhigh;
+NXDOOM_SRAM int worldlow;
 
-fixed_t pixhigh;
-fixed_t pixlow;
-fixed_t pixhighstep;
-fixed_t pixlowstep;
+NXDOOM_SRAM fixed_t pixhigh;
+NXDOOM_SRAM fixed_t pixlow;
+NXDOOM_SRAM fixed_t pixhighstep;
+NXDOOM_SRAM fixed_t pixlowstep;
 
-fixed_t topfrac;
-fixed_t topstep;
+NXDOOM_SRAM fixed_t topfrac;
+NXDOOM_SRAM fixed_t topstep;
 
-fixed_t bottomfrac;
-fixed_t bottomstep;
+NXDOOM_SRAM fixed_t bottomfrac;
+NXDOOM_SRAM fixed_t bottomstep;
 
-lighttable_t **walllights;
+NXDOOM_SRAM lighttable_t **walllights;
 
-short *maskedtexturecol;
+NXDOOM_SRAM short *maskedtexturecol;
 
 /****************************************************************************
  * Private Functions
@@ -113,7 +113,7 @@ short *maskedtexturecol;
  * CALLED: CORE LOOPING ROUTINE.
  */
 
-static void r_render_seg_loop(void)
+NXDOOM_FAST static void r_render_seg_loop(void)
 {
   angle_t angle;
   unsigned index;
@@ -385,7 +385,7 @@ void r_render_masked_seg_range(drawseg_t *ds, int x1, int x2)
  * A wall segment will be drawn between start and stop pixels (inclusive).
  */
 
-void r_store_wall_range(int start, int stop)
+NXDOOM_FAST void r_store_wall_range(int start, int stop)
 {
   fixed_t hyp;
   fixed_t sineval;

@@ -72,19 +72,19 @@ typedef struct
  * Public Data
  ****************************************************************************/
 
-seg_t *curline;
-side_t *sidedef;
-line_t *linedef;
-sector_t *frontsector;
-sector_t *backsector;
+NXDOOM_SRAM seg_t *curline;
+NXDOOM_SRAM side_t *sidedef;
+NXDOOM_SRAM line_t *linedef;
+NXDOOM_SRAM sector_t *frontsector;
+NXDOOM_SRAM sector_t *backsector;
 
 drawseg_t drawsegs[CONFIG_GAMES_NXDOOM_MAXDRAWSEGS];
-drawseg_t *ds_p;
+NXDOOM_SRAM drawseg_t *ds_p;
 
 /* newend is one past the last valid seg */
 
-cliprange_t *newend;
-cliprange_t solidsegs[MAXSEGS];
+NXDOOM_SRAM cliprange_t *newend;
+NXDOOM_SRAM cliprange_t solidsegs[MAXSEGS];
 
 int checkcoord[12][4] =
 {
@@ -172,7 +172,7 @@ void r_clip_solid_wall_segment(int first, int last);
  *
  ****************************************************************************/
 
-static void r_clip_pass_wall_segment(int first, int last)
+NXDOOM_FAST static void r_clip_pass_wall_segment(int first, int last)
 {
   cliprange_t *start;
 
@@ -344,7 +344,7 @@ static boolean r_check_b_box(fixed_t *bspcoord)
  *
  ****************************************************************************/
 
-static void r_add_line(seg_t *line)
+NXDOOM_FAST static void r_add_line(seg_t *line)
 {
   int x1;
   int x2;
@@ -461,7 +461,7 @@ clipsolid:
  * Draw one or more line segments.
  */
 
-static void r_subsector(int num)
+NXDOOM_FAST static void r_subsector(int num)
 {
   int count;
   seg_t *line;
@@ -535,7 +535,7 @@ void r_clear_draw_segs(void)
  *
  ****************************************************************************/
 
-void r_clip_solid_wall_segment(int first, int last)
+NXDOOM_FAST void r_clip_solid_wall_segment(int first, int last)
 {
   cliprange_t *next;
   cliprange_t *start;
@@ -651,7 +651,7 @@ void r_clear_clip_segs(void)
  * Just call with BSP root.
  */
 
-void r_render_bsp_node(int bspnum)
+NXDOOM_FAST void r_render_bsp_node(int bspnum)
 {
   node_t *bsp;
   int side;

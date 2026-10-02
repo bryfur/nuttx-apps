@@ -80,6 +80,12 @@ typedef struct
 } memzone_t;
 
 /****************************************************************************
+ * Public Data
+ ****************************************************************************/
+
+void (*z_purge_hook)(void);
+
+/****************************************************************************
  * Private Data
  ****************************************************************************/
 
@@ -309,6 +315,11 @@ void *z_malloc(int size, int tag, void *user)
               /* free the rover block (adding the size to base) the rover can
                * be the base block
                */
+
+              if (z_purge_hook != NULL)
+                {
+                  z_purge_hook();
+                }
 
               base = base->prev;
               z_free((byte *)rover + sizeof(memblock_t));

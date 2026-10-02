@@ -26,6 +26,8 @@
 
 #include "fpc_gpu.h"
 #include "i_fpcscreen.h"
+#include "d_loop.h"
+#include "m_argv.h"
 
 #define FS_W        320
 #define FS_H        200
@@ -42,6 +44,10 @@ static struct
   uint32_t frames;
   uint64_t send_us;                      /* In fpcscreen_frame(), in all */
   uint32_t send_max;
+  bool     hash;                         /* -framehash */
+  uint32_t fnv;                          /* Of a frame every tenth tic */
+  int      hashed;                       /* Its tic, the last */
+  uint32_t nhashed;
 } g_fs;
 
 /* Take the display and the keyboard: false if the GPU or the desktop will
@@ -80,6 +86,10 @@ bool fpcscreen_open(void)
   fpc_gpu_game_flip(g_fs.x[0], g_fs.y[0]);
   fpc_gpu_flush();
   g_fs.back = 1;
+  g_fs.hash = m_check_parm("-framehash") > 0;
+  g_fs.fnv = 2166136261u;
+  g_fs.hashed = 0;
+  g_fs.nhashed = 0;
   g_fs.on = true;
   syslog(LOG_INFO, "nxdoom: full screen, 320 x 200 at 4 x 4, canvases at "
          "(%d, %d) and (%d, %d)\n", g_fs.x[0], g_fs.y[0], g_fs.x[1],
@@ -112,6 +122,34 @@ void fpcscreen_frame(const uint8_t *pixels, const uint8_t *rgbpal)
           g_fs.lut[i] = (uint16_t)((c[0] >> 3) << 11 | (c[1] >> 2) << 5 |
                                    (c[2] >> 3));
         }
+    }
+
+  /* -framehash: an FNV-1a of the first frame of every tenth tic and its
+   * palette, logged at the end (a timedemo draws the same frames every
+   * time, but for the wipe, which goes by the clock and is before the
+   * first tic: a change to the renderer that should not change a pixel
+   * can be checked)
+   */
+
+  if (g_fs.hash && gametic > 0 && gametic % 10 == 0 &&
+      gametic != g_fs.hashed)
+    {
+      uint32_t h = g_fs.fnv;
+      int i;
+
+      for (i = 0; i < FS_W * FS_H; i++)
+        {
+          h = (h ^ pixels[i]) * 16777619u;
+        }
+
+      for (i = 0; i < 256; i++)
+        {
+          h = (h ^ g_fs.lut[i]) * 16777619u;
+        }
+
+      g_fs.fnv = h;
+      g_fs.hashed = gametic;
+      g_fs.nhashed++;
     }
 
   t0 = fpc_gpu_game_us();
@@ -151,6 +189,13 @@ void fpcscreen_close(void)
          "longest %u us\n", (unsigned)g_fs.frames,
          (unsigned)(g_fs.frames ? g_fs.send_us / g_fs.frames : 0),
          (unsigned)g_fs.send_max);
+  if (g_fs.hash)
+    {
+      syslog(LOG_INFO, "nxdoom: frame hash %08x over %u frames, the last "
+             "at tic %d\n", (unsigned)g_fs.fnv, (unsigned)g_fs.nhashed,
+             g_fs.hashed);
+    }
+
   g_fs.frames = 0;
   g_fs.send_us = 0;
   g_fs.send_max = 0;

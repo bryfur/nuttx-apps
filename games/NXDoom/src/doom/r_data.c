@@ -738,7 +738,7 @@ static void r_generate_composite(int texnum)
  * Name: r_get_column
  ****************************************************************************/
 
-byte *r_get_column(int tex, int col)
+NXDOOM_FAST byte *r_get_column(int tex, int col)
 {
   int lump;
   int ofs;

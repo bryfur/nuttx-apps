@@ -27,6 +27,16 @@
  * Included Files
  ****************************************************************************/
 
+#include <nuttx/config.h>
+
+#ifdef CONFIG_GAMES_NXDOOM_DRAWQ
+#  include <nuttx/kmalloc.h>
+#  include <pthread.h>
+#  include <sched.h>
+#  include <semaphore.h>
+#  include <syslog.h>
+#endif
+
 #include "deh_main.h"
 #include "doomdef.h"
 
@@ -50,8 +60,8 @@
 
 /* ? */
 
-#define MAXWIDTH 1120
-#define MAXHEIGHT 832
+#define MAXWIDTH SCREENWIDTH              /* (Not 1120 x 832: no more here) */
+#define MAXHEIGHT SCREENHEIGHT
 
 /* status bar height at bottom of screen */
 
@@ -81,8 +91,8 @@ int scaledviewwidth;
 int viewheight;
 int viewwindowx;
 int viewwindowy;
-pixel_t *ylookup[MAXHEIGHT];
-int columnofs[MAXWIDTH];
+NXDOOM_SRAM pixel_t *ylookup[MAXHEIGHT];
+NXDOOM_SRAM int columnofs[MAXWIDTH];
 
 /* Color tables for different players, translate a limited part to another
  * (color ramps used for  suit colors).
@@ -90,16 +100,16 @@ int columnofs[MAXWIDTH];
 
 byte translations[3][256];
 
-lighttable_t *dc_colormap;
-int dc_x;
-int dc_yl;
-int dc_yh;
-fixed_t dc_iscale;
-fixed_t dc_texturemid;
+NXDOOM_SRAM lighttable_t *dc_colormap;
+NXDOOM_SRAM int dc_x;
+NXDOOM_SRAM int dc_yl;
+NXDOOM_SRAM int dc_yh;
+NXDOOM_SRAM fixed_t dc_iscale;
+NXDOOM_SRAM fixed_t dc_texturemid;
 
 /* first pixel in a column (possibly virtual) */
 
-byte *dc_source;
+NXDOOM_SRAM byte *dc_source;
 
 int fuzzoffset[FUZZTABLE] =
 {
@@ -115,23 +125,23 @@ int fuzzoffset[FUZZTABLE] =
 
 int fuzzpos = 0;
 
-byte *dc_translation;
+NXDOOM_SRAM byte *dc_translation;
 byte *translationtables;
 
-int ds_y;
-int ds_x1;
-int ds_x2;
+NXDOOM_SRAM int ds_y;
+NXDOOM_SRAM int ds_x1;
+NXDOOM_SRAM int ds_x2;
 
-lighttable_t *ds_colormap;
+NXDOOM_SRAM lighttable_t *ds_colormap;
 
-fixed_t ds_xfrac;
-fixed_t ds_yfrac;
-fixed_t ds_xstep;
-fixed_t ds_ystep;
+NXDOOM_SRAM fixed_t ds_xfrac;
+NXDOOM_SRAM fixed_t ds_yfrac;
+NXDOOM_SRAM fixed_t ds_xstep;
+NXDOOM_SRAM fixed_t ds_ystep;
 
 /* start of a 64*64 tile image */
 
-byte *ds_source;
+NXDOOM_SRAM byte *ds_source;
 
 /****************************************************************************
  * Private Data
@@ -142,6 +152,455 @@ byte *ds_source;
  */
 
 static pixel_t *background_buffer = NULL;
+
+#ifdef CONFIG_GAMES_NXDOOM_DRAWQ
+/****************************************************************************
+ * The draw queue (CONFIG_GAMES_NXDOOM_DRAWQ)
+ *
+ * Drawing the columns and spans takes the renderer about half of its time
+ * and decides nothing: in high detail, colfunc and spanfunc only note what
+ * to draw in a ring in the SRAM, and a thread on the other core draws it,
+ * in the order it was noted (the overdraw, the sprites over the walls and
+ * the fuzz reading what is under it all come out as before), while the game
+ * walks the BSP, clips and sorts.  r_render_player_view() starts a frame's
+ * drawing and waits for the last of it, before the status bar, the menus
+ * and the frame's trip to the screen.  Whatever is drawn outside a frame is
+ * drawn at once; a block of the zone is purged only once the queue is empty
+ * (z_purge_hook: a queued column may be reading it).
+ ****************************************************************************/
+
+#define DQ_MOST     512                   /* Entries, a power of two */
+#define DQ_LEAST    64
+#define DQ_STACK    2048                  /* The drawer's */
+
+enum
+{
+  DQ_COLUMN,
+  DQ_TRANS,
+  DQ_FUZZ,
+  DQ_SPAN,
+  DQ_END
+};
+
+struct dq_s                               /* 32 bytes */
+{
+  pixel_t *dest;
+  const byte *source;
+  const lighttable_t *colormap;
+  const byte *translation;
+  uint32_t frac;                          /* A span's: packed x and y */
+  uint32_t step;
+  int count;                              /* Pixels - 1 */
+  int kind;
+};
+
+static struct
+{
+  struct dq_s *ring;                      /* kmm_malloc(): the SRAM */
+  uint32_t size;                          /* Entries, a power of two */
+  uint32_t head;                          /* The game's: entries noted */
+  uint32_t tail;                          /* The drawer's: entries done */
+  bool frame;                             /* Between begin and end */
+  bool quit;
+  bool tried;
+  pthread_t thread;
+  void *stack;                            /* The game's heap: the PSRAM */
+  sem_t go;
+  int fuzzpos;                            /* The drawer's */
+} g_dq NXDOOM_SRAM;                       /* (Spun on by both cores) */
+
+NXDOOM_FAST static void dq_draw(const struct dq_s *e)
+{
+  pixel_t *dest = e->dest;
+  int count = e->count;
+  uint32_t frac = e->frac;
+  uint32_t step = e->step;
+  const byte *source = e->source;
+  const lighttable_t *colormap = e->colormap;
+
+  switch (e->kind)
+    {
+      case DQ_COLUMN:
+        do
+          {
+            *dest = colormap[source[(frac >> FRACBITS) & 127]];
+            dest += SCREENWIDTH;
+            frac += step;
+          }
+        while (count--);
+        break;
+
+      case DQ_TRANS:
+        do
+          {
+            *dest = colormap[e->translation[source[frac >> FRACBITS]]];
+            dest += SCREENWIDTH;
+            frac += step;
+          }
+        while (count--);
+        break;
+
+      case DQ_FUZZ:
+        {
+          int pos = g_dq.fuzzpos;
+
+          do
+            {
+              *dest = colormaps[6 * 256 + dest[fuzzoffset[pos]]];
+              if (++pos == FUZZTABLE)
+                {
+                  pos = 0;
+                }
+
+              dest += SCREENWIDTH;
+            }
+          while (count--);
+          g_dq.fuzzpos = pos;
+        }
+        break;
+
+      case DQ_SPAN:
+        do
+          {
+            *dest++ = colormap[source[((frac >> 4) & 0x0fc0) |
+                                      (frac >> 26)]];
+            frac += step;
+          }
+        while (count--);
+        break;
+    }
+}
+
+/* The drawer: sleeps between frames, spins within one */
+
+NXDOOM_FAST static void *dq_main(void *arg)
+{
+  (void)arg;
+  for (; ; )
+    {
+      sem_wait(&g_dq.go);
+      for (; ; )
+        {
+          uint32_t t = g_dq.tail;
+          const struct dq_s *e;
+
+          while (__atomic_load_n(&g_dq.head, __ATOMIC_ACQUIRE) == t)
+            {
+              if (__atomic_load_n(&g_dq.quit, __ATOMIC_RELAXED))
+                {
+                  return NULL;
+                }
+            }
+
+          e = &g_dq.ring[t & (g_dq.size - 1)];
+          if (e->kind == DQ_END)
+            {
+              __atomic_store_n(&g_dq.tail, t + 1, __ATOMIC_RELEASE);
+              break;
+            }
+
+          dq_draw(e);
+          __atomic_store_n(&g_dq.tail, t + 1, __ATOMIC_RELEASE);
+        }
+
+      if (__atomic_load_n(&g_dq.quit, __ATOMIC_RELAXED))
+        {
+          return NULL;
+        }
+    }
+}
+
+/* The next free entry (waiting for the drawer while the ring is full) */
+
+NXDOOM_FAST static struct dq_s *dq_slot(void)
+{
+  uint32_t h = g_dq.head;
+
+  while (h - __atomic_load_n(&g_dq.tail, __ATOMIC_ACQUIRE) >= g_dq.size);
+  return &g_dq.ring[h & (g_dq.size - 1)];
+}
+
+/* An entry filled: to the drawer within a frame, else drawn here */
+
+NXDOOM_FAST static void dq_push(struct dq_s *e)
+{
+  if (g_dq.frame)
+    {
+      __atomic_store_n(&g_dq.head, g_dq.head + 1, __ATOMIC_RELEASE);
+    }
+  else
+    {
+      dq_draw(e);
+    }
+}
+
+/* Everything noted drawn (the zone's purge hook and the frame's end) */
+
+NXDOOM_FAST static void dq_wait(void)
+{
+  while (__atomic_load_n(&g_dq.tail, __ATOMIC_ACQUIRE) != g_dq.head);
+}
+
+static void dq_shutdown(void)
+{
+  if (g_dq.ring == NULL)
+    {
+      return;
+    }
+
+#ifdef CONFIG_GAMES_NXDOOM_ZONE
+  z_purge_hook = NULL;
+#endif
+  if (colfunc == r_drawq_column)
+    {
+      colfunc = basecolfunc = r_draw_column;
+      fuzzcolfunc = r_draw_fuzz_column;
+      transcolfunc = r_draw_translated_column;
+      spanfunc = r_draw_span;
+    }
+
+  __atomic_store_n(&g_dq.quit, true, __ATOMIC_RELEASE);
+  sem_post(&g_dq.go);
+  pthread_join(g_dq.thread, NULL);
+  sem_destroy(&g_dq.go);
+  free(g_dq.stack);
+  g_dq.stack = NULL;
+  kmm_free(g_dq.ring);
+  g_dq.ring = NULL;
+  g_dq.frame = false;
+}
+
+/* The ring and the drawer, the first frame (the game on one core, the
+ * drawer on the other, a step below the game so that the rest of the
+ * system still gets that core when it wants it).  The game leaves the
+ * SRAM all but full: the ring gets what there is, and the drawer's stack,
+ * which it hardly touches, comes from the game's heap.
+ */
+
+static bool dq_start(void)
+{
+  struct sched_param param;
+  pthread_attr_t attr;
+  cpu_set_t cpus;
+  int policy;
+
+  g_dq.tried = true;
+  for (g_dq.size = DQ_MOST; g_dq.size >= DQ_LEAST; g_dq.size /= 2)
+    {
+      g_dq.ring = kmm_malloc(g_dq.size * sizeof(struct dq_s));
+      if (g_dq.ring != NULL)
+        {
+          break;
+        }
+    }
+
+  if (g_dq.ring == NULL)
+    {
+      syslog(LOG_WARNING, "nxdoom: no SRAM for the draw queue\n");
+      return false;
+    }
+
+  g_dq.head = 0;
+  g_dq.tail = 0;
+  g_dq.quit = false;
+  g_dq.fuzzpos = 0;
+  sem_init(&g_dq.go, 0, 0);
+
+  CPU_ZERO(&cpus);
+  CPU_SET(0, &cpus);
+  sched_setaffinity(0, sizeof(cpus), &cpus);
+
+  pthread_getschedparam(pthread_self(), &policy, &param);
+  param.sched_priority--;
+  g_dq.stack = malloc(DQ_STACK);
+  pthread_attr_init(&attr);
+  if (g_dq.stack != NULL)
+    {
+      pthread_attr_setstack(&attr, g_dq.stack, DQ_STACK);
+    }
+
+  pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED);
+  pthread_attr_setschedpolicy(&attr, policy);
+  pthread_attr_setschedparam(&attr, &param);
+  CPU_ZERO(&cpus);
+  CPU_SET(1, &cpus);
+  pthread_attr_setaffinity_np(&attr, sizeof(cpus), &cpus);
+  if (pthread_create(&g_dq.thread, &attr, dq_main, NULL) != 0)
+    {
+      pthread_attr_destroy(&attr);
+      sem_destroy(&g_dq.go);
+      free(g_dq.stack);
+      g_dq.stack = NULL;
+      kmm_free(g_dq.ring);
+      g_dq.ring = NULL;
+      syslog(LOG_WARNING, "nxdoom: no drawer thread\n");
+      return false;
+    }
+
+  pthread_attr_destroy(&attr);
+  pthread_setname_np(g_dq.thread, "doom draw");
+#ifdef CONFIG_GAMES_NXDOOM_ZONE
+  z_purge_hook = dq_wait;
+#endif
+  i_at_exit(dq_shutdown, true);           /* (before the screen goes) */
+  syslog(LOG_INFO, "nxdoom: drawing on the other core, %u entries queued "
+         "at most\n", (unsigned)g_dq.size);
+  return true;
+}
+
+/* colfunc, fuzzcolfunc, transcolfunc and spanfunc in high detail */
+
+NXDOOM_FAST void r_drawq_column(void)
+{
+  struct dq_s *e;
+  int count = dc_yh - dc_yl;
+
+  if (count < 0)
+    {
+      return;
+    }
+
+#ifdef CONFIG_GAMES_NXDOOM_RANGECHECK
+  if ((unsigned)dc_x >= SCREENWIDTH || dc_yl < 0 || dc_yh >= SCREENHEIGHT)
+    {
+      i_error("r_draw_column: %i to %i at %i", dc_yl, dc_yh, dc_x);
+    }
+#endif
+
+  e = dq_slot();
+  e->kind = DQ_COLUMN;
+  e->dest = ylookup[dc_yl] + columnofs[dc_x];
+  e->count = count;
+  e->step = dc_iscale;
+  e->frac = dc_texturemid + (dc_yl - centery) * dc_iscale;
+  e->source = dc_source;
+  e->colormap = dc_colormap;
+  dq_push(e);
+}
+
+NXDOOM_FAST void r_drawq_translated_column(void)
+{
+  struct dq_s *e;
+  int count = dc_yh - dc_yl;
+
+  if (count < 0)
+    {
+      return;
+    }
+
+#ifdef CONFIG_GAMES_NXDOOM_RANGECHECK
+  if ((unsigned)dc_x >= SCREENWIDTH || dc_yl < 0 || dc_yh >= SCREENHEIGHT)
+    {
+      i_error("r_draw_column: %i to %i at %i", dc_yl, dc_yh, dc_x);
+    }
+#endif
+
+  e = dq_slot();
+  e->kind = DQ_TRANS;
+  e->dest = ylookup[dc_yl] + columnofs[dc_x];
+  e->count = count;
+  e->step = dc_iscale;
+  e->frac = dc_texturemid + (dc_yl - centery) * dc_iscale;
+  e->source = dc_source;
+  e->colormap = dc_colormap;
+  e->translation = dc_translation;
+  dq_push(e);
+}
+
+NXDOOM_FAST void r_drawq_fuzz_column(void)
+{
+  struct dq_s *e;
+  int count;
+
+  if (!dc_yl)
+    {
+      dc_yl = 1;
+    }
+
+  if (dc_yh == viewheight - 1)
+    {
+      dc_yh = viewheight - 2;
+    }
+
+  count = dc_yh - dc_yl;
+  if (count < 0)
+    {
+      return;
+    }
+
+#ifdef CONFIG_GAMES_NXDOOM_RANGECHECK
+  if ((unsigned)dc_x >= SCREENWIDTH || dc_yl < 0 || dc_yh >= SCREENHEIGHT)
+    {
+      i_error("r_draw_fuzz_column: %i to %i at %i", dc_yl, dc_yh, dc_x);
+    }
+#endif
+
+  e = dq_slot();
+  e->kind = DQ_FUZZ;
+  e->dest = ylookup[dc_yl] + columnofs[dc_x];
+  e->count = count;
+  dq_push(e);
+}
+
+NXDOOM_FAST void r_drawq_span(void)
+{
+  struct dq_s *e;
+
+#ifdef CONFIG_GAMES_NXDOOM_RANGECHECK
+  if (ds_x2 < ds_x1 || ds_x1 < 0 || ds_x2 >= SCREENWIDTH ||
+      ds_y < 0 || ds_y >= viewheight)
+    {
+      i_error("r_draw_span: %i to %i at %i", ds_x1, ds_x2, ds_y);
+    }
+#endif
+
+  e = dq_slot();
+  e->kind = DQ_SPAN;
+  e->dest = ylookup[ds_y] + columnofs[ds_x1];
+  e->count = ds_x2 - ds_x1;
+  e->frac = ((ds_xfrac << 10) & 0xffff0000) | ((ds_yfrac >> 6) & 0x0000ffff);
+  e->step = ((ds_xstep << 10) & 0xffff0000) | ((ds_ystep >> 6) & 0x0000ffff);
+  e->source = ds_source;
+  e->colormap = ds_colormap;
+  dq_push(e);
+}
+
+/* A frame's drawing: begin it (false: no queue, draw as before) */
+
+bool r_drawq_begin(void)
+{
+  if (detailshift || (g_dq.ring == NULL && (g_dq.tried || !dq_start())))
+    {
+      return false;                       /* (Low detail: as before) */
+    }
+
+  colfunc = basecolfunc = r_drawq_column;
+  fuzzcolfunc = r_drawq_fuzz_column;
+  transcolfunc = r_drawq_translated_column;
+  spanfunc = r_drawq_span;
+  g_dq.frame = true;
+  sem_post(&g_dq.go);
+  return true;
+}
+
+/* ...and wait for its last pixel */
+
+void r_drawq_end(void)
+{
+  struct dq_s *e;
+
+  if (!g_dq.frame)
+    {
+      return;
+    }
+
+  e = dq_slot();
+  e->kind = DQ_END;
+  dq_push(e);
+  g_dq.frame = false;
+  dq_wait();
+}
+#endif /* CONFIG_GAMES_NXDOOM_DRAWQ */
 
 /****************************************************************************
  * Public Functions
@@ -157,7 +616,7 @@ static pixel_t *background_buffer = NULL;
  * been used with Wolfenstein 3D.
  */
 
-void r_draw_column(void)
+NXDOOM_FAST void r_draw_column(void)
 {
   int count;
   pixel_t *dest;
@@ -214,7 +673,7 @@ void r_draw_column(void)
 /* UNUSED. Loop unrolled. */
 
 #if 0
-void r_draw_column(void)
+NXDOOM_FAST void r_draw_column(void)
 {
   int count;
   byte *source;
@@ -269,7 +728,7 @@ void r_draw_column(void)
 }
 #endif
 
-void r_draw_column_low(void)
+NXDOOM_FAST void r_draw_column_low(void)
 {
   int count;
   pixel_t *dest;
@@ -325,7 +784,7 @@ void r_draw_column_low(void)
  * spectres and invisible players.
  */
 
-void r_draw_fuzz_column(void)
+NXDOOM_FAST void r_draw_fuzz_column(void)
 {
   int count;
   pixel_t *dest;
@@ -468,7 +927,7 @@ void r_draw_fuzz_column_low(void)
  * brightened up.
  */
 
-void r_draw_translated_column(void)
+NXDOOM_FAST void r_draw_translated_column(void)
 {
   int count;
   pixel_t *dest;
@@ -623,7 +1082,7 @@ void r_init_translation_table(void)
  * Draws the actual span.
  */
 
-void r_draw_span(void)
+NXDOOM_FAST void r_draw_span(void)
 {
   unsigned int position;
   unsigned int step;
@@ -678,7 +1137,7 @@ void r_draw_span(void)
 /* UNUSED. Loop unrolled by 4. */
 
 #if 0
-void r_draw_span(void)
+NXDOOM_FAST void r_draw_span(void)
 {
   unsigned position;
   unsigned step;

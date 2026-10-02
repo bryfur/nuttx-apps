@@ -104,4 +104,13 @@ void r_draw_translated_column_low(void);
 
 void r_video_erase(unsigned ofs, int count);
 
+#ifdef CONFIG_GAMES_NXDOOM_DRAWQ
+void r_drawq_column(void);
+void r_drawq_translated_column(void);
+void r_drawq_fuzz_column(void);
+void r_drawq_span(void);
+bool r_drawq_begin(void);
+void r_drawq_end(void);
+#endif
+
 #endif /* __R_DRAW__ */

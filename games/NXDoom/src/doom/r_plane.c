@@ -27,8 +27,15 @@
  * Included Files
  ****************************************************************************/
 
+#include <nuttx/config.h>
+
 #include <stdio.h>
 #include <stdlib.h>
+#include <syslog.h>
+
+#ifdef CONFIG_GAMES_NXDOOM_SRAM
+#  include <nuttx/kmalloc.h>
+#endif
 
 #include "i_system.h"
 #include "w_wad.h"
@@ -57,44 +64,98 @@ planefunction_t ceilingfunc;
 
 /* Here comes the obnoxious "visplane". */
 
+#ifdef CONFIG_GAMES_NXDOOM_SRAM
+/* In the internal SRAM while the game runs (r_sram_planes()) if there is
+ * room, else these in the PSRAM: every wall column writes its planes' top
+ * and bottom, and the openings are the sprites' clipping
+ */
+
+static visplane_t g_visplanes[CONFIG_GAMES_NXDOOM_MAXVISPLANES];
+static short g_openings[MAXOPENINGS];
+static void *g_planes_sram;
+static bool g_planes_tried;
+
+visplane_t *visplanes = g_visplanes;
+short *openings = g_openings;
+#else
 visplane_t visplanes[CONFIG_GAMES_NXDOOM_MAXVISPLANES];
 short openings[MAXOPENINGS];
-visplane_t *lastvisplane;
-visplane_t *floorplane;
-visplane_t *ceilingplane;
+#endif
+NXDOOM_SRAM visplane_t *lastvisplane;
+NXDOOM_SRAM visplane_t *floorplane;
+NXDOOM_SRAM visplane_t *ceilingplane;
 
-short *lastopening;
+NXDOOM_SRAM short *lastopening;
 
 /* Clip values are the solid pixel bounding the range. floorclip starts out
  * SCREENHEIGHT ceilingclip starts out -1
  */
 
-short floorclip[SCREENWIDTH];
-short ceilingclip[SCREENWIDTH];
+NXDOOM_SRAM short floorclip[SCREENWIDTH];
+NXDOOM_SRAM short ceilingclip[SCREENWIDTH];
 
 /* spanstart holds the start of a plane span initialized to 0 at start */
 
-int spanstart[SCREENHEIGHT];
+NXDOOM_SRAM int spanstart[SCREENHEIGHT];
 int spanstop[SCREENHEIGHT];
 
 /* texture mapping */
 
-lighttable_t **planezlight;
-fixed_t planeheight;
+NXDOOM_SRAM lighttable_t **planezlight;
+NXDOOM_SRAM fixed_t planeheight;
 
-fixed_t yslope[SCREENHEIGHT];
-fixed_t distscale[SCREENWIDTH];
-fixed_t basexscale;
-fixed_t baseyscale;
+NXDOOM_SRAM fixed_t yslope[SCREENHEIGHT];
+NXDOOM_SRAM fixed_t distscale[SCREENWIDTH];
+NXDOOM_SRAM fixed_t basexscale;
+NXDOOM_SRAM fixed_t baseyscale;
 
-fixed_t cachedheight[SCREENHEIGHT];
-fixed_t cacheddistance[SCREENHEIGHT];
-fixed_t cachedxstep[SCREENHEIGHT];
-fixed_t cachedystep[SCREENHEIGHT];
+NXDOOM_SRAM fixed_t cachedheight[SCREENHEIGHT];
+NXDOOM_SRAM fixed_t cacheddistance[SCREENHEIGHT];
+NXDOOM_SRAM fixed_t cachedxstep[SCREENHEIGHT];
+NXDOOM_SRAM fixed_t cachedystep[SCREENHEIGHT];
 
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
+
+#ifdef CONFIG_GAMES_NXDOOM_SRAM
+static void r_free_sram_planes(void)
+{
+  visplanes = g_visplanes;
+  openings = g_openings;
+  kmm_free(g_planes_sram);
+  g_planes_sram = NULL;
+}
+
+/* The visplanes and the openings into the SRAM, the first frame (after
+ * the screen buffer and the light tables, which matter more, have had it)
+ */
+
+static void r_sram_planes(void)
+{
+  size_t vsize = sizeof(g_visplanes);
+  size_t size = vsize + sizeof(g_openings);
+
+  /* (Zeroed as the arrays were: a plane's bottom is never cleared, and
+   * a column it has none of in a frame, top 0xff, must not be drawn)
+   */
+
+  g_planes_tried = true;
+  g_planes_sram = kmm_zalloc(size);
+  if (g_planes_sram == NULL)
+    {
+      syslog(LOG_INFO, "nxdoom: no SRAM for the visplanes (%u bytes)\n",
+             (unsigned)size);
+      return;
+    }
+
+  visplanes = g_planes_sram;
+  openings = (short *)((byte *)g_planes_sram + vsize);
+  i_at_exit(r_free_sram_planes, true);
+  syslog(LOG_INFO, "nxdoom: visplanes and openings in the SRAM (%u bytes)\n",
+         (unsigned)size);
+}
+#endif
 
 /* Uses global vars:
  *  planeheight
@@ -107,7 +168,7 @@ fixed_t cachedystep[SCREENHEIGHT];
  * BASIC PRIMITIVE
  */
 
-static void r_map_plane(int y, int x1, int x2)
+NXDOOM_FAST static void r_map_plane(int y, int x1, int x2)
 {
   angle_t angle;
   fixed_t distance;
@@ -179,7 +240,7 @@ static inline boolean r_row_in_range(int row)
   return row >= 0 && row < SCREENHEIGHT;
 }
 
-static void r_make_spans(int x, int t1, int b1, int t2, int b2)
+NXDOOM_FAST static void r_make_spans(int x, int t1, int b1, int t2, int b2)
 {
   /* Check that row is in range before indexing arrays. */
 
@@ -235,6 +296,13 @@ void r_clear_planes(void)
 {
   int i;
   angle_t angle;
+
+#ifdef CONFIG_GAMES_NXDOOM_SRAM
+  if (!g_planes_tried)
+    {
+      r_sram_planes();
+    }
+#endif
 
   /* opening / clipping determination */
 
@@ -371,7 +439,7 @@ visplane_t *r_check_plane(visplane_t *pl, int start, int stop)
 
 /* At the end of each frame. */
 
-void r_draw_planes(void)
+NXDOOM_FAST void r_draw_planes(void)
 {
   visplane_t *pl;
   int light;

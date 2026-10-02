@@ -209,6 +209,35 @@ config GAMES_NXDOOM_SRAM
 		every pixel drawn goes through them).  Without the room, the
 		game's heap as before.
 
+config GAMES_NXDOOM_FASTCODE
+	bool "The renderer's inner loops and their variables in the SRAM"
+	default y
+	depends on ARCH_CHIP_RP23XX
+	---help---
+		The column and span drawers, the wall loop, the plane mapper,
+		the BSP walk and the fixed-point helpers (about 6 KB) in
+		.time_critical, which the board's linker script places in the
+		SRAM with .data, and the variables they use all the time (the
+		clip and plane arrays, the light tables, the wall loop's
+		state: about 25 KB) in .sram_bss.nxdoom: out of the 16 KB XIP
+		cache that the code from the flash and the game's data in the
+		PSRAM share, where every texture and flat read evicts them.
+		The timedemo, 300 MHz: 29.2 frames a second without, 33.9 with
+		the code, 41.9 with all of it and GAMES_NXDOOM_DRAWQ.
+
+config GAMES_NXDOOM_DRAWQ
+	bool "The columns and spans drawn on the other core"
+	default y
+	depends on SMP && GAMES_NXDOOM_SRAM
+	---help---
+		In high detail the renderer only notes what to draw (a ring
+		of up to 16 KB in the SRAM), and a thread pinned to the other
+		core draws it in order while the game, pinned to the first,
+		walks the BSP, clips and sorts.  Nothing changes on the
+		screen.  Both cores then read the PSRAM through the one XIP
+		cache, and the game's own reads slow down: worth a few per
+		cent while the PSRAM is what the frame waits on.
+
 config GAMES_NXDOOM_ZONE
 	bool "Doom's own zone allocator"
 	default y
