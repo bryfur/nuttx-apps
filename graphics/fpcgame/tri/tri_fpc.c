@@ -1175,6 +1175,22 @@ static void tri_quit(void)
   free(g_tri.obj);
 }
 
+int tri_game_main(const tri_game_t *game, int argc, char *argv[])
+{
+  if (argc == 3 && strcmp(argv[1], "-s") == 0)
+    {
+      fg_script(argv[2]);
+    }
+  else if (argc != 1)
+    {
+      fprintf(stderr, "usage: %s [-s SCRIPT]   (fpcgame.h: fg_script())\n",
+              argv[0]);
+      return 1;
+    }
+
+  return tri_game_run(game) < 0 ? 1 : 0;
+}
+
 int tri_game_run(const tri_game_t *game)
 {
   struct fg_game_s g;

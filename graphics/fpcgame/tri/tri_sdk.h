@@ -4,7 +4,8 @@
 // FPC game SDK's TRI runtime, apps/graphics/fpcgame/tri_fpc.c. Changed: a
 // game is a NuttX program (TRI_GAME gives it its main(); no ROM header,
 // and the descriptor's name is the game's own, so several share an image),
-// tri_game_run() returns, TRI_PSRAM is the board's PSRAM .bss.)
+// tri_game_run() returns, "GAME -s SCRIPT" plays fg_script() input, TRI_PSRAM
+// is the board's PSRAM .bss.)
 //
 // A game is four callbacks (tri_game_t) plus this runtime, linked as a
 // complete image for one ROM slot. The runtime owns the frame loop paced by
@@ -54,7 +55,7 @@ typedef struct {
 // Games that adapt to any canvas width pass TRI_VIDEO_ANY.
 #define TRI_GAME(gname, mode, fload, finit, fupdate, fdraw) \
 	static const tri_game_t tri_game_desc = { gname, (mode), fload, finit, fupdate, fdraw }; \
-	int main(int argc, char *argv[]) { (void)argc; (void)argv; return tri_game_run(&tri_game_desc) < 0 ? 1 : 0; }
+	int main(int argc, char *argv[]) { return tri_game_main(&tri_game_desc, argc, argv); }
 
 // The two command destinations, for the calls that take a `vdp` argument.
 #define TRI_VDP1 TRI_DEST_VDP1   // objects: sprite sheets, 16 palettes, 48 KB VRAM
@@ -319,4 +320,5 @@ void tri_rom_launch(int slot);
 // Entry points. Games get theirs from tri_game_main.c (linked by tri_add_game);
 // the OS image calls tri_os_run with the menu app. Neither returns.
 int  tri_game_run(const tri_game_t *game);    // (FPC: returns when the game ends: 0, or a negated errno)
+int  tri_game_main(const tri_game_t *game, int argc, char *argv[]);   // (FPC: TRI_GAME's main(): -s SCRIPT, fg_script())
 void tri_os_run(const tri_game_t *menu);

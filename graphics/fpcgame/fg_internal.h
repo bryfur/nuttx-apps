@@ -44,6 +44,10 @@ struct fg_s
   int ox;                                 /* Its pixel (0, 0) in the space */
   int oy;
   bool quit;
+  bool frozen;                            /* Pause or F12: the loop held */
+  bool scripted;                          /* fg_script(): not paced (simulator) */
+  FAR const char *script;                 /* fg_script(): what is left */
+  uint32_t script_at;
   uint32_t frame;
   uint64_t t0;                            /* fg_run()'s start, us */
   uint32_t rnd;

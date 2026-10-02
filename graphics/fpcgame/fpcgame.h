@@ -70,6 +70,19 @@ struct fg_game_s
 int fg_run(FAR const struct fg_game_s *game);
 void fg_exit(void);                       /* End after this frame */
 
+/* Input by frame numbers instead of the keyboard (tests, demos): before
+ * fg_run(), a string of words: a number is a frame (counted from init()),
+ * the words after it happen at that frame's start: +KEY pressed, -KEY
+ * released, KEY pressed for one frame, "freeze" (the picture held, as
+ * the Pause key does), "quit".  Keys: left right up down z x c v a s d w
+ * j k l b space enter tab.  The keyboard still works (Escape, Pause).
+ * In the simulator the frames are not paced meanwhile, so that a script
+ * plays out quickly and the same every time.
+ *   fg_script("30 z  60 +right +z  200 -right  260 freeze")
+ */
+
+void fg_script(FAR const char *script);
+
 int fg_width(void);                       /* The canvas */
 int fg_height(void);
 uint32_t fg_frame(void);                  /* Frames since init() */

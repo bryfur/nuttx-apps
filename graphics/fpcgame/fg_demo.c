@@ -10,7 +10,8 @@
  * GPU's cell flipped, rectangles, text in changing colours, a sample on A
  * and an FM tune.  "fgdemo N" ends after N frames (tests), else Escape;
  * "fgdemo N freeze" stops the picture at frame N and goes on showing it
- * (the board's picture compared with the simulator's: tools grab it).
+ * (the board's picture compared with the simulator's: tools grab it);
+ * "fgdemo -s SCRIPT" plays scripted input (fg_script()).
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -252,8 +253,16 @@ int main(int argc, FAR char *argv[])
 {
   int ret;
 
-  g_frames = argc > 1 ? atoi(argv[1]) : -1;
-  g_freeze = argc > 2 && strcmp(argv[2], "freeze") == 0;
+  if (argc == 3 && strcmp(argv[1], "-s") == 0)
+    {
+      fg_script(argv[2]);
+    }
+  else
+    {
+      g_frames = argc > 1 ? atoi(argv[1]) : -1;
+      g_freeze = argc > 2 && strcmp(argv[2], "freeze") == 0;
+    }
+
   ret = fg_run(&g_demo);
   if (ret < 0)
     {

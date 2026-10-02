@@ -34,6 +34,7 @@
 #include <nuttx/audio/fpc_mixer.h>
 
 #include "fg_audio_engine.h"
+#include "fpc_gpu.h"
 #include "tri/tri_isa.h"
 
 #define FG_BLOCK        256               /* Frames rendered at a time (5.3 ms) */
@@ -68,7 +69,7 @@ static struct
 
 uint32_t time_us_32(void)
 {
-  return (uint32_t)fg_now_us();
+  return fpc_gpu_game_us();             /* (the audio thread's: not fg_now_us()) */
 }
 
 uint8_t *vdp2_vram_range(vdp2_t *v, uint32_t off, uint32_t len)

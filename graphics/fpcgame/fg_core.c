@@ -25,6 +25,7 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <syslog.h>
 #include <time.h>
@@ -48,10 +49,21 @@ struct fg_s g_fg;
 
 uint64_t fg_now_us(void)
 {
-  struct timespec ts;
+  /* The driver's microsecond clock (the system's moves in 1 ms ticks),
+   * made 64-bit here (it is read at least every frame)
+   */
 
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return (uint64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+  static uint32_t last;
+  static uint64_t hi;
+  uint32_t now = fpc_gpu_game_us();
+
+  if (now < last)
+    {
+      hi += 1ull << 32;
+    }
+
+  last = now;
+  return hi | now;
 }
 
 uint32_t fg_time_us(void)
@@ -108,6 +120,11 @@ void fg_random_seed(uint32_t seed)
 void fg_exit(void)
 {
   g_fg.quit = true;
+}
+
+void fg_script(FAR const char *script)
+{
+  g_fg.script = script;
 }
 
 FAR const struct fg_stats_s *fg_stats(void)
@@ -168,6 +185,149 @@ static uint32_t key_bit(uint8_t code)
     }
 }
 
+static void key_event(bool release, uint8_t code)
+{
+  int i;
+
+  if (!release)
+    {
+      if (code == NX_KEY_ESCAPE)
+        {
+          g_fg.quit = true;               /* Escape: back to the desktop */
+        }
+
+      if (code == NX_KEY_SPECIAL(KEYCODE_PAUSE) ||
+          code == NX_KEY_SPECIAL(KEYCODE_F12))
+        {
+          g_fg.frozen = !g_fg.frozen;     /* Pause, F12: the picture held */
+          return;
+        }
+
+      for (i = 0; i < g_pad.ndown && g_pad.down[i] != code; i++);
+      if (i == g_pad.ndown && g_pad.ndown < (int)sizeof(g_pad.down))
+        {
+          g_pad.down[g_pad.ndown++] = code;
+        }
+    }
+  else
+    {
+      for (i = 0; i < g_pad.ndown; i++)
+        {
+          if (g_pad.down[i] == code)
+            {
+              g_pad.down[i] = g_pad.down[--g_pad.ndown];
+              break;
+            }
+        }
+    }
+}
+
+/* fg_script()'s key names */
+
+static int script_key(FAR const char *w, int n)
+{
+  static const struct
+  {
+    FAR const char *name;
+    uint8_t code;
+  }
+  keys[] =
+  {
+    { "left",  NX_KEY_SPECIAL(KEYCODE_LEFT) },
+    { "right", NX_KEY_SPECIAL(KEYCODE_RIGHT) },
+    { "up",    NX_KEY_SPECIAL(KEYCODE_UP) },
+    { "down",  NX_KEY_SPECIAL(KEYCODE_DOWN) },
+    { "space", ' ' },
+    { "enter", NX_KEY_ENTER },
+    { "tab",   NX_KEY_TAB },
+  };
+
+  int i;
+
+  if (n == 1 && w[0] >= 'a' && w[0] <= 'z')
+    {
+      return w[0];
+    }
+
+  for (i = 0; i < (int)(sizeof(keys) / sizeof(keys[0])); i++)
+    {
+      if ((int)strlen(keys[i].name) == n && strncmp(keys[i].name, w, n) == 0)
+        {
+          return keys[i].code;
+        }
+    }
+
+  syslog(LOG_WARNING, "fpcgame: script: no key %.*s\n", n, w);
+  return -1;
+}
+
+/* The script's words up to this frame */
+
+static void script_frame(void)
+{
+  static uint8_t tap[8];                  /* Pressed for one frame */
+  static int ntap;
+  FAR const char *s = g_fg.script;
+  int i;
+
+  for (i = 0; i < ntap; i++)
+    {
+      key_event(true, tap[i]);
+    }
+
+  ntap = 0;
+  while (s != NULL && *s != '\0')
+    {
+      FAR const char *w;
+      int n;
+      int k;
+
+      while (*s == ' ')
+        {
+          s++;
+        }
+
+      for (w = s; *s != '\0' && *s != ' '; s++);
+      n = (int)(s - w);
+      if (n == 0)
+        {
+          break;
+        }
+
+      if (w[0] >= '0' && w[0] <= '9')
+        {
+          g_fg.script_at = (uint32_t)atoi(w);
+          if (g_fg.script_at > g_fg.frame)
+            {
+              s = w;                      /* A later frame's: wait */
+              break;
+            }
+        }
+      else if (n == 6 && strncmp(w, "freeze", 6) == 0)
+        {
+          g_fg.frozen = true;
+        }
+      else if (n == 4 && strncmp(w, "quit", 4) == 0)
+        {
+          g_fg.quit = true;
+        }
+      else if (w[0] == '+' || w[0] == '-')
+        {
+          if ((k = script_key(w + 1, n - 1)) >= 0)
+            {
+              key_event(w[0] == '-', (uint8_t)k);
+            }
+        }
+      else if ((k = script_key(w, n)) >= 0 && ntap < (int)sizeof(tap))
+        {
+          key_event(false, (uint8_t)k);
+          tap[ntap++] = (uint8_t)k;
+        }
+    }
+
+  g_fg.script = s;
+}
+
 void fg_input_frame(void)
 {
   uint8_t flags;
@@ -175,32 +335,14 @@ void fg_input_frame(void)
   uint8_t ch;
   int i;
 
+  if (!g_fg.frozen)
+    {
+      script_frame();
+    }
+
   while (fpc_gpu_game_key(&flags, &code, &ch) > 0)
     {
-      if ((flags & NX_KEY_RELEASE) == 0)
-        {
-          if (code == NX_KEY_ESCAPE)
-            {
-              g_fg.quit = true;           /* Escape: back to the desktop */
-            }
-
-          for (i = 0; i < g_pad.ndown && g_pad.down[i] != code; i++);
-          if (i == g_pad.ndown && g_pad.ndown < (int)sizeof(g_pad.down))
-            {
-              g_pad.down[g_pad.ndown++] = code;
-            }
-        }
-      else
-        {
-          for (i = 0; i < g_pad.ndown; i++)
-            {
-              if (g_pad.down[i] == code)
-                {
-                  g_pad.down[i] = g_pad.down[--g_pad.ndown];
-                  break;
-                }
-            }
-        }
+      key_event((flags & NX_KEY_RELEASE) != 0, code);
     }
 
   g_pad.held = 0;
@@ -352,7 +494,8 @@ static void present(void)
   fpc_gpu_read(c->x, c->y, 1, 1, &px, 2);       /* Drawn and shown */
   t1 = fg_now_us();
 
-  if (t1 - t0 < 2000 && last != 0 && t1 - last < FG_PERIOD_US)
+  if (t1 - t0 < 2000 && last != 0 && t1 - last < FG_PERIOD_US &&
+      !g_fg.scripted)
     {
       usleep(FG_PERIOD_US - (uint32_t)(t1 - last));   /* No frames (the simulator) */
       t1 = fg_now_us();
@@ -380,6 +523,7 @@ int fg_run(FAR const struct fg_game_s *game)
   uint64_t tsec;
   uint32_t maxus = 0;
   uint32_t worst = 0;
+  FAR const char *script;
   int ret;
 
   if (fpc_gpu_version() < 8)
@@ -389,8 +533,11 @@ int fg_run(FAR const struct fg_game_s *game)
       return -ENOSYS;
     }
 
+  script = g_fg.script;
   memset(&g_fg, 0, sizeof(g_fg));
   memset(&g_pad, 0, sizeof(g_pad));
+  g_fg.script   = script;
+  g_fg.scripted = script != NULL;
   g_fg.game = game;
   g_fg.w = game->width > 0 ? game->width : FG_DEF_W;
   g_fg.h = game->height > 0 ? game->height : FG_DEF_H;
@@ -431,6 +578,16 @@ int fg_run(FAR const struct fg_game_s *game)
       g_fg.sprites = 0;
       g_fg.tiles   = 0;
       fg_input_frame();
+      if (g_fg.frozen)
+        {
+          /* Nothing drawn or flipped: the canvas shown stays as it is
+           * (and can be read from the GPU's memory: grab.py)
+           */
+
+          usleep(FG_PERIOD_US);
+          continue;
+        }
+
       if (game->update != NULL)
         {
           game->update();
@@ -470,6 +627,7 @@ int fg_run(FAR const struct fg_game_s *game)
   ret = OK;
 
 out:
+  g_fg.script = NULL;                     /* (globals outlive a task here) */
   fg_audio_stop();
   fg_gfx_reset();
   fpc_gpu_game_free_all();

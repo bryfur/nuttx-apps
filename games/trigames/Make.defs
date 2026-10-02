@@ -1,0 +1,10 @@
+############################################################################
+# apps/games/trigames/Make.defs
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+############################################################################
+
+ifneq ($(CONFIG_GAMES_TRIGAMES),)
+CONFIGURED_APPS += $(APPDIR)/games/trigames
+endif
