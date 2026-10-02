@@ -523,6 +523,7 @@ int fg_run(FAR const struct fg_game_s *game)
   uint64_t tsec;
   uint32_t maxus = 0;
   uint32_t worst = 0;
+  uint64_t total = 0;                     /* The frames' draw times */
   FAR const char *script;
   int ret;
 
@@ -604,6 +605,7 @@ int fg_run(FAR const struct fg_game_s *game)
       g_fg.st.tiles    = g_fg.tiles;
       maxus = g_fg.st.frame_us > maxus ? g_fg.st.frame_us : maxus;
       worst = g_fg.st.frame_us > worst ? g_fg.st.frame_us : worst;
+      total += g_fg.st.frame_us;
       if (fg_now_us() - tsec >= 1000000)
         {
           g_fg.st.frame_us_max = maxus;
@@ -621,9 +623,11 @@ int fg_run(FAR const struct fg_game_s *game)
       game->quit();
     }
 
-  syslog(LOG_INFO, "fpcgame: %s: %u frames, %u late; the worst frame took "
-         "%u us to draw\n", game->name ? game->name : "game",
-         (unsigned)g_fg.frame, (unsigned)g_fg.st.late, (unsigned)worst);
+  syslog(LOG_INFO, "fpcgame: %s: %u frames, %u late; a frame took %u us "
+         "to draw on average, the worst %u us\n",
+         game->name ? game->name : "game", (unsigned)g_fg.frame,
+         (unsigned)g_fg.st.late,
+         (unsigned)(g_fg.frame ? total / g_fg.frame : 0), (unsigned)worst);
   ret = OK;
 
 out:
