@@ -6,17 +6,23 @@
  * fpcgl: an OpenGL 1.x subset on the FPC's 3D GPU (docs/gpu3d.md): the
  * GL calls a fixed-function renderer uses (immediate mode, the matrix
  * stacks, the depth test, culling, flat and smooth shading, textures
- * repeated or clamped), drawn by the GPU as triangles with a depth buffer
- * and perspective-correct texturing.  The CPU transforms, clips and sets
- * up each triangle (fgl_setup.c); the GPU does every pixel.  fglInit()
+ * repeated or clamped, with alpha, blending, fog, the alpha test,
+ * dithering), drawn by the GPU as convex polygons with a depth buffer and
+ * perspective-correct texturing.  The CPU transforms, clips and sets up
+ * each polygon (fgl_setup.c); the GPU does every pixel.  fglInit()
  * switches the FPGA to the 3D GPU and takes the display, fglShutdown()
- * gives both back.  Nearest-texel sampling, RGB565 colour, 16-bit depth;
- * no blending (GL_ALPHA_TEST is a colour key: fglColorKey()).
+ * gives both back.  Nearest-texel sampling (FGL_TEXTURE_DITHER smooths
+ * it), RGB565 colour (8 bits a channel inside, dithered), a 16-bit
+ * floating-point depth buffer; one texture a polygon (multitexturing is
+ * done in passes, blended); colour and alpha interpolated across the
+ * screen.  GL_ALPHA_TEST on a texture without alpha (RGB, luminance,
+ * GL_COLOR_INDEX) is a colour key: fglColorKey().
  ****************************************************************************/
 
 #ifndef __APPS_GRAPHICS_FPCGL_FPCGL_H
 #define __APPS_GRAPHICS_FPCGL_FPCGL_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 typedef unsigned int   GLenum;
@@ -64,13 +70,44 @@ typedef void           GLvoid;
 
 #define GL_CULL_FACE              0x0B44
 #define GL_DEPTH_TEST             0x0B71
-#define GL_ALPHA_TEST             0x0BC0    /* The colour key (fglColorKey()) */
+#define GL_ALPHA_TEST             0x0BC0    /* (no alpha in the texture: the colour key) */
 #define GL_TEXTURE_2D             0x0DE1
+#define GL_BLEND                  0x0BE2
+#define GL_FOG                    0x0B60
+#define GL_DITHER                 0x0BD0    /* (on at the start, as GL's) */
+#define FGL_TEXTURE_DITHER        0x8FF0    /* fpcgl's: texel coordinates dithered */
 
-/* Depth functions (the GPU has these three) */
+/* Blending factors (GL_DST_ALPHA is 1: the buffer has no alpha) */
+
+#define GL_ZERO                   0
+#define GL_ONE                    1
+#define GL_SRC_COLOR              0x0300
+#define GL_ONE_MINUS_SRC_COLOR    0x0301
+#define GL_SRC_ALPHA              0x0302
+#define GL_ONE_MINUS_SRC_ALPHA    0x0303
+#define GL_DST_ALPHA              0x0304
+#define GL_ONE_MINUS_DST_ALPHA    0x0305
+#define GL_DST_COLOR              0x0306
+#define GL_ONE_MINUS_DST_COLOR    0x0307
+
+/* Fog */
+
+#define GL_FOG_DENSITY            0x0B62
+#define GL_FOG_START              0x0B63
+#define GL_FOG_END                0x0B64
+#define GL_FOG_MODE               0x0B65
+#define GL_FOG_COLOR              0x0B66
+#define GL_EXP                    0x0800
+#define GL_EXP2                   0x0801
+
+/* Depth functions (the GPU has GL_LESS, GL_LEQUAL, GL_ALWAYS), the alpha
+ * test's (GL_GREATER, GL_GEQUAL, GL_ALWAYS)
+ */
 
 #define GL_LESS                   0x0201
 #define GL_LEQUAL                 0x0203
+#define GL_GREATER                0x0204
+#define GL_GEQUAL                 0x0206
 #define GL_ALWAYS                 0x0207
 
 /* glClear() */
@@ -101,7 +138,7 @@ typedef void           GLvoid;
 #define GL_CLAMP_TO_EDGE          0x812F
 #define GL_COLOR_INDEX            0x1900    /* 8-bit, through fglColorTable() */
 #define GL_RGB                    0x1907
-#define GL_RGBA                   0x1908    /* (alpha < 128: the colour key) */
+#define GL_RGBA                   0x1908    /* (ARGB1555 if every alpha is 0 or 255, else ARGB4444) */
 #define GL_LUMINANCE              0x1909
 #define GL_UNSIGNED_BYTE          0x1401
 #define GL_UNSIGNED_SHORT_5_6_5   0x8363
@@ -138,8 +175,8 @@ uint32_t fglTriangles(void);
 
 void fglBackBuffer(int *x, int *y);
 
-/* A colour blended over the whole picture (BLEND: alpha 0-255), e.g. a
- * game's flash or tint, at the point it is called
+/* A colour blended over the whole picture (alpha 0-255), e.g. a game's
+ * flash or tint, at the point it is called
  */
 
 void fglBlendView(uint16_t colour, int alpha);
@@ -157,40 +194,17 @@ void fglReset(void);
 int  fglSpaceAlloc(int w, int h, int16_t *x, int16_t *y);
 void fglSpaceFree(int x, int y, int w, int h);
 
+/* w x h RGB565 pixels (rows stride bytes apart) put at (x, y) of the space,
+ * after what was drawn before it
+ */
+
+void fglPut(int x, int y, int w, int h, const uint16_t *px, size_t stride);
+
 /* A rectangle of the space as the texture (as glBindTexture(), until the
  * next bind): w x h at x, y, repeated (w, h powers of two) or clamped
  */
 
 void fglBindRect(int x, int y, int w, int h, GLboolean repeat);
-
-/* The 3D GPU's surface builder (docs/gpu3d.md "BUILD"): lit surfaces made
- * by the GPU from 8-bit textures and a grid of light values, as Quake's
- * surface cache.  fglImage8(): a w x h 8-bit image (w even) put in the
- * space (two texels a pixel, the lower byte first), 0 or < 0 if there is
- * no room; fglImage8Free() gives it back.  fglBuildTable(): the colours
- * (RGB565) and the 64 light levels' factors (1.7: 128 is 1; indices 224
- * and up stay as they are).  fglBuildSurface(): w x h pixels at (dx, dy)
- * of the space (w up to 1024) built from the 8-bit image (texw x texh
- * texels, repeated, starting at its texel soff, toff) lit by light[]: rows
- * of lw values (2-32), one every 2^bsh pixels (bsh 0-4), ((h - 1) >> bsh)
- * + 2 rows (a value's level is value >> 8)
- */
-
-struct fgl_image8_s
-{
-  int16_t x;
-  int16_t y;
-  int16_t w;                              /* Texels */
-  int16_t h;
-};
-
-int  fglImage8(struct fgl_image8_s *img, int w, int h, const uint8_t *px);
-void fglImage8Free(struct fgl_image8_s *img);
-void fglBuildTable(const uint16_t pal[256], const uint8_t factor[64]);
-void fglBuildSurface(int dx, int dy, int w, int h,
-                     const struct fgl_image8_s *img, int texw, int texh,
-                     int soff, int toff, const uint16_t *light, int lw,
-                     int bsh);
 
 /****************************************************************************
  * The GL subset
@@ -213,6 +227,11 @@ void glDepthMask(GLboolean flag);
 void glCullFace(GLenum mode);
 void glFrontFace(GLenum mode);
 void glShadeModel(GLenum mode);
+void glBlendFunc(GLenum sfactor, GLenum dfactor);
+void glAlphaFunc(GLenum func, GLclampf ref);
+void glFogf(GLenum pname, GLfloat param);
+void glFogi(GLenum pname, GLint param);
+void glFogfv(GLenum pname, const GLfloat *params);
 
 void glMatrixMode(GLenum mode);
 void glLoadIdentity(void);

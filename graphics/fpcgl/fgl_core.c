@@ -74,6 +74,24 @@ static uint16_t rgb565(float r, float g, float b)
   return (uint16_t)(ir << 11 | ig << 5 | ib);
 }
 
+/* The depth buffer's value for a reversed depth zr (1 - GL's depth, 0..1):
+ * TRI's z = zr 65535 << 16, stored as ZFLOAT's 16-bit floating point
+ */
+
+static uint16_t zfloat(float zr)
+{
+  uint32_t z = (uint32_t)(zr * 65535.0f) << 16;
+  uint32_t l;
+
+  if (z < (1u << 17))
+    {
+      return (uint16_t)(z >> 5);
+    }
+
+  l = (uint32_t)__builtin_clz(z);
+  return (uint16_t)((15 - l) << 12 | (((z << (l + 1)) >> 20) & 4095));
+}
+
 static void mat_mul(float *out, const float *a, const float *b)
 {
   float t[16];
@@ -166,7 +184,15 @@ int fglInit(int w, int h, int mode)
   g_fgl.cull_face = GL_BACK;
   g_fgl.front_face = GL_CCW;
   g_fgl.shade_model = GL_SMOOTH;
-  g_fgl.clear_depth = 0xffff;
+  g_fgl.clear_depth = zfloat(0.0f);       /* (GL's 1.0) */
+  g_fgl.dither = true;
+  g_fgl.sfactor = GL_ONE;
+  g_fgl.dfactor = GL_ZERO;
+  g_fgl.alpha_func = GL_ALWAYS;
+  g_fgl.fog_mode = GL_EXP;
+  g_fgl.fog_density = 1.0f;
+  g_fgl.fog_end = 1.0f;
+  g_fgl.ca = 1.0f;
   g_fgl.key = FGL_KEY;
   g_fgl.matmode = GL_MODELVIEW;
   mat_ident(g_fgl.mv[0]);
@@ -293,7 +319,7 @@ void glClearColor(GLclampf r, GLclampf g, GLclampf b, GLclampf a)
 void glClearDepth(GLclampf d)
 {
   d = d < 0.0f ? 0.0f : d > 1.0f ? 1.0f : d;
-  g_fgl.clear_depth = (uint16_t)(d * 65535.0f + 0.5f);
+  g_fgl.clear_depth = zfloat(1.0f - d);
 }
 
 void glClear(GLbitfield mask)
@@ -348,6 +374,10 @@ static bool *cap_flag(GLenum cap)
       case GL_CULL_FACE:  return &g_fgl.cull;
       case GL_TEXTURE_2D: return &g_fgl.tex2d;
       case GL_ALPHA_TEST: return &g_fgl.alpha_test;
+      case GL_BLEND:      return &g_fgl.blend;
+      case GL_FOG:        return &g_fgl.fog;
+      case GL_DITHER:     return &g_fgl.dither;
+      case FGL_TEXTURE_DITHER: return &g_fgl.tdither;
       default:            return NULL;
     }
 }
@@ -407,6 +437,131 @@ void glFrontFace(GLenum mode)
 void glShadeModel(GLenum mode)
 {
   g_fgl.shade_model = mode;
+}
+
+static int blend_code(GLenum f)
+{
+  switch (f)
+    {
+      case GL_ZERO:                return 0;
+      case GL_ONE:                 return 1;
+      case GL_SRC_COLOR:           return 2;
+      case GL_ONE_MINUS_SRC_COLOR: return 3;
+      case GL_DST_COLOR:           return 4;
+      case GL_ONE_MINUS_DST_COLOR: return 5;
+      case GL_SRC_ALPHA:           return 6;
+      case GL_ONE_MINUS_SRC_ALPHA: return 7;
+      case GL_DST_ALPHA:           return 1;    /* (the buffer's alpha is 1) */
+      case GL_ONE_MINUS_DST_ALPHA: return 0;
+      default:                     return -1;
+    }
+}
+
+void glBlendFunc(GLenum sfactor, GLenum dfactor)
+{
+  if (blend_code(sfactor) < 0 || blend_code(dfactor) < 0)
+    {
+      fgl_error(GL_INVALID_ENUM);
+      return;
+    }
+
+  g_fgl.sfactor = sfactor;
+  g_fgl.dfactor = dfactor;
+}
+
+void glAlphaFunc(GLenum func, GLclampf ref)
+{
+  if (func != GL_GREATER && func != GL_GEQUAL && func != GL_ALWAYS)
+    {
+      fgl_error(GL_INVALID_ENUM);
+      return;
+    }
+
+  g_fgl.alpha_func = func;
+  g_fgl.alpha_ref = ref < 0.0f ? 0.0f : ref > 1.0f ? 1.0f : ref;
+}
+
+void glFogf(GLenum pname, GLfloat param)
+{
+  switch (pname)
+    {
+      case GL_FOG_MODE:
+        glFogi(pname, (GLint)param);
+        break;
+
+      case GL_FOG_DENSITY:
+        g_fgl.fog_density = param;
+        break;
+
+      case GL_FOG_START:
+        g_fgl.fog_start = param;
+        break;
+
+      case GL_FOG_END:
+        g_fgl.fog_end = param;
+        break;
+
+      default:
+        fgl_error(GL_INVALID_ENUM);
+        break;
+    }
+}
+
+void glFogi(GLenum pname, GLint param)
+{
+  if (pname != GL_FOG_MODE)
+    {
+      glFogf(pname, (GLfloat)param);
+      return;
+    }
+
+  if (param != GL_LINEAR && param != GL_EXP && param != GL_EXP2)
+    {
+      fgl_error(GL_INVALID_ENUM);
+      return;
+    }
+
+  g_fgl.fog_mode = (GLenum)param;
+}
+
+void glFogfv(GLenum pname, const GLfloat *params)
+{
+  if (pname == GL_FOG_COLOR)
+    {
+      g_fgl.fog_colour = rgb565(params[0], params[1], params[2]);
+    }
+  else
+    {
+      glFogf(pname, params[0]);
+    }
+}
+
+/* A vertex's fog amount (0 none .. 1) at eye distance d (GL's fog factor
+ * is 1 - it)
+ */
+
+static float fog_amount(float d)
+{
+  float f;
+
+  switch (g_fgl.fog_mode)
+    {
+      case GL_LINEAR:
+        f = g_fgl.fog_end != g_fgl.fog_start ?
+            (g_fgl.fog_end - d) / (g_fgl.fog_end - g_fgl.fog_start) : 1.0f;
+        break;
+
+      case GL_EXP:
+        f = expf(-g_fgl.fog_density * d);
+        break;
+
+      default:
+        f = expf(-(g_fgl.fog_density * d) * (g_fgl.fog_density * d));
+        break;
+    }
+
+  f = f < 0.0f ? 0.0f : f > 1.0f ? 1.0f : f;
+  return 1.0f - f;
 }
 
 /****************************************************************************
@@ -570,7 +725,7 @@ void glOrtho(GLdouble l, GLdouble r, GLdouble b, GLdouble t,
  * what the GPU has.  Returns the TRI flags it goes with.
  */
 
-static int state_for(bool shade, bool mono)
+static int state_for(bool shade, bool mono, bool alpha)
 {
   struct fgl_tex_s *t = g_fgl.bound < FGL_TEXTURES ? &g_fgl.tex[g_fgl.bound] : NULL;
   bool tex = g_fgl.tex2d && t != NULL && t->alloc;
@@ -578,14 +733,34 @@ static int state_for(bool shade, bool mono)
   bool zwrite = g_fgl.depth_test && g_fgl.depth_mask;
   bool clampm = tex && (t->wrap_s != GL_REPEAT || t->wrap_t != GL_REPEAT ||
                         (t->w & (t->w - 1)) || (t->h & (t->h - 1)));
+  bool fmt_alpha = tex && t->fmt != 0;
+  bool key = tex && !fmt_alpha && g_fgl.alpha_test;
+  bool atest = g_fgl.alpha_test && g_fgl.alpha_func != GL_ALWAYS &&
+               (fmt_alpha || alpha);
+  int aref = 0;
   uint32_t mode;
-  uint32_t st[7];
+  uint32_t st[8];
   int fl = 0;
 
+  if (atest)
+    {
+      /* alpha > ref: at least floor(ref 255) + 1; >= ref: ceil(ref 255) */
+
+      float r = g_fgl.alpha_ref * 255.0f;
+
+      aref = g_fgl.alpha_func == GL_GREATER ? (int)r + 1 : (int)ceilf(r);
+      aref = aref > 255 ? 255 : aref;
+    }
+
   shade |= !tex;                          /* (untextured: white times the colour) */
+
+  /* The depth reversed and floating point (ZREV, ZFLOAT): GL's < is > */
+
   mode = (uint32_t)(ztest | (g_fgl.depth_func == GL_LEQUAL) << 1 | zwrite << 2 |
-                    tex << 3 | shade << 4 | (tex && g_fgl.alpha_test) << 5 |
-                    clampm << 6);
+                    tex << 3 | shade << 4 | key << 5 | clampm << 6 |
+                    g_fgl.blend << 7 | g_fgl.fog << 8 | g_fgl.dither << 9 |
+                    (tex && g_fgl.tdither) << 10 | atest << 11 | 1 << 12 |
+                    1 << 13 | (tex ? t->fmt : 0) << 14);
   st[0] = 10 | mode << 8;
   st[1] = (uint32_t)(g_fgl.bx[g_fgl.back] + g_fgl.ox) |
           (uint32_t)(g_fgl.by[g_fgl.back] + g_fgl.oy) << 16;
@@ -594,9 +769,12 @@ static int state_for(bool shade, bool mono)
   st[4] = tex ? (uint32_t)t->w | (uint32_t)t->h << 16 : 1 | 1 << 16;
   st[5] = g_fgl.key;
   st[6] = (uint32_t)g_fgl.w | (uint32_t)g_fgl.h << 16;
+  st[7] = (uint32_t)blend_code(g_fgl.sfactor) |
+          (uint32_t)blend_code(g_fgl.dfactor) << 4 | (uint32_t)aref << 8 |
+          (uint32_t)g_fgl.fog_colour << 16;
   if (!g_fgl.st_ok || memcmp(st, g_fgl.st, sizeof(st)) != 0)
     {
-      job(st, 7);
+      job(st, 8);
       memcpy(g_fgl.st, st, sizeof(st));
       g_fgl.st_ok = true;
     }
@@ -614,6 +792,16 @@ static int state_for(bool shade, bool mono)
   if (shade)
     {
       fl |= mono ? FGL_TRI_MONO : FGL_TRI_RGB;
+    }
+
+  if (alpha)
+    {
+      fl |= FGL_TRI_A;
+    }
+
+  if (g_fgl.fog)
+    {
+      fl |= FGL_TRI_F;
     }
 
   return fl;
@@ -662,7 +850,7 @@ static int clip_plane(const struct fgl_v_s *in, int n, struct fgl_v_s *out,
           float t = dp / (dp - dq);
           int f;
 
-          for (f = 0; f < 9; f++)
+          for (f = 0; f < FGL_V_FLOATS; f++)
             {
               o[f] = a[f] + (b[f] - a[f]) * t;
             }
@@ -689,9 +877,11 @@ static void polygon(const struct fgl_v_s *v, int n, int provoking)
   float pr = v[provoking].r;
   float pg = v[provoking].g;
   float pb = v[provoking].b;
+  float pa = v[provoking].a;
   float area = 0.0f;
   bool shade = false;
   bool mono = true;
+  bool alpha = false;
   bool wrap;
   int fl;
   int k;
@@ -728,7 +918,7 @@ static void polygon(const struct fgl_v_s *v, int n, int provoking)
       sv[i].y = (float)g_fgl.h - ((float)g_fgl.vy +
                                   (a[i].y * iw * 0.5f + 0.5f) * (float)g_fgl.vh);
       d = d < 0.0f ? 0.0f : d > 1.0f ? 1.0f : d;
-      sv[i].z = d * 65535.0f;
+      sv[i].z = (1.0f - d) * 65535.0f;    /* (reversed: ZREV, ZFLOAT) */
       sv[i].q = iw;
       sv[i].u = a[i].s * tw;
       sv[i].v = a[i].t * th;
@@ -737,11 +927,15 @@ static void polygon(const struct fgl_v_s *v, int n, int provoking)
           a[i].r = pr;
           a[i].g = pg;
           a[i].b = pb;
+          a[i].a = pa;
         }
 
       sv[i].r = a[i].r;
       sv[i].g = a[i].g;
       sv[i].b = a[i].b;
+      sv[i].a = a[i].a;
+      sv[i].f = a[i].f;
+      alpha |= a[i].a != 1.0f;
       shade |= a[i].r != 1.0f || a[i].g != 1.0f || a[i].b != 1.0f;
       mono &= a[i].r == a[i].g && a[i].g == a[i].b;
     }
@@ -770,7 +964,7 @@ static void polygon(const struct fgl_v_s *v, int n, int provoking)
         }
     }
 
-  fl = state_for(shade, mono);
+  fl = state_for(shade, mono, alpha);
   wrap = (fl & FGL_TRI_UV) && !(g_fgl.st[0] & (64 << 8));
 
   /* One TRI for each fan of up to FGL_POLY_MAX vertices from the first
@@ -867,6 +1061,16 @@ void glVertex3f(GLfloat x, GLfloat y, GLfloat z)
   v.r = g_fgl.cr;
   v.g = g_fgl.cg;
   v.b = g_fgl.cb;
+  v.a = g_fgl.ca;
+  v.f = 0.0f;
+  if (g_fgl.fog)
+    {
+      /* The eye's distance along its view: -z in eye space */
+
+      const float *e = g_fgl.mv[g_fgl.mvsp];
+
+      v.f = fog_amount(-(e[2] * x + e[6] * y + e[10] * z + e[14]));
+    }
 
   switch (g_fgl.prim)
     {
@@ -989,12 +1193,13 @@ void glColor3f(GLfloat r, GLfloat g, GLfloat b)
   g_fgl.cr = r < 0.0f ? 0.0f : r > 2.0f ? 2.0f : r;   /* (up to 2: overbright) */
   g_fgl.cg = g < 0.0f ? 0.0f : g > 2.0f ? 2.0f : g;
   g_fgl.cb = b < 0.0f ? 0.0f : b > 2.0f ? 2.0f : b;
+  g_fgl.ca = 1.0f;
 }
 
 void glColor4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a)
 {
-  (void)a;
   glColor3f(r, g, b);
+  g_fgl.ca = a < 0.0f ? 0.0f : a > 1.0f ? 1.0f : a;
 }
 
 void glColor3ub(GLubyte r, GLubyte g, GLubyte b)
@@ -1004,6 +1209,5 @@ void glColor3ub(GLubyte r, GLubyte g, GLubyte b)
 
 void glColor4ub(GLubyte r, GLubyte g, GLubyte b, GLubyte a)
 {
-  (void)a;
-  glColor3ub(r, g, b);
+  glColor4f(r / 255.0f, g / 255.0f, b / 255.0f, a / 255.0f);
 }

@@ -9,13 +9,16 @@
  *   - The world: the BSP walked front to back through the leaves the PVS
  *     marks (R_MarkLeaves), nodes culled by the view frustum, surfaces by
  *     the side of their plane; each a polygon with the depth test.
- *   - Its surfaces lit as the software renderer lights them, by the GPU:
- *     the mip level as D_MipLevelForScale picks it, the light grid as
- *     R_BuildLightMap makes it (the styles, the dynamic lights), the
- *     surface built from the texture's mip (uploaded 8-bit at the map's
- *     load) by BUILD into an atlas in the GPU's memory, again only when
- *     its lighting or texture frame changes (as D_CacheSurface decides);
- *     a full atlas starts again empty.
+ *   - Its surfaces drawn as GLQuake draws them, in passes: the texture's
+ *     mip (D_MipLevelForScale's; every mip uploaded at the map's load,
+ *     through the palette, resampled to powers of two to repeat), then
+ *     the surface's lightmap blended on (twice the product: Quake's
+ *     overbright), then its fullbright texels (224 and up) keyed over.
+ *     The lightmap: the light grid as R_BuildLightMap makes it (the
+ *     styles, the dynamic lights) interpolated as the software renderer
+ *     does, 4 texels to a light block (2, 1 for the far mips), the
+ *     colormap's brightness per level, dithered; kept in an atlas and
+ *     made again when its lighting changes (as D_CacheSurface decides).
  *   - Water and the sky: cut into small polygons (as GLQuake does), their
  *     textures repeated, warped (the vertices' texture coordinates as the
  *     software renderer's turbulence) or scrolled with the view's
@@ -43,25 +46,26 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-#define ATLAS_W      2048                 /* The surface atlas (the most) */
-#define ATLAS_H      1024                 /* (the rest: models' skins, sprites) */
+#define ATLAS_W      1024                 /* The lightmap atlas (the most) */
+#define ATLAS_H      1024
 #define SHELVES      256
 #define MAXTEX       512                  /* A map's textures */
 #define MAXSKINS     96                   /* Models' skins kept as textures */
 #define MAXSPRITES   64                   /* Sprite frames kept as textures */
 #define MAXPARTS     2048                 /* Particles in a frame */
-#define CACHES       4096                 /* Surface blocks in the atlas */
+#define CACHES       4096                 /* Lightmaps in the atlas */
 
 /****************************************************************************
  * Private Types
  ****************************************************************************/
 
-struct gcache_s                           /* A surface's block in the atlas */
+struct gcache_s                           /* A surface's lightmap in the atlas */
 {
   msurface_t *surf;
-  texture_t *tex;
   int16_t x;
   int16_t y;
+  int16_t w;
+  int16_t h;
   int lightadj[MAXLIGHTMAPS];
   qboolean dlight;
   uint8_t mip;
@@ -97,11 +101,14 @@ static struct
   int ncache;
   struct gcache_s cache[CACHES];
 
-  /* The map's textures: 8-bit mips (BUILD), water and sky as textures */
+  /* The map's textures: each mip, its fullbright texels (0: none), water
+   * and the sky
+   */
 
   model_t *world;
   int ntex;
-  struct fgl_image8_s mip[MAXTEX][MIPLEVELS];
+  GLuint mtex[MAXTEX][MIPLEVELS];
+  GLuint fbtex[MAXTEX][MIPLEVELS];
   GLuint gltex[MAXTEX];
   GLuint skyfront;                        /* The sky's front layer (keyed) */
 
@@ -117,7 +124,9 @@ static struct
   int nskin;
   int nsprite;
 
-  /* BUILD's table: sent when the palette changes */
+  /* The palette (the textures', 255 the key), the colormap's brightness
+   * per light level (the lightmaps' and the models' shades)
+   */
 
   uint16_t pal[256];
   uint8_t factor[64];
@@ -135,7 +144,7 @@ static struct
   /* The view frustum's planes (culling) */
 
   mplane_t frustum[4];
-  uint32_t surfs, builds, flushes, frames;
+  uint32_t surfs, lightmaps, flushes, frames;
 } g_gl;
 
 /* (fpc_quake.c's) */
@@ -264,7 +273,6 @@ static void table_check(void)
       uint16_t tpal[256];
 
       memcpy(g_gl.pal, lut, sizeof(g_gl.pal));
-      fglBuildTable(g_gl.pal, g_gl.factor);
       memcpy(tpal, g_gl.pal, sizeof(tpal));
       tpal[255] = FGL_KEY;                /* (the textures': 255 the key) */
       fglColorTable(tpal);
@@ -287,7 +295,8 @@ static void free_map(void)
   /* Everything fpcgl holds is the game's: given back at once */
 
   fglReset();
-  memset(g_gl.mip, 0, sizeof(g_gl.mip));
+  memset(g_gl.mtex, 0, sizeof(g_gl.mtex));
+  memset(g_gl.fbtex, 0, sizeof(g_gl.fbtex));
   memset(g_gl.gltex, 0, sizeof(g_gl.gltex));
   g_gl.skyfront = 0;
   g_gl.ntex = 0;
@@ -297,8 +306,67 @@ static void free_map(void)
   g_gl.palok = false;                     /* (sent again with the textures) */
 }
 
-/* R_NewMap: the map's textures into the GPU (8-bit mips for the surfaces,
- * water and the sky as textures), then the atlas in what is left
+/* A w x h 8-bit image as a texture through the palette, resampled to
+ * powers of two (repeating; the nearest texel), fullbright: only its
+ * texels 224 and up (the others 255: the key), 0 if it has none
+ */
+
+static GLuint mip_texture(const uint8_t *src, int w, int h, qboolean fullbright)
+{
+  static uint8_t img[256 * 256];
+  int w2 = 1;
+  int h2 = 1;
+  qboolean any = false;
+  GLuint t;
+  int x;
+  int y;
+
+  while (w2 < w)
+    {
+      w2 <<= 1;
+    }
+
+  while (h2 < h)
+    {
+      h2 <<= 1;
+    }
+
+  if (w2 * h2 > (int)sizeof(img))
+    {
+      return 0;
+    }
+
+  for (y = 0; y < h2; y++)
+    {
+      for (x = 0; x < w2; x++)
+        {
+          uint8_t p = src[(y * h / h2) * w + x * w / w2];
+
+          if (fullbright)
+            {
+              any |= p >= 224 && p != 255;
+              p = p >= 224 ? p : 255;
+            }
+
+          img[y * w2 + x] = p;
+        }
+    }
+
+  if (fullbright && !any)
+    {
+      return 0;
+    }
+
+  glGenTextures(1, &t);
+  glBindTexture(GL_TEXTURE_2D, t);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_COLOR_INDEX, w2, h2, 0, GL_COLOR_INDEX,
+               GL_UNSIGNED_BYTE, img);
+  return t;
+}
+
+/* R_NewMap: the map's textures into the GPU (every mip of the surfaces'
+ * with their fullbright texels, water and the sky), then the lightmaps'
+ * atlas in what is left
  */
 
 void fpcq_gl_newmap(void)
@@ -383,9 +451,16 @@ void fpcq_gl_newmap(void)
               int w = t->width >> k;
               int h = t->height >> k;
 
-              if (w >= 2 && h >= 1 &&
-                  fglImage8(&g_gl.mip[i][k], w, h,
-                            (const uint8_t *)t + t->offsets[k]) < 0)
+              if (w < 1 || h < 1)
+                {
+                  continue;
+                }
+
+              g_gl.mtex[i][k] = mip_texture((const uint8_t *)t + t->offsets[k],
+                                            w, h, false);
+              g_gl.fbtex[i][k] = mip_texture((const uint8_t *)t +
+                                             t->offsets[k], w, h, true);
+              if (g_gl.mtex[i][k] == 0 || glGetError() != GL_NO_ERROR)
                 {
                   syslog(LOG_WARNING, "quake: no room for %s's mips\n",
                          t->name);
@@ -394,7 +469,7 @@ void fpcq_gl_newmap(void)
         }
     }
 
-  /* The atlas: as tall as the space has room for */
+  /* The lightmaps' atlas: as tall as the space has room for */
 
   for (k = ATLAS_H; k >= 256; k -= 64)
     {
@@ -408,8 +483,8 @@ void fpcq_gl_newmap(void)
 
   g_gl.nshelf = 0;
   g_gl.top = 0;
-  syslog(LOG_INFO, "quake: -gl: %d textures, the atlas %d x %d\n", g_gl.ntex,
-         g_gl.aw, g_gl.ah);
+  syslog(LOG_INFO, "quake: -gl: %d textures, the lightmaps' atlas %d x %d\n",
+         g_gl.ntex, g_gl.aw, g_gl.ah);
 }
 
 /****************************************************************************
@@ -435,17 +510,30 @@ static int texture_index(texture_t *t)
  * there or its lighting or texture frame changed (D_CacheSurface's test)
  */
 
-static struct gcache_s *surface_block(msurface_t *s, int mip, texture_t *tex)
+/* A surface's lightmap at mip (4 texels a light block, 2 at mip 1, 1
+ * beyond), made again when its lighting changed (D_CacheSurface's test):
+ * the light grid as R_BuildLightMap makes it (8.8, its level the
+ * colormap's row), interpolated across each block as the software
+ * renderer does, the level's brightness (1.7: 128 is 1) as grey, dithered
+ * to RGB565
+ */
+
+static const uint8_t g_bayer[4][4] =
 {
-  static uint16_t light[18 * 18];
+  { 0, 8, 2, 10 }, { 12, 4, 14, 6 }, { 3, 11, 1, 9 }, { 15, 7, 13, 5 }
+};
+
+static struct gcache_s *lightmap_block(msurface_t *s, int mip)
+{
+  static uint16_t lm[68 * 68];
   struct gcache_s *c = (struct gcache_s *)s->cachespots[mip];
-  int w = s->extents[0] >> mip;
-  int h = s->extents[1] >> mip;
-  int ti = texture_index(tex);
+  int sc = mip == 0 ? 4 : mip == 1 ? 2 : 1;
   int lw = (s->extents[0] >> 4) + 1;
-  int tmax = (s->extents[1] >> 4) + 1;
-  int texw;
-  int texh;
+  int lh = (s->extents[1] >> 4) + 1;
+  int w = (lw - 1) * sc;
+  int h = (lh - 1) * sc;
+  int x;
+  int y;
   int i;
 
   r_drawsurf.lightadj[0] = d_lightstylevalue[s->styles[0]];
@@ -453,7 +541,7 @@ static struct gcache_s *surface_block(msurface_t *s, int mip, texture_t *tex)
   r_drawsurf.lightadj[2] = d_lightstylevalue[s->styles[2]];
   r_drawsurf.lightadj[3] = d_lightstylevalue[s->styles[3]];
   if (c != NULL && !c->dlight && s->dlightframe != r_framecount &&
-      c->tex == tex && c->lightadj[0] == r_drawsurf.lightadj[0] &&
+      c->lightadj[0] == r_drawsurf.lightadj[0] &&
       c->lightadj[1] == r_drawsurf.lightadj[1] &&
       c->lightadj[2] == r_drawsurf.lightadj[2] &&
       c->lightadj[3] == r_drawsurf.lightadj[3])
@@ -461,7 +549,7 @@ static struct gcache_s *surface_block(msurface_t *s, int mip, texture_t *tex)
       return c;
     }
 
-  if (ti < 0 || g_gl.mip[ti][mip].w == 0 || w < 1 || h < 1)
+  if (w < 1 || h < 1 || w > 68 || h > 68)
     {
       return NULL;
     }
@@ -487,34 +575,53 @@ static struct gcache_s *surface_block(msurface_t *s, int mip, texture_t *tex)
       g_gl.ncache++;
       c->surf = s;
       c->mip = (uint8_t)mip;
+      c->w = (int16_t)w;
+      c->h = (int16_t)h;
       s->cachespots[mip] = (struct surfcache_s *)c;
     }
 
-  c->tex = tex;
   c->dlight = s->dlightframe == r_framecount;
   for (i = 0; i < MAXLIGHTMAPS; i++)
     {
       c->lightadj[i] = r_drawsurf.lightadj[i];
     }
 
-  /* The light grid as the software renderer makes it (8.8, inverted, the
-   * colormap's rows), then the surface built from the texture's mip
-   */
-
   r_drawsurf.surf = s;
   R_BuildLightMap();
-  for (i = 0; i < lw * tmax; i++)
+  for (y = 0; y < h; y++)
     {
-      light[i] = (uint16_t)blocklights[i];
+      /* Texel (x, y) at (x + 0.5, y + 0.5) / sc blocks */
+
+      int fy = (2 * y + 1) * 256 / (2 * sc);
+      int by = fy >> 8;
+      int ty = fy & 255;
+
+      for (x = 0; x < w; x++)
+        {
+          int fx = (2 * x + 1) * 256 / (2 * sc);
+          int bx = fx >> 8;
+          int tx = fx & 255;
+          const unsigned *b = &blocklights[by * lw + bx];
+          int top = (int)b[0] + (((int)b[1] - (int)b[0]) * tx >> 8);
+          int bot = (int)b[lw] + (((int)b[lw + 1] - (int)b[lw]) * tx >> 8);
+          int light = top + ((bot - top) * ty >> 8);
+          int level = light >> 8;
+          int f;
+          int r5;
+          int g6;
+
+          level = level < 0 ? 0 : level > 63 ? 63 : level;
+          f = g_gl.factor[level];
+          r5 = (f + (g_bayer[y & 3][x & 3] >> 1)) >> 3;
+          g6 = (f + (g_bayer[y & 3][x & 3] >> 2)) >> 2;
+          r5 = r5 > 31 ? 31 : r5;
+          g6 = g6 > 63 ? 63 : g6;
+          lm[y * w + x] = (uint16_t)(r5 << 11 | g6 << 5 | r5);
+        }
     }
 
-  texw = tex->width >> mip;
-  texh = tex->height >> mip;
-  fglBuildSurface(c->x, c->y, w, h, &g_gl.mip[ti][mip], texw, texh,
-                  ((s->texturemins[0] >> mip) + (texw << 16)) % texw,
-                  ((s->texturemins[1] >> mip) + (texh << 16)) % texh,
-                  light, lw, 4 - mip);
-  g_gl.builds++;
+  fglPut(c->x, c->y, w, h, lm, (size_t)w * 2);
+  g_gl.lightmaps++;
   return c;
 }
 
@@ -779,32 +886,84 @@ static void draw_surface(model_t *m, msurface_t *s)
 
   {
     int mip = surface_mip(s, (const vec3_t *)v, n);
-    struct gcache_s *c = surface_block(s, mip, tex);
-    float iw = 1.0f / (float)s->extents[0];
-    float ih = 1.0f / (float)s->extents[1];
+    int k = texture_index(tex);
+    struct gcache_s *c;
+    float iw = 1.0f / (float)tex->width;
+    float ih = 1.0f / (float)tex->height;
+    float lw = 1.0f / (float)s->extents[0];
+    float lh = 1.0f / (float)s->extents[1];
+    static float st[64][4];
 
-    if (c == NULL)
+    if (k < 0 || g_gl.mtex[k][mip] == 0)
       {
         return;
       }
 
+    c = lightmap_block(s, mip);
+    for (i = 0; i < n; i++)
+      {
+        float ss = DotProduct(v[i], ti->vecs[0]) + ti->vecs[0][3];
+        float tt = DotProduct(v[i], ti->vecs[1]) + ti->vecs[1][3];
+
+        st[i][0] = ss * iw;
+        st[i][1] = tt * ih;
+        st[i][2] = (ss - s->texturemins[0]) * lw;
+        st[i][3] = (tt - s->texturemins[1]) * lh;
+      }
+
+    /* The texture */
+
     glEnable(GL_TEXTURE_2D);
-    fglBindRect(c->x, c->y, s->extents[0] >> mip, s->extents[1] >> mip,
-                GL_FALSE);
     glColor3f(1.0f, 1.0f, 1.0f);
+    glBindTexture(GL_TEXTURE_2D, g_gl.mtex[k][mip]);
     glBegin(GL_POLYGON);
     for (i = 0; i < n; i++)
       {
-        float ss = DotProduct(v[i], ti->vecs[0]) + ti->vecs[0][3] -
-                   s->texturemins[0];
-        float tt = DotProduct(v[i], ti->vecs[1]) + ti->vecs[1][3] -
-                   s->texturemins[1];
-
-        glTexCoord2f(ss * iw, tt * ih);
+        glTexCoord2f(st[i][0], st[i][1]);
         glVertex3fv(v[i]);
       }
 
     glEnd();
+
+    /* Its lightmap blended on (2 x the product), on the same depth */
+
+    glDepthFunc(GL_LEQUAL);
+    glDepthMask(GL_FALSE);
+    if (c != NULL)
+      {
+        fglBindRect(c->x, c->y, c->w, c->h, GL_FALSE);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_DST_COLOR, GL_SRC_COLOR);
+        glBegin(GL_POLYGON);
+        for (i = 0; i < n; i++)
+          {
+            glTexCoord2f(st[i][2], st[i][3]);
+            glVertex3fv(v[i]);
+          }
+
+        glEnd();
+        glDisable(GL_BLEND);
+      }
+
+    /* The fullbright texels over it, as they are */
+
+    if (g_gl.fbtex[k][mip] != 0)
+      {
+        glBindTexture(GL_TEXTURE_2D, g_gl.fbtex[k][mip]);
+        glEnable(GL_ALPHA_TEST);
+        glBegin(GL_POLYGON);
+        for (i = 0; i < n; i++)
+          {
+            glTexCoord2f(st[i][0], st[i][1]);
+            glVertex3fv(v[i]);
+          }
+
+        glEnd();
+        glDisable(GL_ALPHA_TEST);
+      }
+
+    glDepthMask(GL_TRUE);
+    glDepthFunc(GL_LESS);
   }
 }
 
@@ -1447,6 +1606,7 @@ void fpcq_gl_view(void)
 void fpcq_gl_report(void)
 {
   syslog(LOG_INFO, "quake: -gl: %" PRIu32 " frames, %" PRIu32 " surfaces drawn, "
-         "%" PRIu32 " built, %" PRIu32 " atlas flushes, %" PRIu32 " triangles\n",
-         g_gl.frames, g_gl.surfs, g_gl.builds, g_gl.flushes, fglTriangles());
+         "%" PRIu32 " lightmaps made, %" PRIu32 " atlas flushes, %" PRIu32
+         " triangles\n", g_gl.frames, g_gl.surfs, g_gl.lightmaps,
+         g_gl.flushes, fglTriangles());
 }

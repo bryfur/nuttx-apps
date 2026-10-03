@@ -6,10 +6,10 @@
  * fpcgl's textures and its space: while the 3D GPU runs, fpcgl has the
  * whole 2048 x 2048 space (the desktop's is lost anyway), handed out in
  * shelves (rows of rectangles of about one height), freed rectangles kept
- * for reuse at their size or smaller.  A texture is an RGB565 image there,
- * sent with PUT (RGB, RGBA: alpha below 128 becomes the colour key,
- * luminance, RGB565) or PUT8 through fglColorTable()'s palette
- * (GL_COLOR_INDEX).
+ * for reuse at their size or smaller.  A texture is a 16-bit image there,
+ * sent with PUT: RGB565 (RGB, luminance, RGB565), ARGB1555 or ARGB4444
+ * (RGBA: 1555 if every alpha is 0 or 255), or with PUT8 through
+ * fglColorTable()'s palette (GL_COLOR_INDEX, RGB565).
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -258,10 +258,29 @@ void glTexParameteri(GLenum target, GLenum pname, GLint param)
     }
 }
 
-/* One row of w texels of the format into RGB565 */
+/* One row of w texels of the format into the texture's (fmt: 0 RGB565, 1
+ * ARGB4444, 2 ARGB1555)
+ */
 
-static void row565(uint16_t *o, const uint8_t *p, int w, GLenum format,
-                   GLenum type)
+static uint16_t texel(int fmt, int r, int g, int b, int a)
+{
+  switch (fmt)
+    {
+      case 1:
+        return (uint16_t)((a >> 4) << 12 | (r >> 4) << 8 | (g >> 4) << 4 |
+                          b >> 4);
+
+      case 2:
+        return (uint16_t)((a >= 128) << 15 | (r >> 3) << 10 | (g >> 3) << 5 |
+                          b >> 3);
+
+      default:
+        return (uint16_t)((r >> 3) << 11 | (g >> 2) << 5 | b >> 3);
+    }
+}
+
+static void row_conv(uint16_t *o, const uint8_t *p, int w, GLenum format,
+                     GLenum type, int fmt)
 {
   int i;
 
@@ -269,22 +288,24 @@ static void row565(uint16_t *o, const uint8_t *p, int w, GLenum format,
     {
       if (type == GL_UNSIGNED_SHORT_5_6_5)
         {
-          o[i] = ((const uint16_t *)p)[i];
+          uint16_t c = ((const uint16_t *)p)[i];
+
+          o[i] = fmt == 0 ? c :
+                 texel(fmt, (c >> 11) << 3, ((c >> 5) & 63) << 2,
+                       (c & 31) << 3, 255);
         }
       else if (format == GL_RGB)
         {
-          o[i] = (uint16_t)((p[3 * i] >> 3) << 11 | (p[3 * i + 1] >> 2) << 5 |
-                            p[3 * i + 2] >> 3);
+          o[i] = texel(fmt, p[3 * i], p[3 * i + 1], p[3 * i + 2], 255);
         }
       else if (format == GL_RGBA)
         {
-          o[i] = p[4 * i + 3] < 128 ? g_fgl.key :
-                 (uint16_t)((p[4 * i] >> 3) << 11 | (p[4 * i + 1] >> 2) << 5 |
-                            p[4 * i + 2] >> 3);
+          o[i] = texel(fmt, p[4 * i], p[4 * i + 1], p[4 * i + 2],
+                       p[4 * i + 3]);
         }
       else                                /* GL_LUMINANCE */
         {
-          o[i] = (uint16_t)((p[i] >> 3) << 11 | (p[i] >> 2) << 5 | p[i] >> 3);
+          o[i] = texel(fmt, p[i], p[i], p[i], 255);
         }
     }
 }
@@ -313,7 +334,7 @@ static void upload(struct fgl_tex_s *t, int x, int y, int w, int h,
   int j;
 
   fgl_unlock();                           /* (PUTs are commands, not jobs) */
-  if (format == GL_COLOR_INDEX && !(x & 1) && !(w & 1))
+  if (format == GL_COLOR_INDEX && t->fmt == 0 && !(x & 1) && !(w & 1))
     {
       fpc_gpu_put8(t->x + x, t->y + y, w, h, p, stride, g_fgl.pal);
       return;
@@ -327,12 +348,16 @@ static void upload(struct fgl_tex_s *t, int x, int y, int w, int h,
 
           for (i = 0; i < w; i++)
             {
-              row[i] = g_fgl.pal[p[(size_t)j * stride + i]];
+              uint16_t c = g_fgl.pal[p[(size_t)j * stride + i]];
+
+              row[i] = t->fmt == 0 ? c :
+                       texel(t->fmt, (c >> 11) << 3, ((c >> 5) & 63) << 2,
+                             (c & 31) << 3, 255);
             }
         }
       else
         {
-          row565(row, p + (size_t)j * stride, w, format, type);
+          row_conv(row, p + (size_t)j * stride, w, format, type, t->fmt);
         }
 
       fpc_gpu_put(t->x + x, t->y + y + j, w, 1, row, (size_t)w * 2);
@@ -384,6 +409,30 @@ void glTexImage2D(GLenum target, GLint level, GLint internalformat,
 
   t->w = (int16_t)w;
   t->h = (int16_t)h;
+  t->fmt = 0;
+  if (format == GL_RGBA && pixels != NULL)
+    {
+      /* ARGB1555 if every alpha is 0 or 255, else ARGB4444 */
+
+      const uint8_t *p = pixels;
+      size_t n = (size_t)w * h;
+      size_t i;
+
+      t->fmt = 2;
+      for (i = 0; i < n; i++)
+        {
+          if (p[4 * i + 3] != 0 && p[4 * i + 3] != 255)
+            {
+              t->fmt = 1;
+              break;
+            }
+        }
+    }
+  else if (format == GL_RGBA)
+    {
+      t->fmt = 1;
+    }
+
   g_fgl.st_ok = false;                    /* (its place may have changed) */
   if (pixels != NULL)
     {

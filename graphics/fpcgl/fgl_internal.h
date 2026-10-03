@@ -31,10 +31,11 @@ struct fgl_tex_s
   int16_t ah;
   GLenum  wrap_s;
   GLenum  wrap_t;
+  uint8_t fmt;                            /* STATE's TFMT: 0 RGB565, 1 ARGB4444, 2 ARGB1555 */
 };
 
 /* A vertex in clip space with its attributes: GL texture coordinates,
- * the colour
+ * the colour and alpha, the fog amount (0 none .. 1)
  */
 
 struct fgl_v_s
@@ -48,7 +49,11 @@ struct fgl_v_s
   float r;
   float g;
   float b;
+  float a;
+  float f;
 };
+
+#define FGL_V_FLOATS   11                 /* (clipping interpolates them all) */
 
 struct fgl_s
 {
@@ -82,7 +87,20 @@ struct fgl_s
   bool     cull;
   bool     tex2d;
   bool     alpha_test;
+  bool     blend;
+  bool     fog;
+  bool     dither;
+  bool     tdither;                       /* FGL_TEXTURE_DITHER */
   GLenum   depth_func;
+  GLenum   sfactor;
+  GLenum   dfactor;
+  GLenum   alpha_func;
+  float    alpha_ref;
+  GLenum   fog_mode;
+  float    fog_start;
+  float    fog_end;
+  float    fog_density;
+  uint16_t fog_colour;
   GLenum   cull_face;
   GLenum   front_face;
   GLenum   shade_model;
@@ -107,6 +125,7 @@ struct fgl_s
   float    cr;
   float    cg;
   float    cb;
+  float    ca;
   GLenum   prim;
   bool     inprim;
   int      nv;                            /* Vertices of the primitive so far */
@@ -121,7 +140,7 @@ struct fgl_s
   uint16_t pal[256];
   bool     locked;                        /* Between fpc_gpu_jobs_lock() and unlock */
   bool     st_ok;
-  uint32_t st[7];
+  uint32_t st[8];
   uint32_t ntri;
 };
 

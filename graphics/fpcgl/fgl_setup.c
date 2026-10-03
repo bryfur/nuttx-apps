@@ -49,7 +49,7 @@ int fgl_setup_poly(const struct fgl_svert_s *v, int n, int flags, int tw,
   const struct fgl_svert_s *p0;
   const struct fgl_svert_s *p1;
   const struct fgl_svert_s *p2;
-  float att[3][7];                          /* z; q, sq, tq; r, g, b */
+  float att[3][9];                          /* z; q, sq, tq; r, g, b; a; f */
   float area = 0.0f;
   float cross;
   float xmin;
@@ -215,10 +215,12 @@ int fgl_setup_poly(const struct fgl_svert_s *v, int n, int flags, int tw,
       att[i][4] = p->r * (128.0f * 65536.0f);
       att[i][5] = p->g * (128.0f * 65536.0f);
       att[i][6] = p->b * (128.0f * 65536.0f);
+      att[i][7] = p->a * (255.0f * 65536.0f);
+      att[i][8] = p->f * (255.0f * 65536.0f);
     }
 
   yc = (float)y0 + 0.5f;
-  for (k = 0; k < 7; k++)
+  for (k = 0; k < 9; k++)
     {
       float d1;
       float d2;
@@ -228,7 +230,8 @@ int fgl_setup_poly(const struct fgl_svert_s *v, int n, int flags, int tw,
       if (k == 0 ? !(flags & FGL_TRI_Z) :
           k <= 3 ? !(flags & FGL_TRI_UV) :
           k == 4 ? !(flags & (FGL_TRI_RGB | FGL_TRI_MONO)) :
-          !(flags & FGL_TRI_RGB))
+          k <= 6 ? !(flags & FGL_TRI_RGB) :
+          k == 7 ? !(flags & FGL_TRI_A) : !(flags & FGL_TRI_F))
         {
           continue;
         }
@@ -238,17 +241,21 @@ int fgl_setup_poly(const struct fgl_svert_s *v, int n, int flags, int tw,
       dadx = (d1 * (p2->y - p0->y) - d2 * (p1->y - p0->y)) / cross;
       dady = (d2 * (p1->x - p0->x) - d1 * (p2->x - p0->x)) / cross;
 
-      /* The colours: on the plane at every vertex (within 1/64), or the
-       * caller draws triangles (corners' colours across a quad are not
-       * planar; depth and texture coordinates are, the polygon being flat)
+      /* The colours, alpha and fog: on the plane at every vertex (within
+       * 2/128 of the shade, 2/255 of alpha and fog), or the caller draws
+       * triangles (corners' colours across a quad are not planar; depth
+       * and texture coordinates are, the polygon being flat)
        */
 
       if (k >= 4)
         {
           for (i = 0; i < n; i++)
             {
-              float c = (k == 4 ? v[i].r : k == 5 ? v[i].g : v[i].b) *
-                        (128.0f * 65536.0f);
+              float c = k == 4 ? v[i].r * (128.0f * 65536.0f) :
+                        k == 5 ? v[i].g * (128.0f * 65536.0f) :
+                        k == 6 ? v[i].b * (128.0f * 65536.0f) :
+                        k == 7 ? v[i].a * (255.0f * 65536.0f) :
+                        v[i].f * (255.0f * 65536.0f);
 
               if (fabsf(att[0][k] + dadx * (v[i].x - p0->x) +
                         dady * (v[i].y - p0->y) - c) > 2.0f * 65536.0f)
@@ -309,7 +316,7 @@ int fgl_setup_poly(const struct fgl_svert_s *v, int n, int flags, int tw,
       r = end;
     }
 
-  j[0] = 11 | (uint32_t)(flags & 0x1e) << 8 | (uint32_t)S << 16 |
+  j[0] = 11 | (uint32_t)(flags & 0x7e) << 8 | (uint32_t)S << 16 |
          (uint32_t)nseg << 24;
   return nw;
 }
