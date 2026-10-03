@@ -72,6 +72,7 @@ static struct
 } g_q;
 
 static int g_cascade;
+static bool g_lostq;                     /* EV_LOST is queued */
 
 /****************************************************************************
  * Private Functions: the event queue
@@ -716,6 +717,28 @@ void desk_win_title(struct desk_win_s *w)
     }
 
   ops_draw((NXWINDOW)w->hwnd, &o);
+}
+
+/* The GPU lost what its memory held (NX asks each window with a surface
+ * to draw itself again: the atlases' callbacks say so): one EV_LOST
+ */
+
+void desk_lost(void)
+{
+  struct desk_event_s ev;
+
+  if (g_lostq)
+    {
+      return;
+    }
+
+  g_lostq = true;
+  memset(&ev, 0, sizeof(ev));
+  ev.type = EV_LOST;
+  if (!q_push(&ev))
+    {
+      g_lostq = false;
+    }
 }
 
 void desk_wake(struct desk_win_s *w)
@@ -1793,6 +1816,13 @@ static void on_event(struct desk_event_s *ev)
         desk_clients_poll();
         break;
 #endif
+
+      case EV_LOST:                       /* The atlases, then everything */
+        g_lostq = false;
+        desk_atlas_redraw();
+        desk_icons_redraw();
+        desk_theme_changed();
+        break;
 
       case EV_LAUNCH:
         if (ev->part < APP_COUNT && ev->arg != NULL)

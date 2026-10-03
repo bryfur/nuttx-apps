@@ -1,0 +1,12 @@
+############################################################################
+# apps/graphics/fpcgl/Make.defs
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+############################################################################
+
+ifneq ($(CONFIG_GRAPHICS_FPCGL),)
+CONFIGURED_APPS += $(APPDIR)/graphics/fpcgl
+CFLAGS += ${INCDIR_PREFIX}$(APPDIR)/graphics/fpcgl
+CFLAGS += ${INCDIR_PREFIX}$(TOPDIR)/../drivers/gpu
+endif

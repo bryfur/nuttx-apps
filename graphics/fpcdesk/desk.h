@@ -187,8 +187,10 @@ enum desk_evtype_e
   EV_MODE,                         /* The display mode has changed */
   EV_SOUND,                        /* The mixer's state has changed */
   EV_CLIENT,                       /* A program wants a window (deskwin.h) */
-  EV_LAUNCH                        /* part: the application to launch (a
+  EV_LAUNCH,                       /* part: the application to launch (a
                                     * program's desk_launch()) */
+  EV_LOST                          /* The GPU lost its memory (another GPU
+                                    * ran: docs/gpu3d.md): all drawn again */
 };
 
 enum desk_part_e
@@ -526,6 +528,9 @@ bool ops_disc_atlas(struct desk_ops_s *o, int x, int y, int d, uint16_t c,
                     uint8_t alpha);
 
 int  desk_atlas_init(void);
+void desk_atlas_redraw(void);            /* Its glyphs again (lost) */
+void desk_icons_redraw(void);            /* The icon atlas again (lost) */
+void desk_lost(void);                    /* (any thread) EV_LOST, once */
 void desk_luts_init(void);
 
 /* A hidden window of w x h pixels in the GPU's memory, to draw into once

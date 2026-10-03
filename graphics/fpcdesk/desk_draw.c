@@ -807,6 +807,11 @@ void desk_lut_set(uint32_t key, const uint8_t lut[][NX_BLEND_LUT_N])
 static void atlas_redraw(NXWINDOW hwnd, const struct nxgl_rect_s *rect,
                          bool more, void *arg)
 {
+  /* After it was made, the server asks for its pixels only when the GPU
+   * lost them
+   */
+
+  desk_lost();
 }
 
 static const struct nx_callback_s g_atlascb =
@@ -940,31 +945,14 @@ bool ops_disc_atlas(struct desk_ops_s *o, int x, int y, int d, uint16_t c,
   return true;
 }
 
-int desk_atlas_init(void)
+void desk_atlas_redraw(void)
 {
   static uint16_t pix[64 * 64];
   struct nxgl_rect_s dest;
   struct nxgl_point_s origin;
-  struct nxgl_point_s pos;
-  struct nxgl_size_s size;
   const void *src[1];
   int f;
   int i;
-
-  g_desk.atlas = nx_openwindow(g_desk.hnx,
-                               NXBE_WINDOW_RAMBACKED | NXBE_WINDOW_HIDDEN,
-                               &g_atlascb, NULL);
-  if (g_desk.atlas == NULL)
-    {
-      return -1;
-    }
-
-  pos.x  = 0;
-  pos.y  = 0;
-  size.w = ATLAS_W;
-  size.h = atlas_pack(true);
-  nx_setsize(g_desk.atlas, &size);
-  nx_setposition(g_desk.atlas, &pos);
 
   for (f = 0; f < NFONTS; f++)
     {
@@ -1004,6 +992,27 @@ int desk_atlas_init(void)
       src[0]     = pix;
       nx_bitmap(g_desk.atlas, &dest, src, &origin, g_discd[i] * 2);
     }
+}
 
+int desk_atlas_init(void)
+{
+  struct nxgl_point_s pos;
+  struct nxgl_size_s size;
+
+  g_desk.atlas = nx_openwindow(g_desk.hnx,
+                               NXBE_WINDOW_RAMBACKED | NXBE_WINDOW_HIDDEN,
+                               &g_atlascb, NULL);
+  if (g_desk.atlas == NULL)
+    {
+      return -1;
+    }
+
+  pos.x  = 0;
+  pos.y  = 0;
+  size.w = ATLAS_W;
+  size.h = atlas_pack(true);
+  nx_setsize(g_desk.atlas, &size);
+  nx_setposition(g_desk.atlas, &pos);
+  desk_atlas_redraw();
   return 0;
 }

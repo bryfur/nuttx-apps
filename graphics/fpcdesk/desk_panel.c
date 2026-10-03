@@ -217,6 +217,7 @@ static bool app_running(int app)
 static void icons_redraw(NXWINDOW hwnd, const struct nxgl_rect_s *rect,
                          bool more, void *arg)
 {
+  desk_lost();                            /* (as the glyph atlas's) */
 }
 
 static const struct nx_callback_s g_iconscb =
@@ -269,6 +270,18 @@ static void icons_init(void)
   nx_setsize(g_icons, &size);
   nx_setposition(g_icons, &pos);
   icons_draw(0, TILE_ICON);
+}
+
+void desk_icons_redraw(void)
+{
+  if (g_icons != NULL)
+    {
+      icons_draw(0, TILE_ICON);
+      if (g_iconrow1 != 0)
+        {
+          icons_draw(1, g_iconrow1);
+        }
+    }
 }
 
 /* An application's icon: from the atlas if it has that size (one BLEND,
