@@ -132,6 +132,66 @@ void fglColorTable(const uint16_t pal[256]);   /* GL_COLOR_INDEX's palette */
 
 uint32_t fglTriangles(void);
 
+/* The picture being drawn: its top-left in the space (a game's 2D parts
+ * go there, as PUT8 with a key, after glFlush())
+ */
+
+void fglBackBuffer(int *x, int *y);
+
+/* A colour blended over the whole picture (BLEND: alpha 0-255), e.g. a
+ * game's flash or tint, at the point it is called
+ */
+
+void fglBlendView(uint16_t colour, int alpha);
+
+/* Everything but the display given back: every texture, every rectangle
+ * of the space (a game's next level)
+ */
+
+void fglReset(void);
+
+/* The space fpcgl hands out (rectangles of RGB565 pixels, w even), for a
+ * game's own images: 0, or < 0 if there is no room
+ */
+
+int  fglSpaceAlloc(int w, int h, int16_t *x, int16_t *y);
+void fglSpaceFree(int x, int y, int w, int h);
+
+/* A rectangle of the space as the texture (as glBindTexture(), until the
+ * next bind): w x h at x, y, repeated (w, h powers of two) or clamped
+ */
+
+void fglBindRect(int x, int y, int w, int h, GLboolean repeat);
+
+/* The 3D GPU's surface builder (docs/gpu3d.md "BUILD"): lit surfaces made
+ * by the GPU from 8-bit textures and a grid of light values, as Quake's
+ * surface cache.  fglImage8(): a w x h 8-bit image (w even) put in the
+ * space (two texels a pixel, the lower byte first), 0 or < 0 if there is
+ * no room; fglImage8Free() gives it back.  fglBuildTable(): the colours
+ * (RGB565) and the 64 light levels' factors (1.7: 128 is 1; indices 224
+ * and up stay as they are).  fglBuildSurface(): w x h pixels at (dx, dy)
+ * of the space (w up to 1024) built from the 8-bit image (texw x texh
+ * texels, repeated, starting at its texel soff, toff) lit by light[]: rows
+ * of lw values (2-32), one every 2^bsh pixels (bsh 0-4), ((h - 1) >> bsh)
+ * + 2 rows (a value's level is value >> 8)
+ */
+
+struct fgl_image8_s
+{
+  int16_t x;
+  int16_t y;
+  int16_t w;                              /* Texels */
+  int16_t h;
+};
+
+int  fglImage8(struct fgl_image8_s *img, int w, int h, const uint8_t *px);
+void fglImage8Free(struct fgl_image8_s *img);
+void fglBuildTable(const uint16_t pal[256], const uint8_t factor[64]);
+void fglBuildSurface(int dx, int dy, int w, int h,
+                     const struct fgl_image8_s *img, int texw, int texh,
+                     int soff, int toff, const uint16_t *light, int lw,
+                     int bsh);
+
 /****************************************************************************
  * The GL subset
  ****************************************************************************/

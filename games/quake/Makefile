@@ -33,7 +33,7 @@ GAMESRCS += r_draw.c r_edge.c r_efrag.c r_light.c r_main.c r_misc.c
 GAMESRCS += r_part.c r_sky.c r_sprite.c r_surf.c r_vars.c sbar.c screen.c
 GAMESRCS += snd_null.c sv_main.c sv_move.c sv_phys.c sv_user.c sys_null.c
 GAMESRCS += vid_null.c view.c wad.c world.c zone.c quakegeneric.c
-GAMESRCS := $(addprefix $(QG)/,$(GAMESRCS)) fpc_drawq.c fpc_gpu3d.c
+GAMESRCS := $(addprefix $(QG)/,$(GAMESRCS)) fpc_drawq.c fpc_gpu3d.c fpc_glq.c
 
 MAINSRC = fpc_quake.c
 
@@ -42,7 +42,7 @@ MAINSRC = fpc_quake.c
 # a flag bit, and the model and sprite headers read from the files have
 # enums in them
 
-GAMEFLAGS = -include fpc_quake.h -fno-short-enums
+GAMEFLAGS = -include fpc_quake.h -fno-short-enums -std=gnu17
 
 # The M33's FPU is single precision: a constant like 0.5 made the float
 # arithmetic around it double, in software (7 % of a frame)
@@ -61,6 +61,10 @@ GAMEFLAGS += -Wno-strict-prototypes -Wno-shadow -Wno-undef
 # the firmware's, resolved by the loader.  They get GAMEFLAGS; fpc_quake.c,
 # which allocates the game's heap, does not.
 
+ifeq ($(CONFIG_GAMES_QUAKE),m)
+
+# A loadable module: the game linked into it (LDLIBS), not into libapps
+
 GAMEOBJS = $(GAMESRCS:%=$(PREFIX)%$(SUFFIX)$(OBJEXT))
 LDLIBS = $(GAMEOBJS)
 $(foreach f,$(GAMESRCS),$(eval $(f)_CELFFLAGS += $(GAMEFLAGS) -MMD -MP -MF $(f)$(SUFFIX)$(OBJEXT).d))
@@ -78,3 +82,17 @@ LDLIBS = $(GAMEOBJS) $(COMPILER_RT_LIB)
 
 clean::
 	$(Q) rm -f $(GAMEOBJS) $(GAMEOBJS:=.d)
+
+else
+
+# Built in (the simulator): the game's files as any app's, its globals
+# that NSH and Doom have too renamed
+
+QRENAME  = cmd_alias cmd_source cmd_wait deathmatch gammatable nomonsters
+QRENAME += onground startepisode timelimit
+CSRCS = $(GAMESRCS)
+$(foreach f,$(GAMESRCS),$(eval $(f)_CFLAGS += $(GAMEFLAGS) $(foreach n,$(QRENAME),-D$(n)=quake_$(n))))
+
+include $(APPDIR)/Application.mk
+
+endif

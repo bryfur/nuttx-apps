@@ -6,15 +6,17 @@
 config GAMES_QUAKE
 	tristate "Quake"
 	default n
-	depends on ALLOW_GPL_COMPONENTS && MODULES
-	depends on m
+	depends on ALLOW_GPL_COMPONENTS && (MODULES || ARCH_SIM)
+	depends on m || ARCH_SIM
 	---help---
 		id Software's Quake (WinQuake's software renderer, by way of
 		quakegeneric), full screen on the FPC's GPU: 320 x 200 at
 		4 x 4 in 1280 x 800, the GPU's game keyboard.  Needs the
 		game's data, id1/pak0.pak (the shareware's will do), in
 		GAMES_QUAKE_BASEDIR.  A loadable module only (/mnt/sd0/bin):
-		it takes no memory while it is not running.
+		it takes no memory while it is not running (in the simulator
+		it may be built in).  -gl: the view drawn by the 3D GPU
+		(fpcgl: docs/gpu3d.md).
 
 if GAMES_QUAKE
 

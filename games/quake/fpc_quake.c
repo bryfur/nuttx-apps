@@ -34,6 +34,13 @@
 #include <nuttx/nx/nxkeys.h>
 
 #include "fpc_gpu.h"
+#include "fpcgl.h"
+
+/* fpc_glq.c's: -gl, the 3D GPU draws the view (fpcgl) */
+
+extern int fpcq_gl;
+void fpcq_gl_init(void);
+void fpcq_gl_report(void);
 
 /* fpc_gpu3d.c's (its qboolean is the game's: an int here) */
 
@@ -254,6 +261,15 @@ static void fs_close(void)
     }
 
   g_fs.on = false;
+  if (fpcq_gl)
+    {
+      fpcq_gl_report();
+      printf("quake: %u frames\n", (unsigned)g_fs.frames);
+      fpc_gpu_game_keys(false);
+      fglShutdown();
+      return;
+    }
+
   fpcq_g3_report();
   printf("quake: %u frames sent, %u us each on average\n",
          (unsigned)g_fs.frames,
@@ -375,6 +391,32 @@ void QG_Init(void)
   syslog(LOG_INFO, "quake: Host_Frame at %p, D_DrawSpans8 at %p\n",
          (void *)Host_Frame, (void *)D_DrawSpans8);
 
+  for (k = 1; k < g_argc; k++)
+    {
+      if (strcmp(g_argv[k], "-gl") == 0)
+        {
+          fpcq_gl = 1;
+        }
+    }
+
+  if (fpcq_gl)
+    {
+      /* The 3D GPU (fpcgl): the view drawn there, the 2D parts over it */
+
+      int ret = fglInit(FS_W, FS_H, FS_MODE);
+
+      if (ret < 0)
+        {
+          fprintf(stderr, "quake: -gl: no 3D GPU (%d)\n", ret);
+          fpcq_exit(1);
+        }
+
+      fpcq_gl_init();
+      fpc_gpu_game_keys(true);
+      g_fs.on = true;
+      return;
+    }
+
   if (fpc_gpu_version() < 8 || fpc_gpu_game_display(true) < 0)
     {
       fprintf(stderr, "quake: the GPU's display is not to be had (a game "
@@ -425,7 +467,7 @@ void QG_Quit(void)
  * keyed (255: nothing drawn), in the base palette
  */
 
-static void overlay_send(int k, const uint8_t *pixels)
+static void overlay_send(int cx, int cy, const uint8_t *pixels)
 {
   int y0 = -1;
   int x0 = FS_W;
@@ -468,7 +510,7 @@ static void overlay_send(int k, const uint8_t *pixels)
         }
       else if (y0 >= 0)                       /* The band ends */
         {
-          fpc_gpu_put8_key(g_fs.x[k] + x0, g_fs.y[k] + y0, x1 - x0 + 1,
+          fpc_gpu_put8_key(cx + x0, cy + y0, x1 - x0 + 1,
                            y - y0, pixels + y0 * FS_W + x0, FS_W,
                            fpcq_gpu_lut(), 255);
           y0 = -1;
@@ -489,6 +531,20 @@ void QG_DrawFrame(void *pixels)
     }
 
   t0 = fpc_gpu_game_us();
+  if (fpcq_gl)
+    {
+      int x;
+      int y;
+
+      /* The view is drawn (fpc_glq.c): the 2D parts over it, keyed */
+
+      fglBackBuffer(&x, &y);
+      overlay_send(x, y, pixels);
+      fglSwapBuffers();
+      g_fs.frames++;
+      return;
+    }
+
   if (fpcq_g3_drawing())
     {
       fpcq_dq_wait();                     /* (the world's spans first) */
@@ -497,7 +553,7 @@ void QG_DrawFrame(void *pixels)
        * was drawn here), in the base palette, then the tints as a BLEND
        */
 
-      overlay_send(k, pixels);
+      overlay_send(g_fs.x[k], g_fs.y[k], pixels);
       if (g_fs.tintalpha > 0)
         {
           struct fpc_gpu_blend_s b;
@@ -600,6 +656,14 @@ void fpcq_palette_parts(const unsigned char *base, int r, int g, int b,
   g_fs.tintalpha = alpha < 0 ? 0 : alpha > 255 ? 255 : alpha;
 }
 
+/* The tints as one blend (fpc_glq.c: over the view) */
+
+void fpcq_tint(uint16_t *colour, int *alpha)
+{
+  *colour = g_fs.tint;
+  *alpha = g_fs.tintalpha;
+}
+
 void QG_SetPalette(unsigned char palette[768])
 {
   int i;
@@ -673,6 +737,10 @@ int main(int argc, char *argv[])
 
       QG_Tick(now - then);
       then = now;
+#ifdef CONFIG_ARCH_SIM
+      usleep(1000);                       /* (the simulator's ticks come only
+                                           * when nothing runs) */
+#endif
     }
 
   return EXIT_SUCCESS;

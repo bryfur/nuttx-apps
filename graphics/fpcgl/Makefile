@@ -9,7 +9,7 @@
 
 include $(APPDIR)/Make.defs
 
-CSRCS  = fgl_setup.c fgl_core.c fgl_tex.c
+CSRCS  = fgl_setup.c fgl_core.c fgl_tex.c fgl_ext.c
 
 ifeq ($(CONFIG_MODULES),y)
 MODULE    = m

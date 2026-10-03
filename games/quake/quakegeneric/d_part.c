@@ -57,6 +57,12 @@ FPCQ_FAST void D_DrawParticle (particle_t *pparticle)
 	short	*pz;
 	int		i, izi, pix, count, u, v;
 
+	if (fpcq_gl)		// FPC: -gl, the 3D GPU draws it (fpc_glq.c)
+	{
+		fpcq_gl_particle (pparticle);
+		return;
+	}
+
 // transform point
 	VectorSubtract (pparticle->org, r_origin, local);
 

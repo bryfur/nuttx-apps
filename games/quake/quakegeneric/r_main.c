@@ -292,6 +292,8 @@ void R_NewMap (void)
 #ifdef PASSAGES
 CreatePassages ();
 #endif
+
+	fpcq_gl_newmap ();	// FPC: -gl, the map's textures into the GPU
 }
 
 
@@ -955,6 +957,16 @@ SetVisibilityByPassages ();
 #else
 	R_MarkLeaves ();	// done here so we know if we're in water
 #endif
+
+	// FPC: -gl, the 3D GPU draws the whole view (fpc_glq.c)
+	if (fpcq_gl)
+	{
+		if (!cl_entities[0].model || !cl.worldmodel)
+			Sys_Error ("R_RenderView: NULL worldmodel");
+		fpcq_gl_view ();
+		V_SetContentsColor (r_viewleaf->contents);
+		return;
+	}
 
 // make FDIV fast. This reduces timing precision after we've been running for a
 // while, so we don't do it globally.  This also sets chop mode, and we do it

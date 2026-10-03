@@ -14,6 +14,7 @@
 #include "fgl_setup.h"
 
 #define FGL_TEXTURES   512
+#define FGL_RECT       (FGL_TEXTURES - 1) /* fglBindRect()'s */
 #define FGL_STACK      16                 /* Each matrix stack's depth */
 
 /* A texture: its image in the space (w x h at x, y; allocated aw x ah) */

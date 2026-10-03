@@ -680,9 +680,9 @@ static int clip_plane(const struct fgl_v_s *in, int n, struct fgl_v_s *out,
 
 static void polygon(const struct fgl_v_s *v, int n, int provoking)
 {
-  static struct fgl_v_s a[24];
-  static struct fgl_v_s b[24];
-  struct fgl_svert_s sv[24];
+  static struct fgl_v_s a[72];
+  static struct fgl_v_s b[72];
+  static struct fgl_svert_s sv[72];
   struct fgl_tex_s *t = g_fgl.bound < FGL_TEXTURES ? &g_fgl.tex[g_fgl.bound] : NULL;
   float tw = t != NULL && t->alloc ? (float)t->w : 1.0f;
   float th = t != NULL && t->alloc ? (float)t->h : 1.0f;
@@ -697,7 +697,7 @@ static void polygon(const struct fgl_v_s *v, int n, int provoking)
   int k;
   int i;
 
-  if (n < 3 || n > 16)
+  if (n < 3 || n > 64)
     {
       return;
     }
@@ -927,7 +927,7 @@ void glVertex3f(GLfloat x, GLfloat y, GLfloat z)
         break;
 
       case GL_POLYGON:
-        if (g_fgl.npoly < 16)
+        if (g_fgl.npoly < 64)
           {
             g_fgl.poly[g_fgl.npoly++] = v;
           }

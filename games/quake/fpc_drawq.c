@@ -271,9 +271,13 @@ static qboolean dq_start(void)
   pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED);
   pthread_attr_setschedpolicy(&attr, policy);
   pthread_attr_setschedparam(&attr, &param);
+#ifdef CONFIG_SMP
   CPU_ZERO(&cpus);
   CPU_SET(1, &cpus);
   pthread_attr_setaffinity_np(&attr, sizeof(cpus), &cpus);
+#else
+  (void)cpus;                             /* (one CPU: it shares it) */
+#endif
   if (pthread_create(&g_dq.thread, &attr, dq_main, NULL) != 0)
     {
       pthread_attr_destroy(&attr);

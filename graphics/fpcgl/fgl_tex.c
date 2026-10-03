@@ -157,12 +157,12 @@ void glGenTextures(GLsizei n, GLuint *textures)
 
   for (i = 0; i < n; i++)
     {
-      while (t < FGL_TEXTURES && g_fgl.tex[t].named)
+      while (t < FGL_RECT && g_fgl.tex[t].named)
         {
           t++;
         }
 
-      if (t >= FGL_TEXTURES)
+      if (t >= FGL_RECT)
         {
           fgl_error(GL_OUT_OF_MEMORY);
           textures[i] = 0;
@@ -185,7 +185,7 @@ void glDeleteTextures(GLsizei n, const GLuint *textures)
     {
       GLuint t = textures[i];
 
-      if (t == 0 || t >= FGL_TEXTURES || !g_fgl.tex[t].named)
+      if (t == 0 || t >= FGL_RECT || !g_fgl.tex[t].named)
         {
           continue;
         }
@@ -212,7 +212,7 @@ void glBindTexture(GLenum target, GLuint texture)
       return;
     }
 
-  if (texture >= FGL_TEXTURES)
+  if (texture >= FGL_RECT)                /* (FGL_RECT: fglBindRect()'s) */
     {
       fgl_error(GL_INVALID_VALUE);
       return;
