@@ -102,6 +102,19 @@ int desk_linktest(int mb, int setup, int cycles, bool rb);
  * Private Functions
  ****************************************************************************/
 
+/* Disconnect, and wait for the server's DISCONNECTED, on which libnx
+ * frees the connection (nx_eventhandler(): without it every deskctl left
+ * its connection allocated, 40 bytes in the middle of the user heap)
+ */
+
+static void deskctl_disconnect(NXHANDLE h)
+{
+  nx_disconnect(h);
+  while (nx_eventhandler(h) >= 0)
+    {
+    }
+}
+
 static NXHANDLE deskctl_connect(void)
 {
   NXHANDLE h = nx_connect();
@@ -744,6 +757,6 @@ int main(int argc, FAR char *argv[])
   /* Let the server take the messages before the connection goes */
 
   usleep(50000);
-  nx_disconnect(h);
+  deskctl_disconnect(h);
   return ret;
 }
