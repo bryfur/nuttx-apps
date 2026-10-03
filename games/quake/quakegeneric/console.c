@@ -147,7 +147,7 @@ If the line width has changed, reformat the buffer.
 void Con_CheckResize (void)
 {
 	int		i, j, width, oldwidth, oldtotallines, numlines, numchars;
-	char	tbuf[CON_TEXTSIZE];
+	static char	tbuf[CON_TEXTSIZE];	// FPC: static, not on the stack (16 KB)
 
 	width = (vid.width >> 3) - 2;
 

@@ -29,9 +29,13 @@ void QG_Create(int argc, char *argv[])
 {
 	static quakeparms_t    parms;
 
-	parms.memsize = 8*1024*1024;
+	// FPC: the hunk's size (-mem N, in megabytes) and the data's place
+	// from the board's configuration (fpc_quake.c)
+	parms.memsize = fpcq_hunk_size();
 	parms.membase = malloc (parms.memsize);
-	parms.basedir = ".";
+	parms.basedir = (char *)fpcq_basedir();
+	if (parms.membase == NULL)
+		Sys_Error ("no memory for a hunk of %d KB", parms.memsize / 1024);
 
 	COM_InitArgv (argc, argv);
 

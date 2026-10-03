@@ -335,6 +335,10 @@ void CL_FinishTimeDemo (void)
 	if (!time)
 		time = 1;
 	Con_Printf ("%i frames %5.1f seconds %5.1f fps\n", frames, time, frames/time);
+
+	// FPC: -timedemoexit ends the game here (benchmark runs)
+	if (COM_CheckParm ("-timedemoexit"))
+		Sys_Quit ();
 }
 
 /*

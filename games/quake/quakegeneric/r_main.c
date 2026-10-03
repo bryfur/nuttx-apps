@@ -846,10 +846,20 @@ R_EdgeDrawing
 */
 void R_EdgeDrawing (void)
 {
-	edge_t	ledges[NUMSTACKEDGES +
-				((CACHE_SIZE - 1) / sizeof(edge_t)) + 1];
-	surf_t	lsurfs[NUMSTACKSURFACES +
-				((CACHE_SIZE - 1) / sizeof(surf_t)) + 1];
+	// FPC: not on the stack (77 and 51 KB): allocated once, in the SRAM if
+	// there is room (fpc_quake.c)
+	static edge_t	*ledges;
+	static surf_t	*lsurfs;
+
+	if (!ledges)
+	{
+		ledges = fpcq_fast_alloc ((NUMSTACKEDGES +
+				((CACHE_SIZE - 1) / sizeof(edge_t)) + 1) * sizeof(edge_t),
+				"the edge list");
+		lsurfs = fpcq_fast_alloc ((NUMSTACKSURFACES +
+				((CACHE_SIZE - 1) / sizeof(surf_t)) + 1) * sizeof(surf_t),
+				"the surface list");
+	}
 
 	if (auxedges)
 	{
@@ -923,7 +933,15 @@ r_refdef must be set before the first call
 */
 void R_RenderView_ (void)
 {
-	byte	warpbuffer[WARP_WIDTH * WARP_HEIGHT];
+	// FPC: not on the stack (64 KB): from the game's heap, once
+	static byte	*warpbuffer;
+
+	if (!warpbuffer)
+	{
+		warpbuffer = malloc (WARP_WIDTH * WARP_HEIGHT);
+		if (!warpbuffer)
+			Sys_Error ("no memory for the warp buffer");
+	}
 
 	r_warpbuffer = warpbuffer;
 

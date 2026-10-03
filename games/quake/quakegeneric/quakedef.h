@@ -44,6 +44,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // !!! if this is changed, it must be changed in d_ifacea.h too !!!
 #define CACHE_SIZE	32		// used to align key data structures
 
+#undef UNUSED		// FPC: NuttX's compiler.h has one
 #define UNUSED(x)	(x = x)	// for pesky compiler / lint warnings
 
 #define	MINIMUM_MEMORY			0x550000

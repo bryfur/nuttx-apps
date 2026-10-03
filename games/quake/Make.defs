@@ -1,0 +1,10 @@
+############################################################################
+# apps/games/quake/Make.defs
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+############################################################################
+
+ifneq ($(CONFIG_GAMES_QUAKE),)
+CONFIGURED_APPS += $(APPDIR)/games/quake
+endif

@@ -1,0 +1,64 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+config GAMES_QUAKE
+	tristate "Quake"
+	default n
+	depends on ALLOW_GPL_COMPONENTS
+	---help---
+		id Software's Quake (WinQuake's software renderer, by way of
+		quakegeneric), full screen on the FPC's GPU: 320 x 200 at
+		4 x 4 in 1280 x 800, the GPU's game keyboard.  Needs the
+		game's data, id1/pak0.pak (the shareware's will do), in
+		GAMES_QUAKE_BASEDIR.
+
+if GAMES_QUAKE
+
+config GAMES_QUAKE_PRIORITY
+	int "Priority"
+	default 100
+
+config GAMES_QUAKE_STACKSIZE
+	int "Stack size"
+	default 16384
+	---help---
+		The renderer's big arrays (edges, surfaces, spans) are not on
+		the stack here, as they were in WinQuake: what is left is the
+		BSP's recursion and the usual.
+
+config GAMES_QUAKE_BASEDIR
+	string "Data directory"
+	default "/mnt/sd0/quake"
+	---help---
+		Where id1/ is (-basedir on the command line overrides it).
+
+config GAMES_QUAKE_HUNKSIZE
+	int "Hunk (KB)"
+	default 5440
+	---help---
+		Quake's own memory for a level, its models and sounds (-mem N
+		in megabytes overrides it).  5440 KB is the least the game
+		accepts for the shareware episode (MINIMUM_MEMORY).
+
+config GAMES_QUAKE_HEAPSIZE
+	int "Heap besides the hunk (KB)"
+	default 960
+	---help---
+		The rest of what the game allocates: the surface cache (about
+		600 KB at 320 x 200), the depth buffer (125 KB), and whatever
+		of GAMES_QUAKE_SRAM's arrays the SRAM has no room for.  It and
+		the hunk are one block of the user heap, which goes back whole
+		when the game ends.
+
+config GAMES_QUAKE_SRAM
+	bool "The renderer's hottest arrays in the internal SRAM"
+	default y
+	---help---
+		The edge and surface lists and the span lists (about 180 KB)
+		and the frame buffer from the kernel heap (the SRAM) while the
+		game runs, if there is room, rather than from its heap in the
+		PSRAM behind the 16 KB XIP cache.
+
+endif

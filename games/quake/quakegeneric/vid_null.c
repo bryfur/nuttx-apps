@@ -26,11 +26,13 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 viddef_t	vid;				// global video state
 
+// FPC: 320 x 200, which the GPU shows at 4 x 4 in 1280 x 800; the frame
+// in the SRAM if there is room, the depth buffer from the game's heap
 #define	BASEWIDTH	320
-#define	BASEHEIGHT	240
+#define	BASEHEIGHT	200
 
-byte	vid_buffer[BASEWIDTH*BASEHEIGHT];
-short	zbuffer[BASEWIDTH*BASEHEIGHT];
+byte	*vid_buffer;
+short	*zbuffer;
 byte	*surfcache;
 size_t	surfcache_size;
 
@@ -54,6 +56,10 @@ void	VID_Init (unsigned char *palette)
 	vid.numpages = 1;
 	vid.colormap = host_colormap;
 	vid.fullbright = 256 - LittleLong (*((int *)vid.colormap + 2048));
+	vid_buffer = fpcq_fast_alloc (BASEWIDTH*BASEHEIGHT, "the frame");
+	zbuffer = malloc (BASEWIDTH*BASEHEIGHT*sizeof(short));
+	if (zbuffer == NULL)
+		Sys_Error ("no memory for the depth buffer");
 	vid.buffer = vid.conbuffer = vid_buffer;
 	vid.rowbytes = vid.conrowbytes = BASEWIDTH;
 	

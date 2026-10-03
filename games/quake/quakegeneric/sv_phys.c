@@ -428,8 +428,9 @@ void SV_PushMove (edict_t *pusher, float movetime)
 	vec3_t		mins, maxs, move;
 	vec3_t		entorig, pushorig;
 	int			num_moved;
-	edict_t		*moved_edict[MAX_EDICTS];
-	vec3_t		moved_from[MAX_EDICTS];
+	// FPC: static, not on the stack (10 KB)
+	static edict_t		*moved_edict[MAX_EDICTS];
+	static vec3_t		moved_from[MAX_EDICTS];
 
 	if (!pusher->v.velocity[0] && !pusher->v.velocity[1] && !pusher->v.velocity[2])
 	{

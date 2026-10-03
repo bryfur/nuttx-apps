@@ -122,9 +122,15 @@ D_PolysetDraw
 */
 void D_PolysetDraw (void)
 {
-	spanpackage_t	spans[DPS_MAXSPANS + 1 +
-			((CACHE_SIZE - 1) / sizeof(spanpackage_t)) + 1];
+	// FPC: not on the stack (33 KB): allocated once, in the SRAM if there
+	// is room (fpc_quake.c)
+	static spanpackage_t	*spans;
 						// one extra because of cache line pretouching
+
+	if (!spans)
+		spans = fpcq_fast_alloc ((DPS_MAXSPANS + 1 +
+				((CACHE_SIZE - 1) / sizeof(spanpackage_t)) + 1) *
+				sizeof(spanpackage_t), "the model span list");
 
 	a_spans = (spanpackage_t *)
 			(((intptr_t)&spans[0] + CACHE_SIZE - 1) & ~(CACHE_SIZE - 1));

@@ -386,7 +386,8 @@ void D_DrawSprite (void)
 	int			i, nump;
 	float		ymin, ymax;
 	emitpoint_t	*pverts;
-	sspan_t		spans[MAXHEIGHT+1];
+	// FPC: static, not on the stack (12 KB)
+	static sspan_t		spans[MAXHEIGHT+1];
 
 	sprite_spans = spans;
 

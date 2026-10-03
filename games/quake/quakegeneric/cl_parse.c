@@ -149,7 +149,8 @@ void CL_KeepaliveMessage (void)
 	static float lastmsg;
 	int		ret;
 	sizebuf_t	old;
-	byte		olddata[8192];
+	// FPC: static, not on the stack (8 KB)
+	static byte		olddata[8192];
 	
 	if (sv.active)
 		return;		// no need if server is local
@@ -206,8 +207,9 @@ void CL_ParseServerInfo (void)
 	char	*str;
 	int		i;
 	int		nummodels, numsounds;
-	char	model_precache[MAX_MODELS][MAX_QPATH];
-	char	sound_precache[MAX_SOUNDS][MAX_QPATH];
+	// FPC: static, not on the stack (32 KB)
+	static char	model_precache[MAX_MODELS][MAX_QPATH];
+	static char	sound_precache[MAX_SOUNDS][MAX_QPATH];
 	
 	Con_DPrintf ("Serverinfo packet received.\n");
 //

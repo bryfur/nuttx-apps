@@ -21,6 +21,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "errno.h"
+#include <time.h>
 
 qboolean isDedicated;
 
@@ -161,7 +162,7 @@ void Sys_Error (char *error, ...)
 	va_end (argptr);
 	printf ("\n");
 
-	exit (1);
+	fpcq_exit (1);		// FPC: the display and the memory back
 }
 
 void Sys_Printf (char *fmt, ...)
@@ -175,16 +176,19 @@ void Sys_Printf (char *fmt, ...)
 
 void Sys_Quit (void)
 {
-	exit (0);
+	fpcq_exit (0);		// FPC: the display and the memory back
 }
 
+// FPC: seconds since the first call, from the monotonic clock
 double Sys_FloatTime (void)
 {
-	static double t;
-	
-	t += 0.1;
-	
-	return t;
+	static struct timespec t0;
+	struct timespec t;
+
+	clock_gettime (CLOCK_MONOTONIC, &t);
+	if (t0.tv_sec == 0 && t0.tv_nsec == 0)
+		t0 = t;
+	return (t.tv_sec - t0.tv_sec) + (t.tv_nsec - t0.tv_nsec) * 1e-9;
 }
 
 char *Sys_ConsoleInput (void)

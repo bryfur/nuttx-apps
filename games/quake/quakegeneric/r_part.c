@@ -93,8 +93,10 @@ void R_EntityParticles (entity_t *ent)
 
 if (!avelocities[0][0])
 {
+// FPC: through a plain pointer (avelocities[0][i] past [0][2] is undefined,
+// and GCC takes it at its word)
 for (i=0 ; i<NUMVERTEXNORMALS*3 ; i++)
-avelocities[0][i] = (rand()&255) * 0.01;
+(&avelocities[0][0])[i] = (rand()&255) * 0.01;
 }
 
 

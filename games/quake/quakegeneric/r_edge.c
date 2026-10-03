@@ -641,9 +641,15 @@ Each surface has a linked list of its visible spans
 void R_ScanEdges (void)
 {
 	int		iv, bottom;
-	byte	basespans[MAXSPANS*sizeof(espan_t)+CACHE_SIZE];
+	// FPC: not on the stack (48 KB): allocated once, in the SRAM if there
+	// is room (fpc_quake.c)
+	static byte	*basespans;
 	espan_t	*basespan_p;
 	surf_t	*s;
+
+	if (!basespans)
+		basespans = fpcq_fast_alloc (MAXSPANS*sizeof(espan_t)+CACHE_SIZE,
+									 "the span list");
 
 	basespan_p = (espan_t *)
 			((intptr_t)(basespans + CACHE_SIZE - 1) & ~(CACHE_SIZE - 1));
