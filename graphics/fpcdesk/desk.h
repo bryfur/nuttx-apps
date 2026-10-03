@@ -269,6 +269,7 @@ struct desk_win_s
   uint8_t fadeout;                 /* Closing or minimising: steps to go */
   bool closedone;                  /* Faded out: to be closed */
   bool minimizing;                 /* Faded out: to be hidden */
+  bool restoring;                  /* Fading in from its dock icon */
   sem_t synced;                    /* The server has caught up (nx_synch) */
   bool wakeq;                      /* desk_wake(): the app's wake is due */
   bool frames;                     /* The app's frame is due every frame */

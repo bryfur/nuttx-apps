@@ -17,6 +17,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <pthread.h>
 #include <sched.h>
 #include <semaphore.h>
@@ -380,7 +381,76 @@ static void *listener(void *arg)
  * Private Functions: windows
  ****************************************************************************/
 
-/* A window's effects: the theme's shadow scaled by the setting, its edge */
+/* Transitions, where the compositor can show a window in perspective
+ * (NX_FX_QUAD, a v10 GPU; elsewhere only its opacity changes): opening,
+ * it swings up from a little smaller and tilted away, and closing back;
+ * minimising, it is drawn into its dock icon, the bottom first, and
+ * restored out of it.  The corners, as offsets from the window's own.
+ */
+
+#define QUAD_FOCAL      1200.0f           /* The viewer, pixels away */
+#define QUAD_TILT       0.35f             /* Radians, fully tilted */
+#define QUAD_SHRINK     0.12f
+
+static void quad_tilt(struct desk_win_s *w, float t, int16_t q[8])
+{
+  static const float cu[4] = { -0.5f, 0.5f, 0.5f, -0.5f };
+  static const float cv[4] = { -0.5f, -0.5f, 0.5f, 0.5f };
+  float s = 1.0f - QUAD_SHRINK * t;
+  float c = cosf(QUAD_TILT * t);
+  float sn = sinf(QUAD_TILT * t);
+  float fw = (float)w->size.w;
+  float fh = (float)w->size.h;
+  int k;
+
+  for (k = 0; k < 4; k++)
+    {
+      /* Turned about its middle row, its top away, seen from QUAD_FOCAL */
+
+      float px = cu[k] * fw * s;
+      float py = cv[k] * fh * s;
+      float pz = QUAD_FOCAL - py * sn;
+
+      py *= c;
+      q[2 * k]     = (int16_t)lrintf(px * QUAD_FOCAL / pz - cu[k] * fw);
+      q[2 * k + 1] = (int16_t)lrintf(py * QUAD_FOCAL / pz - cv[k] * fh);
+    }
+}
+
+static void quad_genie(struct desk_win_s *w, float t, int16_t q[8])
+{
+  static const int cx[4] = { 0, 1, 1, 0 };
+  static const int cy[4] = { 0, 0, 1, 1 };
+  float fb = t / 0.6f;                    /* The bottom: in by 0.6 */
+  float ft = t * t;                       /* The top: following */
+  int ix;
+  int iy;
+  int k;
+
+  if (!desk_dock_where(w->app, &ix, &iy))
+    {
+      ix = g_desk.dockx;
+      iy = g_desk.docky;
+    }
+
+  fb = fb > 1.0f ? 1.0f : fb;
+  fb = fb * fb * (3.0f - 2.0f * fb);
+  for (k = 0; k < 4; k++)
+    {
+      float f = cy[k] ? fb : ft;
+      float x0 = (float)(w->pos.x + cx[k] * w->size.w);
+      float y0 = (float)(w->pos.y + cy[k] * w->size.h);
+      float x1 = (float)ix + (cx[k] ? 12.0f : -12.0f);   /* The icon's middle */
+      float y1 = (float)iy + (cy[k] ? 12.0f : -12.0f);
+
+      q[2 * k]     = (int16_t)lrintf((x1 - x0) * f);
+      q[2 * k + 1] = (int16_t)lrintf((y1 - y0) * f);
+    }
+}
+
+/* A window's effects: the theme's shadow scaled by the setting, its edge;
+ * in a transition, where its corners are
+ */
 
 static void win_effects(struct desk_win_s *w, uint8_t opacity)
 {
@@ -409,6 +479,35 @@ static void win_effects(struct desk_win_s *w, uint8_t opacity)
   fx.shadowdy = w->active ? 8 : 4;
   fx.border   = g_prefs.border ? (uint8_t)(g_theme.border * opacity / 255) :
                                  0;
+  if (w->fade > 0 && !w->closing)         /* Opening, restoring: t 1 to 0 */
+    {
+      float t = (float)w->fade / (FADE_STEPS + 1);
+
+      fx.flags |= NX_FX_QUAD;
+      if (w->restoring)
+        {
+          quad_genie(w, t, fx.quad);
+        }
+      else
+        {
+          quad_tilt(w, t, fx.quad);
+        }
+    }
+  else if (w->fadeout > 0)                /* Closing, minimising: 0 to 1 */
+    {
+      float t = 1.0f - (float)w->fadeout / (FADE_STEPS + 1);
+
+      fx.flags |= NX_FX_QUAD;
+      if (w->minimizing)
+        {
+          quad_genie(w, t, fx.quad);
+        }
+      else
+        {
+          quad_tilt(w, t, fx.quad);
+        }
+    }
+
   nx_seteffects((NXWINDOW)w->hwnd, &fx);
 }
 
@@ -943,6 +1042,7 @@ void desk_win_minimize(struct desk_win_s *w)
   desk_sound_play(SND_MINIMIZE);
 #endif
   w->minimizing = true;
+  w->restoring  = false;
   w->fade       = 0;
   w->fadeout    = FADE_STEPS;
   if (g_desk.active == w)
@@ -966,6 +1066,7 @@ void desk_win_restore(struct desk_win_s *w)
   if (w->minimizing)
     {
       w->minimizing = false;
+      w->restoring  = true;
       w->fadeout    = 0;
       w->fade       = FADE_STEPS;
     }
@@ -973,6 +1074,7 @@ void desk_win_restore(struct desk_win_s *w)
   if (w->minimized)
     {
       w->minimized = false;
+      w->restoring = true;
       w->fade      = FADE_STEPS;
       win_effects(w, 0);
       nxtk_setvisibility(w->hwnd, false);
@@ -1743,6 +1845,7 @@ static bool animate(void)
       if (w->fade > 0 && !w->closing)
         {
           w->fade--;
+          w->restoring &= w->fade > 0;
           win_effects(w, 255 - w->fade * 255 / (FADE_STEPS + 1));
           more |= w->fade > 0;
         }
