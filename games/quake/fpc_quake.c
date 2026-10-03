@@ -17,6 +17,7 @@
 
 #include <nuttx/config.h>
 
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -24,6 +25,7 @@
 #include <string.h>
 #include <syslog.h>
 #include <time.h>
+#include <unistd.h>
 #include <malloc.h>
 
 #include <nuttx/kmalloc.h>
@@ -75,6 +77,7 @@ static struct
   int      y[2];
   uint16_t lut[256];                      /* The palette, RGB565 */
   uint32_t frames;
+  uint32_t hold;                          /* -holdframe */
   uint64_t send_us;
   uint8_t  mods;                          /* NX_KEY_* modifiers held */
   int      keyq[KEYQ];                    /* key | down << 16 */
@@ -375,6 +378,16 @@ void QG_Init(void)
       fpc_gpu_fill(g_fs.x[k], g_fs.y[k], FS_W, FS_H, 0);
     }
 
+  syslog(LOG_INFO, "quake: canvases at (%d, %d) (%d, %d)\n", g_fs.x[0],
+         g_fs.y[0], g_fs.x[1], g_fs.y[1]);   /* (grab.py) */
+  for (k = 1; k + 1 < g_argc; k++)
+    {
+      if (strcmp(g_argv[k], "-holdframe") == 0)
+        {
+          g_fs.hold = atoi(g_argv[k + 1]);
+        }
+    }
+
   fpc_gpu_game_keys(true);
   fpc_gpu_game_mode(FS_MODE);
   fpc_gpu_set_scale(FS_SCALE, FS_SCALE);
@@ -406,6 +419,28 @@ void QG_DrawFrame(void *pixels)
   g_fs.send_us += fpc_gpu_game_us() - t0;
   g_fs.frames++;
   g_fs.back = 1 - k;
+
+  /* -holdframe N: frame N's hash (FNV-1a of its 8-bit pixels: the same
+   * picture, the same hash), and the frame kept on the screen a while
+   * (for grab.py: a renderer's change compared)
+   */
+
+  if (g_fs.frames == g_fs.hold)
+    {
+      const uint8_t *p = pixels;
+      uint32_t h = 2166136261u;
+      int i;
+
+      for (i = 0; i < FS_W * FS_H; i++)
+        {
+          h = (h ^ p[i]) * 16777619u;
+        }
+
+      syslog(LOG_INFO, "quake: frame %" PRIu32 " hash %08" PRIx32
+             " (canvas (%d, %d)), held 40 s\n", g_fs.frames, h,
+             g_fs.x[k], g_fs.y[k]);
+      sleep(40);
+    }
 }
 
 void QG_SetPalette(unsigned char palette[768])
