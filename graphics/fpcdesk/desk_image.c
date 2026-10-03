@@ -578,6 +578,13 @@ static void img_close(struct desk_image_s *img)
       return;
     }
 
+  if (desk_program_surf(img->hwnd))
+    {
+      desk_program_surface_close(img->hwnd);     /* A program's */
+      img->hwnd = NULL;
+      return;
+    }
+
   /* Nothing more from the server for it (a redraw), then it goes */
 
   img->armed = false;
@@ -597,6 +604,20 @@ static bool img_open(struct desk_image_s *img, int w, int h)
   struct nxgl_size_s size;
   struct nxgl_point_s pos;
   int ret;
+
+  /* A program's: a surface of the desktop's for its window (which sets
+   * lost when it has to let the pixels go)
+   */
+
+  if (desk_program_self())
+    {
+      img->hwnd = desk_program_surface_open(w, h, &img->lost);
+      img->w    = w;
+      img->h    = h;
+      img->gpu  = img->hwnd != NULL;
+      img->armed = img->gpu;
+      return img->gpu;
+    }
 
   img->hwnd = nx_openwindow(g_desk.hnx,
                             NXBE_WINDOW_RAMBACKED | NXBE_WINDOW_HIDDEN,
@@ -959,6 +980,11 @@ int img_read(struct desk_image_s *img, int x, int y, int w, int h,
   r.pt1.y = y;
   r.pt2.x = x + w - 1;
   r.pt2.y = y + h - 1;
+  if (desk_program_surf(img->hwnd))
+    {
+      return desk_program_surface_read(img->hwnd, x, y, w, h, buf, stride);
+    }
+
   return nx_getrectangle(img->hwnd, &r, 0, (uint8_t *)buf, stride);
 }
 
@@ -975,6 +1001,12 @@ int img_write(struct desk_image_s *img, int x, int y, int w, int h,
   r.pt2.y = y + h - 1;
   org     = r.pt1;
   src[0]  = buf;
+  if (desk_program_surf(img->hwnd))
+    {
+      desk_program_surface_put(img->hwnd, x, y, w, h, buf, stride);
+      return OK;
+    }
+
   return nx_bitmap(img->hwnd, &r, src, &org, stride);
 }
 

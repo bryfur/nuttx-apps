@@ -252,6 +252,19 @@ void deskwin_surface_put(FAR struct deskwin_s *d, FAR void *surface, int x,
                          int y, int w, int h, FAR const uint16_t *pix,
                          int stride);
 
+/* A blending table (32 x 32: nxaccel.h's NX_BLEND_LUT_N) for the BLEND
+ * operations' application mode that follow (the desktop's desk_lut_app():
+ * one at a time, by its key)
+ */
+
+void deskwin_lut(FAR struct deskwin_s *d, uint32_t key,
+                 FAR const uint8_t lut[][32]);
+
+/* ... and back from it into buf (waits: what was sent before is drawn) */
+
+int deskwin_surface_read(FAR struct deskwin_s *d, FAR void *surface, int x,
+                         int y, int w, int h, FAR uint16_t *buf, int stride);
+
 /* Hand the queue to the desktop: 0, -ETIMEDOUT if it had no room for
  * timeout ms (-1: wait), -EPIPE if the window has gone.
  */

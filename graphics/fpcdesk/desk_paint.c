@@ -28,6 +28,10 @@
  *     when the pool is full;
  *   - new, open (any image the viewer opens, scaled to fit 1024 x 768) and
  *     save as a 24-bit BMP.
+ *
+ * A program of its own (/mnt/sd0/bin/paint, apps/graphics/deskapps):
+ * built into the desktop (DESK_PROGRAM_STUB) this file is only the icon
+ * and the name the dock shows (desk_program.c).
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -135,6 +139,8 @@
 #define Z_SWATCH0      40
 
 #define NSWATCH        18
+
+#ifndef DESK_PROGRAM_STUB
 
 /****************************************************************************
  * Private Types
@@ -278,6 +284,7 @@ struct emit_s
 static struct desk_ops_s g_o;            /* Into the window */
 static struct desk_ops_s *g_co;          /* Into a canvas (allocated: */
 static struct desk_ops_s *g_po;          /* into a pool    PSRAM) */
+static int g_nwins;                      /* Windows open (with the lists) */
 static const char *g_openpath;
 
 static const char * const g_toolname[T_COUNT] =
@@ -3359,6 +3366,21 @@ static bool paint_canclose(struct desk_win_s *w)
   return false;
 }
 
+/* The drawing lists go with the last window (a program's end would
+ * leave them)
+ */
+
+static void paint_ops_release(void)
+{
+  if (g_nwins == 0)
+    {
+      free(g_co);
+      free(g_po);
+      g_co = NULL;
+      g_po = NULL;
+    }
+}
+
 static void paint_close(struct desk_win_s *w)
 {
   struct paint_s *p = w->priv;
@@ -3366,8 +3388,13 @@ static void paint_close(struct desk_win_s *w)
   if (p != NULL)
     {
       canvas_drop(p);
+      g_nwins--;
     }
+
+  paint_ops_release();
 }
+
+#endif /* !DESK_PROGRAM_STUB */
 
 static void paint_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
 {
@@ -3389,6 +3416,7 @@ static void paint_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
            RGB(0xff, 0xd8, 0x20), a);
 }
 
+#ifndef DESK_PROGRAM_STUB
 static struct desk_win_s *paint_open(void)
 {
   const char *path = g_openpath;
@@ -3421,6 +3449,7 @@ static struct desk_win_s *paint_open(void)
   p = calloc(1, sizeof(*p));
   if (p == NULL)
     {
+      paint_ops_release();
       return NULL;
     }
 
@@ -3446,10 +3475,12 @@ static struct desk_win_s *paint_open(void)
   if (w == NULL)
     {
       free(p);
+      paint_ops_release();
       return NULL;
     }
 
   w->priv = p;
+  g_nwins++;
   if (path != NULL)
     {
       do_open(w, path);
@@ -3466,6 +3497,7 @@ static struct desk_win_s *paint_open(void)
  * Public Functions
  ****************************************************************************/
 
+#ifndef DESK_PROGRAM_STUB
 int desk_paint_open(const char *path)
 {
   struct desk_win_s *w;
@@ -3494,11 +3526,33 @@ int desk_paint_open(const char *path)
   g_openpath = NULL;
   return 0;
 }
+#endif
+
+#endif /* !DESK_PROGRAM_STUB */
 
 /****************************************************************************
  * Public Data
  ****************************************************************************/
 
+#ifdef DESK_PROGRAM_STUB
+int desk_paint_open(const char *path)
+{
+  if (desk_program_self())
+    {
+      return desk_open_post(APP_PAINT, path);   /* The desktop's thread */
+    }
+
+  if (path == NULL)
+    {
+      desk_launch(APP_PAINT);
+      return 0;
+    }
+
+  return desk_program_open(APP_PAINT, path);    /* Its program, with it */
+}
+
+DESK_PROGRAM_APP(g_app_paint, "Paint", paint_icon, "paint", false);
+#else
 const struct desk_app_s g_app_paint =
 {
   .name     = "Paint",
@@ -3511,3 +3565,4 @@ const struct desk_app_s g_app_paint =
   .close    = paint_close,
   .canclose = paint_canclose,
 };
+#endif

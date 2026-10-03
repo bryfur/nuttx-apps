@@ -573,6 +573,28 @@ void desk_program_surface_put(NXWINDOW hwnd, int x, int y, int w, int h,
   deskwin_surface_put(ps->d, ps->real, x, y, w, h, pix, stride);
 }
 
+int desk_program_surface_read(NXWINDOW hwnd, int x, int y, int w, int h,
+                              uint16_t *buf, int stride)
+{
+  struct psurf_s *ps = psurf_of(hwnd);
+
+  return deskwin_surface_read(ps->d, ps->real, x, y, w, h, buf, stride);
+}
+
+/* desk_lut_app() in a program: the table to the desktop, through the
+ * session of its (first) window
+ */
+
+void desk_program_lut(uint32_t key, const uint8_t lut[][NX_BLEND_LUT_N])
+{
+  struct prog_s *p = prog_self();
+
+  if (p != NULL && p->wins != NULL)
+    {
+      deskwin_lut(p->wins->d, key, lut);
+    }
+}
+
 void desk_program_surface_close(NXWINDOW hwnd)
 {
   struct psurf_s *ps = psurf_of(hwnd);

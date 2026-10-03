@@ -543,6 +543,7 @@ void desk_surface_put(NXWINDOW hwnd, int x, int y, int w, int h,
 typedef void (*desk_lutmake_t)(uint8_t lut[NX_BLEND_LUT_N][NX_BLEND_LUT_N],
                                int arg);
 void desk_lut_app(uint32_t key, desk_lutmake_t make, int arg);
+void desk_lut_set(uint32_t key, const uint8_t lut[][NX_BLEND_LUT_N]);
 
 /* Send operations: into a window's pixels, or as a layer's display list */
 
@@ -765,6 +766,9 @@ void desk_program_surface_close(NXWINDOW hwnd);
 void desk_program_wake(struct desk_win_s *w);
 void desk_program_surface_put(NXWINDOW hwnd, int x, int y, int w, int h,
                               const uint16_t *pix, int stride);
+int  desk_program_surface_read(NXWINDOW hwnd, int x, int y, int w, int h,
+                               uint16_t *buf, int stride);
+void desk_program_lut(uint32_t key, const uint8_t lut[][NX_BLEND_LUT_N]);
 void desk_program_title(struct desk_win_s *w);
 void desk_program_raise(struct desk_win_s *w);
 void desk_program_sync(struct desk_win_s *w);
@@ -780,6 +784,8 @@ int  desk_program_open(int app, const char *arg);  /* Any task's */
 #  define desk_program_surface_close(hwnd)
 #  define desk_program_wake(w)
 #  define desk_program_surface_put(hwnd, x, y, w, h, pix, stride)
+#  define desk_program_surface_read(hwnd, x, y, w, h, buf, stride) (-ENOSYS)
+#  define desk_program_lut(key, lut)
 #  define desk_program_title(w)
 #  define desk_program_raise(w)
 #  define desk_program_sync(w)

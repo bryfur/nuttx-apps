@@ -108,6 +108,8 @@
 #define CMD_RAISE         20                   /* (Restored, active) */
 #define CMD_BUTTON        21                   /* s: the title bar's button
                                                 * ("": none) */
+#define CMD_LUT           23                   /* key, the table: LUT_APP
+                                                * (desk_lut_app()) */
 #define CMD_PUT           22                   /* surface x y w h, w x h
                                                 * RGB565 pixels: into one of
                                                 * the program's surfaces */
@@ -223,6 +225,20 @@ struct deskwin_s
   int16_t  surfh;
   volatile bool *surflost;             /* The client's: set when lost */
   NXWINDOW surfret;
+
+  /* Pixels to read back from a surface into the client's buffer (the
+   * same memory: the desktop writes them there while it waits)
+   */
+
+  bool     rdreq;
+  void    *rdsurf;
+  int16_t  rdx;
+  int16_t  rdy;
+  int16_t  rdw;
+  int16_t  rdh;
+  uint16_t *rdbuf;
+  int      rdstride;
+  int      rdret;
 
   /* The client's own (its task only) */
 
@@ -2076,6 +2092,39 @@ static void surface_free(struct client_win_s *c, int i)
     }
 }
 
+/* Pixels read back for the program (deskwin_surface_read()) */
+
+static void surface_read(struct client_win_s *c)
+{
+  struct deskwin_s *s = c->s;
+  struct nxgl_rect_s r;
+  int si;
+  int ret = -EINVAL;
+
+  s_lock(s);
+  if (!s->rdreq)
+    {
+      s_unlock(s);
+      return;
+    }
+
+  si = client_surface(c, (uintptr_t)s->rdsurf);
+  if (si >= 0 && s->rdw > 0 && s->rdh > 0)
+    {
+      r.pt1.x = s->rdx;
+      r.pt1.y = s->rdy;
+      r.pt2.x = s->rdx + s->rdw - 1;
+      r.pt2.y = s->rdy + s->rdh - 1;
+      ret = nx_getrectangle(c->surf[si], &r, 0, (uint8_t *)s->rdbuf,
+                            s->rdstride);
+    }
+
+  s->rdreq = false;
+  s->rdret = ret;
+  sem_post(&s->reply);
+  s_unlock(s);
+}
+
 /* A surface that lost its pixels: the program's flag set (its own, in the
  * same memory: it draws the surface again when it sees it)
  */
@@ -2241,6 +2290,17 @@ static void run_cmds(struct client_win_s *c, const uint8_t *buf, size_t n)
             surface_put(c, cmd);
             break;
 
+          case CMD_LUT:
+            ops_draw(e.hwnd, g_out);
+            if (cmd->nargs == 1 && cmd->len >= CMD_HDR + 4 +
+                NX_BLEND_LUT_N * NX_BLEND_LUT_N)
+              {
+                desk_lut_set((uint32_t)arg(cmd, 0),
+                             (const uint8_t (*)[NX_BLEND_LUT_N])
+                             ((const int32_t *)(cmd + 1) + 1));
+              }
+            break;
+
           case CMD_SURFFREE:
             ops_draw(e.hwnd, g_out);
             surface_free(c, client_surface(c, (uint32_t)arg(cmd, 0)));
@@ -2283,6 +2343,7 @@ static void client_wake(struct desk_win_s *w)
   image_request(c);
   surfaces_lost(c);
   surface_request(c);
+  surface_read(c);
 
   s_lock(s);
   if (s->clientgone && s->npend == 0)
@@ -3119,6 +3180,67 @@ FAR void *deskwin_surface_open(FAR struct deskwin_s *d, int w, int h,
   hwnd = d->gone ? NULL : d->surfret;
   s_unlock(d);
   return hwnd;
+}
+
+/* A blending table (desk_lut_app()) for what the client draws next */
+
+void deskwin_lut(FAR struct deskwin_s *d, uint32_t key,
+                 FAR const uint8_t lut[][NX_BLEND_LUT_N])
+{
+  size_t len = CMD_HDR + 4 + NX_BLEND_LUT_N * NX_BLEND_LUT_N;
+  struct cmd_s *cmd;
+
+  if (d->nbatch + len > BATCH)
+    {
+      deskwin_flush(d, -1);
+    }
+
+  cmd = (struct cmd_s *)(d->batch + d->nbatch);
+  cmd->op    = CMD_LUT;
+  cmd->nargs = 1;
+  cmd->len   = len;
+  ((int32_t *)(cmd + 1))[0] = (int32_t)key;
+  memcpy((int32_t *)(cmd + 1) + 1, lut, NX_BLEND_LUT_N * NX_BLEND_LUT_N);
+  d->nbatch += len;
+}
+
+/* Pixels back from a surface (RGB565, stride bytes a row) into buf: waits */
+
+int deskwin_surface_read(FAR struct deskwin_s *d, FAR void *surface, int x,
+                         int y, int w, int h, FAR uint16_t *buf, int stride)
+{
+  int ret = deskwin_flush(d, -1);
+
+  if (ret < 0)
+    {
+      return ret;
+    }
+
+  s_lock(d);
+  d->rdsurf   = surface;
+  d->rdx      = x;
+  d->rdy      = y;
+  d->rdw      = w;
+  d->rdh      = h;
+  d->rdbuf    = buf;
+  d->rdstride = stride;
+  d->rdreq    = true;
+  while (d->rdreq && !d->gone)
+    {
+      if (d->win != NULL)
+        {
+          desk_wake(d->win);
+        }
+
+      s_unlock(d);
+      timed_wait(&d->reply, 1000);
+      s_lock(d);
+    }
+
+  ret = d->gone ? -EPIPE : d->rdret;
+  d->rdreq = false;
+  s_unlock(d);
+  return ret;
 }
 
 /* Pixels (RGB565, stride bytes a row) into a surface at (x, y), in as many

@@ -751,18 +751,47 @@ void desk_luts_init(void)
  *
  ****************************************************************************/
 
+static uint32_t g_lutloaded;             /* LUT_APP's key (0: unknown) */
+
 void desk_lut_app(uint32_t key, desk_lutmake_t make, int arg)
 {
   static uint8_t lut[NX_BLEND_LUT_N][NX_BLEND_LUT_N];
-  static uint32_t loaded;
 
-  if (key != 0 && key == loaded)
+  if (desk_program_self())
+    {
+      uint8_t (*mine)[NX_BLEND_LUT_N] = malloc(sizeof(lut));
+
+      /* A program's: made here, loaded by the desktop (deskwin) */
+
+      if (mine != NULL)
+        {
+          make(mine, arg);
+          desk_program_lut(key, mine);
+          free(mine);
+        }
+
+      return;
+    }
+
+  if (key != 0 && key == g_lutloaded)
     {
       return;
     }
 
   make(lut, arg);
-  loaded = nx_setlut(g_desk.hnx, LUT_APP, lut) < 0 ? 0 : key;
+  desk_lut_set(key, lut);
+}
+
+/* A table made elsewhere (a program's, desk_client.c) into LUT_APP */
+
+void desk_lut_set(uint32_t key, const uint8_t lut[][NX_BLEND_LUT_N])
+{
+  if (key != 0 && key == g_lutloaded)
+    {
+      return;
+    }
+
+  g_lutloaded = nx_setlut(g_desk.hnx, LUT_APP, lut) < 0 ? 0 : key;
 }
 
 /****************************************************************************

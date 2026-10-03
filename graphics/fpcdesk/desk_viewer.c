@@ -17,6 +17,10 @@
  *   - the images of the folder in turn (arrow keys, the buttons) and a
  *     slideshow: a thread wakes the viewer every few seconds; it decodes
  *     the next image and fades it in over the current one, a BLEND a step.
+ *
+ * A program of its own (/mnt/sd0/bin/viewer, apps/graphics/deskapps):
+ * built into the desktop (DESK_PROGRAM_STUB) this file is only the icon
+ * and the name the dock shows (desk_program.c).
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -75,6 +79,8 @@
 #define Z_EDIT         8
 #define Z_OK           9
 #define Z_CANCEL       10
+
+#ifndef DESK_PROGRAM_STUB
 
 /****************************************************************************
  * Private Types
@@ -1574,6 +1580,8 @@ static void viewer_close(struct desk_win_s *w)
   sem_destroy(&v->ack);
 }
 
+#endif /* !DESK_PROGRAM_STUB */
+
 static void viewer_icon(struct desk_ops_s *o, int x, int y, int s,
                         uint8_t a)
 {
@@ -1593,6 +1601,7 @@ static void viewer_icon(struct desk_ops_s *o, int x, int y, int s,
               RGB(0x2a, 0x8c, 0x44), a);
 }
 
+#ifndef DESK_PROGRAM_STUB
 static struct desk_win_s *viewer_open(void)
 {
   const char *path = g_openpath;
@@ -1651,6 +1660,7 @@ static struct desk_win_s *viewer_open(void)
  * Public Functions
  ****************************************************************************/
 
+#ifndef DESK_PROGRAM_STUB
 int desk_viewer_open(const char *path)
 {
   struct desk_win_s *w;
@@ -1686,11 +1696,33 @@ int desk_viewer_open(const char *path)
   g_openpath = NULL;
   return 0;
 }
+#endif
+
+#endif /* !DESK_PROGRAM_STUB */
 
 /****************************************************************************
  * Public Data
  ****************************************************************************/
 
+#ifdef DESK_PROGRAM_STUB
+int desk_viewer_open(const char *path)
+{
+  if (desk_program_self())
+    {
+      return desk_open_post(APP_VIEWER, path);   /* The desktop's thread */
+    }
+
+  if (path == NULL)
+    {
+      desk_launch(APP_VIEWER);
+      return 0;
+    }
+
+  return desk_program_open(APP_VIEWER, path);    /* Its program, with it */
+}
+
+DESK_PROGRAM_APP(g_app_viewer, "Image Viewer", viewer_icon, "viewer", true);
+#else
 const struct desk_app_s g_app_viewer =
 {
   .name   = "Image Viewer",
@@ -1704,3 +1736,4 @@ const struct desk_app_s g_app_viewer =
   .close  = viewer_close,
   .single = true,
 };
+#endif
