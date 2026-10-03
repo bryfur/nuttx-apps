@@ -266,6 +266,10 @@ struct client_win_s
   uint8_t *keep;                       /* What was drawn since a clear */
   size_t   nkeep;
   bool     keepok;                     /* ... all of it */
+  bool     nokeep;                     /* Never: an application's program
+                                        * (desk_program.c) draws again when
+                                        * asked (DESKWIN_EV_EXPOSE), and
+                                        * the copy is 48 KB */
 
   /* Images */
 
@@ -1224,6 +1228,11 @@ static int where(struct client_win_s *c, const struct kit_rect_s *area,
 
 static void keep(struct client_win_s *c, const struct cmd_s *cmd)
 {
+  if (c->nokeep)
+    {
+      return;
+    }
+
   if (cmd->op == CMD_CLEAR)
     {
       c->nkeep  = 0;
@@ -2678,7 +2687,8 @@ static void client_open(struct deskwin_s *s)
   c->kind   = PYTHON_CLIENT;
   c->s      = s;
   c->w      = w;
-  c->keepok = true;
+  c->nokeep = s->app >= 0;
+  c->keepok = !c->nokeep;
   w->priv   = c;
   w->pid    = s->pid;
   w->client = true;
