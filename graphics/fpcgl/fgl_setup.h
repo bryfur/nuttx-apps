@@ -36,7 +36,9 @@ struct fgl_svert_s
 #define FGL_TRI_RGB    0x08
 #define FGL_TRI_MONO   0x10
 
-#define FGL_TRI_MAX    30                 /* Words of the longest TRI */
+#define FGL_POLY_MAX   16                 /* A polygon's vertices at most */
+#define FGL_SEG_MAX    15                 /* ... its segments (TRI's nseg) */
+#define FGL_TRI_MAX    (2 + 21 + 5 * FGL_SEG_MAX)   /* Words of the longest TRI */
 
 /* The TRI job for the triangle (any winding) with the attributes flags
  * asks for (FGL_TRI_*), into j[]; wrap: tw, th, a power of two each, by
@@ -47,5 +49,15 @@ struct fgl_svert_s
 int fgl_setup(const struct fgl_svert_s *a, const struct fgl_svert_s *b,
               const struct fgl_svert_s *c, int flags, int tw, int th,
               uint32_t *j);
+
+/* The same for a convex, flat polygon of n vertices (3..FGL_POLY_MAX, in
+ * order, either winding): one TRI of up to FGL_SEG_MAX segments; 0 if it
+ * covers no pixel centre, -1 if it needs more segments or its colours are
+ * not planar (the caller draws it as triangles).  Its attributes are the
+ * plane through three of its vertices
+ */
+
+int fgl_setup_poly(const struct fgl_svert_s *v, int n, int flags, int tw,
+                   int th, uint32_t *j);
 
 #endif /* __APPS_GRAPHICS_FPCGL_FGL_SETUP_H */

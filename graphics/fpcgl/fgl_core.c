@@ -772,17 +772,42 @@ static void polygon(const struct fgl_v_s *v, int n, int provoking)
 
   fl = state_for(shade, mono);
   wrap = (fl & FGL_TRI_UV) && !(g_fgl.st[0] & (64 << 8));
-  for (i = 1; i + 1 < n; i++)
-    {
-      uint32_t j[FGL_TRI_MAX];
-      int nw = fgl_setup(&sv[0], &sv[i], &sv[i + 1], fl,
-                         wrap ? (int)tw : 0, wrap ? (int)th : 0, j);
 
+  /* One TRI for each fan of up to FGL_POLY_MAX vertices from the first
+   * (most polygons: one), by triangles where one needs more segments than
+   * a TRI has
+   */
+
+  for (i = 1; i + 1 < n; )
+    {
+      struct fgl_svert_s c[FGL_POLY_MAX];
+      uint32_t j[FGL_TRI_MAX];
+      int m = n - i + 1 < FGL_POLY_MAX ? n - i + 1 : FGL_POLY_MAX;
+      int nw;
+
+      c[0] = sv[0];
+      memcpy(&c[1], &sv[i], (size_t)(m - 1) * sizeof(c[0]));
+      nw = fgl_setup_poly(c, m, fl, wrap ? (int)tw : 0, wrap ? (int)th : 0, j);
       if (nw > 0)
         {
           job(j, nw);
           g_fgl.ntri++;
         }
+      else if (nw < 0)
+        {
+          for (k = 1; k + 1 < m; k++)
+            {
+              nw = fgl_setup(&c[0], &c[k], &c[k + 1], fl,
+                             wrap ? (int)tw : 0, wrap ? (int)th : 0, j);
+              if (nw > 0)
+                {
+                  job(j, nw);
+                  g_fgl.ntri++;
+                }
+            }
+        }
+
+      i += m - 2;
     }
 }
 
