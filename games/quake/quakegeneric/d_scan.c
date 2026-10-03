@@ -246,7 +246,7 @@ void Turbulent8 (espan_t *pspan)
 D_DrawSpans8
 =============
 */
-void D_DrawSpans8 (espan_t *pspan)
+FPCQ_FAST void D_DrawSpans8 (espan_t *pspan)
 {
 	int				count, spancount;
 	unsigned char	*pbase, *pdest;
@@ -379,7 +379,7 @@ void D_DrawSpans8 (espan_t *pspan)
 D_DrawZSpans
 =============
 */
-void D_DrawZSpans (espan_t *pspan)
+FPCQ_FAST void D_DrawZSpans (espan_t *pspan)
 {
 	int				count, doublecount, izistep;
 	int				izi;

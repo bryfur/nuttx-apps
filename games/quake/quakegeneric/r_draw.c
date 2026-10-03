@@ -74,7 +74,7 @@ qboolean	r_lastvertvalid;
 R_EmitEdge
 ================
 */
-void R_EmitEdge (mvertex_t *pv0, mvertex_t *pv1)
+FPCQ_FAST void R_EmitEdge (mvertex_t *pv0, mvertex_t *pv1)
 {
 	edge_t	*edge, *pcheck;
 	int		u_check;
@@ -253,7 +253,7 @@ void R_EmitEdge (mvertex_t *pv0, mvertex_t *pv1)
 R_ClipEdge
 ================
 */
-void R_ClipEdge (mvertex_t *pv0, mvertex_t *pv1, clipplane_t *clip)
+FPCQ_FAST void R_ClipEdge (mvertex_t *pv0, mvertex_t *pv1, clipplane_t *clip)
 {
 	float		d0, d1, f;
 	mvertex_t	clipvert;
@@ -377,7 +377,7 @@ void R_EmitCachedEdge (void)
 R_RenderFace
 ================
 */
-void R_RenderFace (msurface_t *fa, int clipflags)
+FPCQ_FAST void R_RenderFace (msurface_t *fa, int clipflags)
 {
 	int			i, lindex;
 	unsigned	mask;

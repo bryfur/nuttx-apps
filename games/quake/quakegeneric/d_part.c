@@ -49,7 +49,7 @@ void D_StartParticles (void)
 D_DrawParticle
 ==============
 */
-void D_DrawParticle (particle_t *pparticle)
+FPCQ_FAST void D_DrawParticle (particle_t *pparticle)
 {
 	vec3_t	local, transformed;
 	float	zi;

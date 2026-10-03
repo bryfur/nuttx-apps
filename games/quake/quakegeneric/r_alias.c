@@ -72,7 +72,7 @@ float	r_avertexnormals[NUMVERTEXNORMALS][3] = {
 #include "anorms.h"
 };
 
-void R_AliasTransformAndProjectFinalVerts (finalvert_t *fv,
+FPCQ_FAST void R_AliasTransformAndProjectFinalVerts (finalvert_t *fv,
 	stvert_t *pstverts);
 void R_AliasSetUpTransform (int trivial_accept);
 void R_AliasTransformVector (vec3_t in, vec3_t out);
@@ -453,7 +453,7 @@ void R_AliasTransformFinalVert (finalvert_t *fv, auxvert_t *av,
 R_AliasTransformAndProjectFinalVerts
 ================
 */
-void R_AliasTransformAndProjectFinalVerts (finalvert_t *fv, stvert_t *pstverts)
+FPCQ_FAST void R_AliasTransformAndProjectFinalVerts (finalvert_t *fv, stvert_t *pstverts)
 {
 	int			i, temp;
 	float		lightcos, *plightnormal, zi;

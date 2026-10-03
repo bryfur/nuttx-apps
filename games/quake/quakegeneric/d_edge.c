@@ -120,7 +120,7 @@ void D_DrawSolidSurface (surf_t *surf, int color)
 D_CalcGradients
 ==============
 */
-void D_CalcGradients (msurface_t *pface)
+FPCQ_FAST void D_CalcGradients (msurface_t *pface)
 {
 	mplane_t	*pplane;
 	float		mipscale;
@@ -171,7 +171,7 @@ void D_CalcGradients (msurface_t *pface)
 D_DrawSurfaces
 ==============
 */
-void D_DrawSurfaces (void)
+FPCQ_FAST void D_DrawSurfaces (void)
 {
 	surf_t			*s;
 	msurface_t		*pface;

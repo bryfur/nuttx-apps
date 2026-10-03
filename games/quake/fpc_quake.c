@@ -9,11 +9,10 @@
  * in 1280 x 800, each frame one PUT looked up in the palette on its way
  * into the link, two canvases taken in turn.
  *
- * In a flat build a program's variables keep the last run's values and
- * what it allocated stays allocated when it ends, so the game's data and
- * bss (one block each, quake.ld) are put back as built at every start,
- * and everything it allocates (fpc_quake.h) comes from one heap of its
- * own, the hunk and the rest, which goes back whole at the end.
+ * A loadable module: the loader gives it its code and variables for the
+ * time it runs.  What the game allocates (fpc_quake.h) comes from a heap
+ * of its own and the hunk, which go back whole when it ends (a flat build
+ * frees nothing a task allocated itself).
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -56,15 +55,6 @@
  * Private Data
  ****************************************************************************/
 
-/* The game's block (quake.ld) */
-
-extern char __quake_data_start[];
-extern char __quake_data_end[];
-extern char __quake_bss_start[];
-extern char __quake_bss_end[];
-
-static void *g_data0;                     /* The data as built */
-
 static struct mm_heap_s *g_heap;          /* The game's own */
 static void *g_heapmem;
 static size_t g_heapsize;
@@ -94,33 +84,6 @@ static struct
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
-
-/* The game's variables as built: the data saved at the first start put
- * back, the bss cleared
- */
-
-static int state_restore(void)
-{
-  size_t len = __quake_data_end - __quake_data_start;
-
-  if (g_data0 == NULL)
-    {
-      g_data0 = malloc(len);
-      if (g_data0 == NULL)
-        {
-          return -1;
-        }
-
-      memcpy(g_data0, __quake_data_start, len);
-    }
-  else
-    {
-      memcpy(__quake_data_start, g_data0, len);
-    }
-
-  memset(__quake_bss_start, 0, __quake_bss_end - __quake_bss_start);
-  return 0;
-}
 
 static void heap_destroy(void)
 {
@@ -158,7 +121,6 @@ static int heap_create(void)
 {
   size_t hunk = fpcq_hunk_size();
 
-  heap_destroy();                         /* (A game that was killed) */
   g_hunk = malloc(hunk);
   g_heapsize = (size_t)CONFIG_GAMES_QUAKE_HEAPSIZE * 1024;
   g_heapmem = g_hunk != NULL ? malloc(g_heapsize) : NULL;
@@ -497,13 +459,6 @@ int main(int argc, char *argv[])
 
   g_argc = argc;
   g_argv = argv;
-  memset(&g_fs, 0, sizeof(g_fs));
-  if (state_restore() < 0)
-    {
-      fprintf(stderr, "quake: no memory to keep the game's data\n");
-      return EXIT_FAILURE;
-    }
-
   if (heap_create() < 0)
     {
       return EXIT_FAILURE;

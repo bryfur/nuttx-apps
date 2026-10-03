@@ -39,6 +39,13 @@ const char *fpcq_basedir(void);
 
 void fpcq_exit(int code) __attribute__((noreturn));
 
+/* A function the renderer spends its time in: run from the SRAM rather
+ * than from the flash through the XIP cache the game's data in the PSRAM
+ * thrashes (.time_critical, copied to the SRAM at boot)
+ */
+
+#define FPCQ_FAST __attribute__((section(".time_critical.quake")))
+
 /* (Not in fpc_quake.c itself, which allocates the heap) */
 
 #ifndef FPCQ_PLATFORM

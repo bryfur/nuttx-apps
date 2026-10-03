@@ -261,7 +261,7 @@ int D_log2 (int num)
 D_CacheSurface
 ================
 */
-surfcache_t *D_CacheSurface (msurface_t *surface, int miplevel)
+FPCQ_FAST surfcache_t *D_CacheSurface (msurface_t *surface, int miplevel)
 {
 	surfcache_t     *cache;
 

@@ -37,10 +37,10 @@ int				r_lightwidth;
 int				r_numhblocks, r_numvblocks;
 unsigned char	*r_source, *r_sourcemax;
 
-void R_DrawSurfaceBlock8_mip0 (void);
-void R_DrawSurfaceBlock8_mip1 (void);
-void R_DrawSurfaceBlock8_mip2 (void);
-void R_DrawSurfaceBlock8_mip3 (void);
+FPCQ_FAST void R_DrawSurfaceBlock8_mip0 (void);
+FPCQ_FAST void R_DrawSurfaceBlock8_mip1 (void);
+FPCQ_FAST void R_DrawSurfaceBlock8_mip2 (void);
+FPCQ_FAST void R_DrawSurfaceBlock8_mip3 (void);
 
 static void	(*surfmiptable[4])(void) = {
 	R_DrawSurfaceBlock8_mip0,
@@ -228,7 +228,7 @@ texture_t *R_TextureAnimation (texture_t *base)
 R_DrawSurface
 ===============
 */
-void R_DrawSurface (void)
+FPCQ_FAST void R_DrawSurface (void)
 {
 	unsigned char	*basetptr;
 	int				smax, tmax, twidth;
@@ -311,7 +311,7 @@ void R_DrawSurface (void)
 R_DrawSurfaceBlock8_mip0
 ================
 */
-void R_DrawSurfaceBlock8_mip0 (void)
+FPCQ_FAST void R_DrawSurfaceBlock8_mip0 (void)
 {
 	int				v, i, b, lightstep, lighttemp, light;
 	unsigned char	pix, *psource, *prowdest;
@@ -361,7 +361,7 @@ void R_DrawSurfaceBlock8_mip0 (void)
 R_DrawSurfaceBlock8_mip1
 ================
 */
-void R_DrawSurfaceBlock8_mip1 (void)
+FPCQ_FAST void R_DrawSurfaceBlock8_mip1 (void)
 {
 	int				v, i, b, lightstep, lighttemp, light;
 	unsigned char	pix, *psource, *prowdest;
@@ -411,7 +411,7 @@ void R_DrawSurfaceBlock8_mip1 (void)
 R_DrawSurfaceBlock8_mip2
 ================
 */
-void R_DrawSurfaceBlock8_mip2 (void)
+FPCQ_FAST void R_DrawSurfaceBlock8_mip2 (void)
 {
 	int				v, i, b, lightstep, lighttemp, light;
 	unsigned char	pix, *psource, *prowdest;
@@ -461,7 +461,7 @@ void R_DrawSurfaceBlock8_mip2 (void)
 R_DrawSurfaceBlock8_mip3
 ================
 */
-void R_DrawSurfaceBlock8_mip3 (void)
+FPCQ_FAST void R_DrawSurfaceBlock8_mip3 (void)
 {
 	int				v, i, b, lightstep, lighttemp, light;
 	unsigned char	pix, *psource, *prowdest;

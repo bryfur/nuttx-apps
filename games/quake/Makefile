@@ -37,46 +37,41 @@ GAMESRCS := $(addprefix $(QG)/,$(GAMESRCS))
 
 MAINSRC = fpc_quake.c
 
-# The game's objects linked into one (quake.ld) with a single data and a
-# single bss block, in the PSRAM, which fpc_quake.c puts back as built at
-# every start (in a flat build they would otherwise keep the last game's
-# values); every allocation of theirs from the game's own heap (fpc_quake.h)
-
-GAMEBLOCK = quake_game$(OBJEXT)
-EXTOBJS  += $(GAMEBLOCK)
-GAMELD    = quake.ld
-
 # -fno-short-enums: enums as wide as an int, as on the game's own
 # platforms (arm-none-eabi makes them a byte where it can): qboolean holds
 # a flag bit, and the model and sprite headers read from the files have
 # enums in them
 
 GAMEFLAGS = -include fpc_quake.h -fno-short-enums
+
+# The M33's FPU is single precision: a constant like 0.5 made the float
+# arithmetic around it double, in software (7 % of a frame)
+
+GAMEFLAGS += -fsingle-precision-constant
 GAMEFLAGS += -Wno-unused-variable -Wno-unused-but-set-variable
 GAMEFLAGS += -Wno-unused-function -Wno-pointer-sign -Wno-dangling-else
 GAMEFLAGS += -Wno-misleading-indentation -Wno-parentheses -Wno-format
 GAMEFLAGS += -Wno-strict-prototypes -Wno-shadow -Wno-undef
 
-include $(APPDIR)/Application.mk
+# A loadable module (/mnt/sd0/bin/quake): its code and variables are the
+# loader's for the time the game runs, nothing in the firmware's memory
+# the rest of the time.  The game's objects go into the module itself, not
+# into libapps.a (the module link would take NSH's cmd_alias for the game's
+# from there), ahead of the libraries; they get GAMEFLAGS, fpc_quake.c,
+# which allocates the game's heap, does not.
 
 GAMEOBJS = $(GAMESRCS:%=$(PREFIX)%$(SUFFIX)$(OBJEXT))
+LDLIBS = $(GAMEOBJS)
+$(foreach f,$(GAMESRCS),$(eval $(f)_CELFFLAGS += $(GAMEFLAGS) -MMD -MP -MF $(f)$(SUFFIX)$(OBJEXT).d))
+
+include $(APPDIR)/Application.mk
 
 $(GAMEOBJS): $(PREFIX)%.c$(SUFFIX)$(OBJEXT): %.c
-	$(call COMPILE, $<, $@, $(GAMEFLAGS) -MMD -MP -MF $@.d)
+	$(call ELFCOMPILE, $<, $@)
 
-# Only what fpc_quake.c calls stays global: the game's names (cmd_alias,
-# gammatable, ...) would clash with NSH's and Doom's in a flat build
-
-GAMEKEEP  = QG_Create QG_Tick Sys_FloatTime
-GAMEKEEP += __quake_data_start __quake_data_end __quake_bss_start
-GAMEKEEP += __quake_bss_end
-
-$(GAMEBLOCK): $(GAMEOBJS) $(GAMELD)
-	$(Q) $(LD) -r -T $(GAMELD) -o $@ $(GAMEOBJS)
-	$(Q) $(OBJCOPY) $(addprefix --keep-global-symbol=,$(GAMEKEEP)) $@
+$(PROGLIST): $(GAMEOBJS)
 
 -include $(GAMEOBJS:=.d)
 
 clean::
-	$(call DELFILE, $(GAMEBLOCK))
 	$(Q) rm -f $(GAMEOBJS) $(GAMEOBJS:=.d)

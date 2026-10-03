@@ -65,12 +65,12 @@ edge_t	edge_sentinel;
 
 float	fv;
 
-void R_GenerateSpans (void);
-void R_GenerateSpansBackward (void);
+FPCQ_FAST void R_GenerateSpans (void);
+FPCQ_FAST void R_GenerateSpansBackward (void);
 
-void R_LeadingEdge (edge_t *edge);
+FPCQ_FAST void R_LeadingEdge (edge_t *edge);
 void R_LeadingEdgeBackwards (edge_t *edge);
-void R_TrailingEdge (surf_t *surf, edge_t *edge);
+FPCQ_FAST void R_TrailingEdge (surf_t *surf, edge_t *edge);
 
 
 //=============================================================================
@@ -167,7 +167,7 @@ sentinel at the end (actually, this is the active edge table starting at
 edge_head.next).
 ==============
 */
-void R_InsertNewEdges (edge_t *edgestoadd, edge_t *edgelist)
+FPCQ_FAST void R_InsertNewEdges (edge_t *edgestoadd, edge_t *edgelist)
 {
 	edge_t	*next_edge;
 
@@ -203,7 +203,7 @@ addedge:
 R_RemoveEdges
 ==============
 */
-void R_RemoveEdges (edge_t *pedge)
+FPCQ_FAST void R_RemoveEdges (edge_t *pedge)
 {
 
 	do
@@ -218,7 +218,7 @@ void R_RemoveEdges (edge_t *pedge)
 R_StepActiveU
 ==============
 */
-void R_StepActiveU (edge_t *pedge)
+FPCQ_FAST void R_StepActiveU (edge_t *pedge)
 {
 	edge_t		*pnext_edge, *pwedge;
 
@@ -283,7 +283,7 @@ pushback:
 R_CleanupSpan
 ==============
 */
-void R_CleanupSpan ()
+FPCQ_FAST void R_CleanupSpan ()
 {
 	surf_t	*surf;
 	int		iu;
@@ -397,7 +397,7 @@ gotposition:
 R_TrailingEdge
 ==============
 */
-void R_TrailingEdge (surf_t *surf, edge_t *edge)
+FPCQ_FAST void R_TrailingEdge (surf_t *surf, edge_t *edge)
 {
 	espan_t			*span;
 	int				iu;
@@ -438,7 +438,7 @@ void R_TrailingEdge (surf_t *surf, edge_t *edge)
 R_LeadingEdge
 ==============
 */
-void R_LeadingEdge (edge_t *edge)
+FPCQ_FAST void R_LeadingEdge (edge_t *edge)
 {
 	espan_t			*span;
 	surf_t			*surf, *surf2;
@@ -566,7 +566,7 @@ gotposition:
 R_GenerateSpans
 ==============
 */
-void R_GenerateSpans (void)
+FPCQ_FAST void R_GenerateSpans (void)
 {
 	edge_t			*edge;
 	surf_t			*surf;
@@ -602,7 +602,7 @@ void R_GenerateSpans (void)
 R_GenerateSpansBackward
 ==============
 */
-void R_GenerateSpansBackward (void)
+FPCQ_FAST void R_GenerateSpansBackward (void)
 {
 	edge_t			*edge;
 
@@ -638,7 +638,7 @@ Output:
 Each surface has a linked list of its visible spans
 ==============
 */
-void R_ScanEdges (void)
+FPCQ_FAST void R_ScanEdges (void)
 {
 	int		iv, bottom;
 	// FPC: not on the stack (48 KB): allocated once, in the SRAM if there

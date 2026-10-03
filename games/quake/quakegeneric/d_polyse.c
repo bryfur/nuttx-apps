@@ -106,13 +106,13 @@ byte	*skintable[MAX_LBM_HEIGHT];
 int		skinwidth;
 byte	*skinstart;
 
-void D_PolysetDrawSpans8 (spanpackage_t *pspanpackage);
+FPCQ_FAST void D_PolysetDrawSpans8 (spanpackage_t *pspanpackage);
 void D_PolysetCalcGradients (int skinwidth);
 void D_DrawSubdiv (void);
 void D_DrawNonSubdiv (void);
 void D_PolysetRecursiveTriangle (int *p1, int *p2, int *p3);
 void D_PolysetSetEdgeTable (void);
-void D_RasterizeAliasPolySmooth (void);
+FPCQ_FAST void D_RasterizeAliasPolySmooth (void);
 void D_PolysetScanLeftEdge (int height);
 
 /*
@@ -592,7 +592,7 @@ void InitGel (byte *palette)
 D_PolysetDrawSpans8
 ================
 */
-void D_PolysetDrawSpans8 (spanpackage_t *pspanpackage)
+FPCQ_FAST void D_PolysetDrawSpans8 (spanpackage_t *pspanpackage)
 {
 	int		lcount;
 	byte	*lpdest;
@@ -698,7 +698,7 @@ void D_PolysetFillSpans8 (spanpackage_t *pspanpackage)
 D_RasterizeAliasPolySmooth
 ================
 */
-void D_RasterizeAliasPolySmooth (void)
+FPCQ_FAST void D_RasterizeAliasPolySmooth (void)
 {
 	int				initialleftheight, initialrightheight;
 	int				*plefttop, *prighttop, *pleftbottom, *prightbottom;
