@@ -487,6 +487,8 @@ r_refdef.viewangles[2]=    0;
 		r_viewchanged = false;
 	}
 
+	fpcq_g3_frame (r_dowarp);	// FPC: the GPU's world this frame?
+
 // start off with just the four screen edge clip planes
 	R_TransformFrustum ();
 

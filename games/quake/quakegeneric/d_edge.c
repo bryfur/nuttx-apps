@@ -296,20 +296,42 @@ FPCQ_FAST void D_DrawSurfaces (void)
 				miplevel = D_MipLevelForScale (s->nearzi * scale_for_mip
 				* pface->texinfo->mipadjust);
 
+				// FPC: textured by the GPU (fpc_gpu3d.c): the depth here (the
+				// models are tested against it), the surface built, uploaded
+				// and given to the GPU by the other core (fpc_drawq.c)
+				if (fpcq_g3_drawing () && fpcq_g3_fits (pface, miplevel))
+				{
+					texture_t *tex = R_TextureAnimation (pface->texinfo->texture);
+
+					D_CalcGradients (pface);
+					D_DrawZSpans (s->spans);
+					if (!fpcq_g3_queue (s->spans, pface, miplevel, tex))
+					{
+						pcurrentcache = D_CacheSurfaceTex (pface, miplevel, tex);
+						if (fpcq_g3_surface (pcurrentcache))
+							fpcq_g3_spans (s->spans, pcurrentcache);
+					}
+				}
+				else
+				{
+					if (fpcq_g3_drawing ())
+						fpcq_g3_cpu ();		// (the other core builds surfaces meanwhile)
+
 			// FIXME: make this passed in to D_CacheSurface
-				pcurrentcache = D_CacheSurface (pface, miplevel);
+					pcurrentcache = D_CacheSurface (pface, miplevel);
 
-				cacheblock = (pixel_t *)pcurrentcache->data;
-				cachewidth = pcurrentcache->width;
+					cacheblock = (pixel_t *)pcurrentcache->data;
+					cachewidth = pcurrentcache->width;
 
-				D_CalcGradients (pface);
+					D_CalcGradients (pface);
 
 				// FPC: drawn on the other core where it can be
-				if (!fpcq_dq_surface (s->spans, pcurrentcache))
-				{
-					(*d_drawspans) (s->spans);
+					if (!fpcq_dq_surface (s->spans, pcurrentcache))
+					{
+						(*d_drawspans) (s->spans);
 
-					D_DrawZSpans (s->spans);
+						D_DrawZSpans (s->spans);
+					}
 				}
 
 				if (s->insubmodel)
@@ -332,6 +354,6 @@ FPCQ_FAST void D_DrawSurfaces (void)
 		}
 	}
 
-	fpcq_dq_wait ();	// FPC: the other core's spans drawn
+	fpcq_dq_batch_end ();	// FPC: what the other core draws into the frame drawn
 }
 

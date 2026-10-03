@@ -19,6 +19,16 @@
  *
  * Like NXDoom's draw queue (r_draw.c): the ring in the SRAM, spun on by
  * both cores, the drawer asleep between batches.
+ *
+ * With the GPU drawing the world (fpc_gpu3d.c) the other core builds the
+ * surfaces' cache blocks, uploads them and gives the GPU their spans
+ * (fpcq_g3_queue()), while the game draws the models, particles and the
+ * status bar into the frame: those entries draw nothing into the frame,
+ * so D_DrawSurfaces does not wait for them, the frame's trip to the GPU
+ * does (fpcq_dq_wait()).  Their spans are copied (D_DrawSurfaces' are
+ * reused) and the gradients and texture frame taken as they were.  Only
+ * the other core builds surfaces then: the game's own (a surface the atlas
+ * cannot take) waits for it first (fpcq_g3_cpu()).
  ****************************************************************************/
 
 #include "quakedef.h"
@@ -32,6 +42,8 @@
 
 #include <nuttx/kmalloc.h>
 
+#include "fpc_gpu.h"
+
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
@@ -39,6 +51,7 @@
 #define DQ_MOST     128                   /* Entries, a power of two */
 #define DQ_LEAST    16
 #define DQ_STACK    2048                  /* The drawer's */
+#define DQ_SPANS    8192                  /* Spans copied for the GPU's entries */
 
 /****************************************************************************
  * Private Types
@@ -50,6 +63,10 @@ struct dq_s
   espan_t *spans;
   const byte *from;                       /* The cache block it reads */
   const byte *to;
+  qboolean zonly;                         /* The depth only (the GPU textures it) */
+  msurface_t *g3face;                     /* The GPU's: built, uploaded, its spans given */
+  int g3mip;
+  texture_t *g3tex;
 };
 
 /****************************************************************************
@@ -65,6 +82,9 @@ static struct
   uint32_t done;                          /* Entries drawn */
   bool batch;                             /* In D_DrawSurfaces */
   bool ending;                            /* ... its end: nothing more */
+  bool cpu;                               /* Entries that draw into the frame */
+  espan_t *spans;                         /* The GPU's entries' spans (the game's heap) */
+  int nspans;
   bool quit;
   bool tried;
   pthread_t thread;
@@ -76,6 +96,13 @@ static struct
                                                    * claim) does not work
                                                    * through the XIP cache */
 
+struct dqt_s
+{
+  uint64_t build, upload, spans;          /* us: the GPU's entries' parts */
+};
+
+static struct dqt_s g_dqt;
+
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
@@ -86,12 +113,13 @@ static struct
  * noted the last (fpcq_dq_wait()).
  */
 
-FPCQ_FAST static qboolean dq_take(void)
+FPCQ_FAST static qboolean dq_take(qboolean game)
 {
   uint32_t c = __atomic_load_n(&g_dq.claim, __ATOMIC_ACQUIRE);
   const struct dq_s *e;
 
   if (c == __atomic_load_n(&g_dq.head, __ATOMIC_ACQUIRE) ||
+      (game && g_dq.ring[c & (g_dq.size - 1)].g3face != NULL) ||   /* (the drawer's only) */
       !__atomic_compare_exchange_n(&g_dq.claim, &c, c + 1, false,
                                    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
     {
@@ -99,7 +127,32 @@ FPCQ_FAST static qboolean dq_take(void)
     }
 
   e = &g_dq.ring[c & (g_dq.size - 1)];
-  D_DrawSpans8Ctx(&e->c, e->spans);
+  if (e->g3face != NULL)
+    {
+      uint32_t t0 = fpc_gpu_game_us();
+      surfcache_t *sc = D_CacheSurfaceTex(e->g3face, e->g3mip, e->g3tex);
+      uint32_t t1 = fpc_gpu_game_us();
+      qboolean ok = fpcq_g3_surface(sc);
+      uint32_t t2 = fpc_gpu_game_us();
+
+      if (ok)
+        {
+          fpcq_g3_spans_ctx(e->spans, sc, &e->c);
+        }
+
+      g_dqt.build += t1 - t0;
+      g_dqt.upload += t2 - t1;
+      g_dqt.spans += fpc_gpu_game_us() - t2;
+
+      __atomic_add_fetch(&g_dq.done, 1, __ATOMIC_RELEASE);
+      return true;
+    }
+
+  if (!e->zonly)
+    {
+      D_DrawSpans8Ctx(&e->c, e->spans);
+    }
+
   D_DrawZSpansCtx(&e->c, e->spans);
   __atomic_add_fetch(&g_dq.done, 1, __ATOMIC_RELEASE);
   return true;
@@ -115,7 +168,7 @@ FPCQ_FAST static void *dq_main(void *arg)
       sem_wait(&g_dq.go);
       for (; ; )
         {
-          if (dq_take())
+          if (dq_take(false))
             {
               continue;
             }
@@ -198,6 +251,17 @@ static qboolean dq_start(void)
   pthread_getschedparam(pthread_self(), &policy, &param);
   param.sched_priority--;
   g_dq.stack = malloc(DQ_STACK);
+  g_dq.spans = malloc(DQ_SPANS * sizeof(espan_t));
+  g_dq.nspans = 0;
+  if (g_dq.spans == NULL)
+    {
+      kmm_free(g_dq.ring);
+      g_dq.ring = NULL;
+      free(g_dq.stack);
+      g_dq.stack = NULL;
+      return false;
+    }
+
   pthread_attr_init(&attr);
   if (g_dq.stack != NULL)
     {
@@ -260,8 +324,124 @@ FPCQ_FAST qboolean fpcq_dq_surface(espan_t *spans, surfcache_t *cache)
   e->spans = spans;
   e->from  = (const byte *)cache;
   e->to    = (const byte *)cache + cache->size;
+  e->zonly = false;
+  e->g3face = NULL;
+  g_dq.cpu = true;
   dq_push();
   return true;
+}
+
+/* A surface's depth only (its texture the GPU's: fpc_gpu3d.c), queued as
+ * fpcq_dq_surface() queues; false if the caller is to draw it
+ */
+
+FPCQ_FAST qboolean fpcq_dq_zspans(espan_t *spans)
+{
+  struct dq_s *e;
+
+  if (g_dq.ring == NULL && (g_dq.tried || !dq_start()))
+    {
+      return false;
+    }
+
+  if (!g_dq.batch)
+    {
+      g_dq.batch = true;
+      __atomic_store_n(&g_dq.ending, false, __ATOMIC_RELEASE);
+      sem_post(&g_dq.go);
+    }
+
+  e = dq_slot();
+  D_SpanCtx(&e->c);
+  e->spans = spans;
+  e->from  = NULL;                        /* (reads no cache block) */
+  e->to    = NULL;
+  e->zonly = true;
+  e->g3face = NULL;
+  dq_push();
+  return true;
+}
+
+/* A surface for the GPU, from D_DrawSurfaces with its gradients set: built
+ * (its cache block), uploaded and its spans given to the GPU by the other
+ * core; false if the caller is to do it
+ */
+
+FPCQ_FAST qboolean fpcq_g3_queue(espan_t *spans, msurface_t *pface,
+                                 int miplevel, texture_t *texture)
+{
+  struct dq_s *e;
+  espan_t *s;
+  espan_t *first = NULL;
+  espan_t **link = &first;
+  int n = 0;
+
+  if (g_dq.ring == NULL && (g_dq.tried || !dq_start()))
+    {
+      return false;
+    }
+
+  for (s = spans; s != NULL; s = s->pnext)
+    {
+      n++;
+    }
+
+  if (g_dq.nspans + n > DQ_SPANS)
+    {
+      fpcq_dq_wait();                     /* (the copies free again) */
+      if (n > DQ_SPANS)
+        {
+          return false;
+        }
+    }
+
+  for (s = spans; s != NULL; s = s->pnext)
+    {
+      espan_t *d = &g_dq.spans[g_dq.nspans++];
+
+      *d = *s;
+      *link = d;
+      link = &d->pnext;
+    }
+
+  *link = NULL;
+  if (!g_dq.batch)
+    {
+      g_dq.batch = true;
+      __atomic_store_n(&g_dq.ending, false, __ATOMIC_RELEASE);
+      sem_post(&g_dq.go);
+    }
+
+  e = dq_slot();
+  D_SpanCtx(&e->c);
+  e->spans = first;
+  e->from  = NULL;
+  e->to    = NULL;
+  e->zonly = false;
+  e->g3face = pface;
+  e->g3mip = miplevel;
+  e->g3tex = texture;
+  dq_push();
+  return true;
+}
+
+/* The game about to build a surface itself: the other core's done first */
+
+FPCQ_FAST void fpcq_g3_cpu(void)
+{
+  fpcq_dq_wait();
+}
+
+/* D_DrawSurfaces' end: drawn, what draws into the frame (the GPU's entries
+ * may go on while the game draws its models)
+ */
+
+FPCQ_FAST void fpcq_dq_batch_end(void)
+{
+  if (g_dq.cpu)
+    {
+      fpcq_dq_wait();
+    }
 }
 
 /* The batch drawn (D_DrawSurfaces' end) */
@@ -274,9 +454,11 @@ FPCQ_FAST void fpcq_dq_wait(void)
     }
 
   __atomic_store_n(&g_dq.ending, true, __ATOMIC_RELEASE);
-  while (dq_take());
+  while (dq_take(true));
   while (__atomic_load_n(&g_dq.done, __ATOMIC_ACQUIRE) != g_dq.head);
   g_dq.batch = false;
+  g_dq.cpu = false;
+  g_dq.nspans = 0;
 }
 
 /* The surface cache about to reuse n bytes at p: the queued surfaces that
@@ -316,6 +498,13 @@ void fpcq_dq_shutdown(void)
       return;
     }
 
+  if (g_dqt.build)
+    {
+      printf("quake: the other core's GPU work: building %u ms, uploading "
+             "%u ms, spans %u ms\n", (unsigned)(g_dqt.build / 1000),
+             (unsigned)(g_dqt.upload / 1000), (unsigned)(g_dqt.spans / 1000));
+    }
+
   fpcq_dq_wait();
   __atomic_store_n(&g_dq.quit, true, __ATOMIC_RELEASE);
   sem_post(&g_dq.go);
@@ -323,6 +512,8 @@ void fpcq_dq_shutdown(void)
   sem_destroy(&g_dq.go);
   free(g_dq.stack);
   g_dq.stack = NULL;
+  free(g_dq.spans);
+  g_dq.spans = NULL;
   kmm_free(g_dq.ring);
   g_dq.ring = NULL;
 }

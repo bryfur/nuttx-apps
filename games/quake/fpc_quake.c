@@ -35,6 +35,15 @@
 
 #include "fpc_gpu.h"
 
+/* fpc_gpu3d.c's (its qboolean is the game's: an int here) */
+
+void fpcq_g3_init(void);
+void fpcq_g3_report(void);
+int  fpcq_g3_drawing(void);
+void fpcq_g3_end(void);
+const unsigned short *fpcq_base_lut(void);
+void fpcq_dq_wait(void);                  /* fpc_drawq.c */
+
 #define FPCQ_PLATFORM
 #include "fpc_quake.h"
 #include "quakegeneric.h"
@@ -76,6 +85,10 @@ static struct
   int      x[2];
   int      y[2];
   uint16_t lut[256];                      /* The palette, RGB565 */
+  uint16_t base[256];                     /* ... without the tints (the GPU's world) */
+  bool baseok;
+  uint16_t tint;                          /* The tints as one BLEND (RGB565, alpha) */
+  uint8_t tintalpha;
   uint32_t frames;
   uint32_t hold;                          /* -holdframe */
   uint64_t send_us;
@@ -239,6 +252,7 @@ static void fs_close(void)
     }
 
   g_fs.on = false;
+  fpcq_g3_report();
   printf("quake: %u frames sent, %u us each on average\n",
          (unsigned)g_fs.frames,
          (unsigned)(g_fs.frames ? g_fs.send_us / g_fs.frames : 0));
@@ -389,6 +403,7 @@ void QG_Init(void)
         }
     }
 
+  fpcq_g3_init();                         /* (the atlas: after the canvases) */
   fpc_gpu_game_keys(true);
   fpc_gpu_game_mode(FS_MODE);
   fpc_gpu_set_scale(FS_SCALE, FS_SCALE);
@@ -414,7 +429,38 @@ void QG_DrawFrame(void *pixels)
     }
 
   t0 = fpc_gpu_game_us();
-  fpc_gpu_put8(g_fs.x[k], g_fs.y[k], FS_W, FS_H, pixels, FS_W, g_fs.lut);
+  if (fpcq_g3_drawing())
+    {
+      fpcq_dq_wait();                     /* (the world's spans first) */
+
+      /* The GPU drew the world: the frame over it (the key where nothing
+       * was drawn here), in the base palette, then the tints as a BLEND
+       */
+
+      fpc_gpu_put8_key(g_fs.x[k], g_fs.y[k], FS_W, FS_H, pixels, FS_W,
+                       fpcq_base_lut(), 255);
+      if (g_fs.tintalpha > 0)
+        {
+          struct fpc_gpu_blend_s b;
+
+          memset(&b, 0, sizeof(b));
+          b.dx = g_fs.x[k];
+          b.dy = g_fs.y[k];
+          b.w = FS_W;
+          b.h = FS_H;
+          b.colour = g_fs.tint;
+          b.alpha = g_fs.tintalpha;
+          b.mode = FPC_BLEND_SRC_COLOUR;
+          fpc_gpu_blend(&b);
+        }
+
+      fpcq_g3_end();
+    }
+  else
+    {
+      fpc_gpu_put8(g_fs.x[k], g_fs.y[k], FS_W, FS_H, pixels, FS_W, g_fs.lut);
+    }
+
   fpc_gpu_game_flip(g_fs.x[k], g_fs.y[k]);
   fpc_gpu_flush();
   g_fs.send_us += fpc_gpu_game_us() - t0;
@@ -442,6 +488,40 @@ void QG_DrawFrame(void *pixels)
              g_fs.x[k], g_fs.y[k]);
       sleep(40);
     }
+}
+
+/* The GPU's world (fpc_gpu3d.c): the canvas being drawn, the palette
+ * without the tints (the atlas's texels, and the frame over them), the
+ * tints (view.c V_UpdatePalette)
+ */
+
+void fpcq_canvas(int *x, int *y)
+{
+  *x = g_fs.x[g_fs.back];
+  *y = g_fs.y[g_fs.back];
+}
+
+const unsigned short *fpcq_base_lut(void)
+{
+  return g_fs.baseok ? g_fs.base : g_fs.lut;
+}
+
+void fpcq_palette_parts(const unsigned char *base, int r, int g, int b,
+                        int alpha)
+{
+  int i;
+
+  for (i = 0; i < 256; i++)
+    {
+      const uint8_t *c = base + 3 * i;
+
+      g_fs.base[i] = (uint16_t)((c[0] >> 3) << 11 | (c[1] >> 2) << 5 |
+                                (c[2] >> 3));
+    }
+
+  g_fs.baseok = true;
+  g_fs.tint = (uint16_t)((r >> 3) << 11 | (g >> 2) << 5 | (b >> 3));
+  g_fs.tintalpha = alpha < 0 ? 0 : alpha > 255 ? 255 : alpha;
 }
 
 void QG_SetPalette(unsigned char palette[768])

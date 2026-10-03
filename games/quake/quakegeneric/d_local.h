@@ -45,6 +45,9 @@ typedef struct surfcache_s
 	unsigned			height;		// DEBUG only needed for debug
 	float				mipscale;
 	struct texture_s	*texture;	// checked for animating textures
+	short				gx, gy;		// FPC: in the GPU's atlas (fpc_gpu3d.c)
+	unsigned			gen;		// FPC: ... of this atlas generation (0: not)
+	int					gdirty;		// FPC: rebuilt since it was uploaded
 	byte				data[4];	// width*height elements
 } surfcache_t;
 
@@ -96,8 +99,26 @@ void D_SpanCtx (dspanctx_t *c);			// from the globals
 void D_DrawSpans8Ctx (const dspanctx_t *c, espan_t *pspan);
 void D_DrawZSpansCtx (const dspanctx_t *c, espan_t *pspan);
 qboolean fpcq_dq_surface (espan_t *spans, surfcache_t *cache);
+qboolean fpcq_dq_zspans (espan_t *spans);
 void fpcq_dq_wait (void);
+void fpcq_dq_batch_end (void);
 void fpcq_dq_guard (const void *p, int n);
+
+// FPC: the world textured by the GPU (fpc_gpu3d.c, fpc_quake.c)
+void fpcq_g3_init (void);
+void fpcq_g3_report (void);
+void fpcq_g3_frame (qboolean warp);
+qboolean fpcq_g3_drawing (void);
+void fpcq_g3_end (void);
+qboolean fpcq_g3_surface (surfcache_t *c);
+void fpcq_g3_spans (espan_t *pspan, surfcache_t *c);
+void fpcq_g3_spans_ctx (espan_t *pspan, surfcache_t *c, const dspanctx_t *g);
+qboolean fpcq_g3_fits (msurface_t *pface, int miplevel);
+qboolean fpcq_g3_queue (espan_t *spans, msurface_t *pface, int miplevel,
+                        texture_t *texture);
+void fpcq_g3_cpu (void);
+void fpcq_canvas (int *x, int *y);
+const unsigned short *fpcq_base_lut (void);
 void Turbulent8 (espan_t *pspan);
 void D_SpriteDrawSpans (sspan_t *pspan);
 
@@ -106,6 +127,9 @@ void D_DrawSkyScans16 (espan_t *pspan);
 
 void R_ShowSubDiv (void);
 surfcache_t	*D_CacheSurface (msurface_t *surface, int miplevel);
+surfcache_t	*D_CacheSurfaceTex (msurface_t *surface, int miplevel,
+                                texture_t *texture);	// FPC
+texture_t *R_TextureAnimation (texture_t *base);	// FPC (r_local.h's)
 
 extern int D_MipLevelForScale (float scale);
 

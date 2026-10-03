@@ -538,6 +538,32 @@ void V_UpdatePalette (void)
 		newpal += 3;
 	}
 
+	// FPC: the base palette (gamma only) and the shifts as one blend, for
+	// the GPU's world (fpc_quake.c): x' = x (1 - p) + d p, shift after shift
+	{
+		byte	base[768];
+		float	keep = 1, c[3] = { 0, 0, 0 };
+
+		for (i = 0; i < 768; i++)
+			base[i] = gammatable[host_basepal[i]];
+		for (j = 0; j < NUM_CSHIFTS; j++)
+		{
+			float p = cl.cshifts[j].percent / 256.0;
+
+			if (p <= 0)
+				continue;
+			if (p > 1)
+				p = 1;
+			for (i = 0; i < 3; i++)
+				c[i] = c[i] * (1 - p) + cl.cshifts[j].destcolor[i] * p;
+			keep *= 1 - p;
+		}
+		fpcq_palette_parts (base, keep < 1 ? gammatable[(int)(c[0] / (1 - keep))] : 0,
+		                    keep < 1 ? gammatable[(int)(c[1] / (1 - keep))] : 0,
+		                    keep < 1 ? gammatable[(int)(c[2] / (1 - keep))] : 0,
+		                    (int)((1 - keep) * 255));
+	}
+
 	VID_ShiftPalette (pal);	
 }
 

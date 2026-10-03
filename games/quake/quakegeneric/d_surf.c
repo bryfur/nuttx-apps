@@ -196,6 +196,7 @@ surfcache_t     *D_SCAlloc (int width, int size)
 		new->height = (size - sizeof(*new) + sizeof(new->data)) / width;
 
 	new->owner = NULL;              // should be set properly after return
+	new->gen = 0;					// FPC: not in the GPU's atlas
 
 	if (d_roverwrapped)
 	{
@@ -266,12 +267,22 @@ D_CacheSurface
 */
 FPCQ_FAST surfcache_t *D_CacheSurface (msurface_t *surface, int miplevel)
 {
+	return D_CacheSurfaceTex (surface, miplevel,
+	                          R_TextureAnimation (surface->texinfo->texture));
+}
+
+// FPC: the same with its texture's frame given (it depends on the current
+// entity: the other core builds the surface while the game draws models,
+// fpc_drawq.c)
+FPCQ_FAST surfcache_t *D_CacheSurfaceTex (msurface_t *surface, int miplevel,
+                                          texture_t *texture)
+{
 	surfcache_t     *cache;
 
 //
 // if the surface is animating or flashing, flush the cache
 //
-	r_drawsurf.texture = R_TextureAnimation (surface->texinfo->texture);
+	r_drawsurf.texture = texture;
 	r_drawsurf.lightadj[0] = d_lightstylevalue[surface->styles[0]];
 	r_drawsurf.lightadj[1] = d_lightstylevalue[surface->styles[1]];
 	r_drawsurf.lightadj[2] = d_lightstylevalue[surface->styles[2]];
@@ -331,6 +342,7 @@ FPCQ_FAST surfcache_t *D_CacheSurface (msurface_t *surface, int miplevel)
 
 	c_surf++;
 	R_DrawSurface ();
+	cache->gdirty = 1;				// FPC: the GPU's copy is out of date
 
 	return surface->cachespots[miplevel];
 }
