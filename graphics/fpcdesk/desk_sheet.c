@@ -34,6 +34,10 @@
  * as tab-separated text, and such text pastes in); Ctrl-D / Ctrl-R fill
  * down and right; Ctrl-Z / Y undo and redo; Ctrl-B bold; Ctrl-F find;
  * Ctrl-A all; Ctrl-S save, Ctrl-O open, Ctrl-N a new window.
+ *
+ * A program of its own (/mnt/sd0/bin/sheet, apps/graphics/deskapps):
+ * built into the desktop (DESK_PROGRAM_STUB) this file is only the icon
+ * and the name the dock shows (desk_program.c).
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -180,6 +184,8 @@
 #define L_PBOTTOM      0x80              /* at (POINT) */
 #define L_PLEFT        0x100
 #define L_PRIGHT       0x200
+
+#ifndef DESK_PROGRAM_STUB
 
 /****************************************************************************
  * Private Types
@@ -4577,6 +4583,8 @@ static void sheet_build(struct desk_win_s *w, struct sw_s *sw)
   kit_layout(k);
 }
 
+#endif /* !DESK_PROGRAM_STUB */
+
 /* The icon: a sheet of cells, its first row and column tinted, on green */
 
 static void sheet_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
@@ -4611,6 +4619,7 @@ static void sheet_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
             sh / 4 - 4, RGB(0x16, 0x8c, 0x3c), a);
 }
 
+#ifndef DESK_PROGRAM_STUB
 static struct desk_win_s *sheet_open(void)
 {
   const char *path = g_openpath;
@@ -4680,6 +4689,11 @@ int desk_sheet_open(const char *path)
 {
   struct desk_win_s *w;
 
+  if (desk_program_self())
+    {
+      return desk_open_post(APP_SHEET, path);    /* The desktop's thread */
+    }
+
   for (w = g_desk.wins; path != NULL && w != NULL; w = w->next)
     {
       struct sw_s *sw = w->priv;
@@ -4698,10 +4712,31 @@ int desk_sheet_open(const char *path)
   return 0;
 }
 
+#endif /* !DESK_PROGRAM_STUB */
+
 /****************************************************************************
  * Public Data
  ****************************************************************************/
 
+#ifdef DESK_PROGRAM_STUB
+int desk_sheet_open(const char *path)
+{
+  if (desk_program_self())
+    {
+      return desk_open_post(APP_SHEET, path);   /* The desktop's thread */
+    }
+
+  if (path == NULL)
+    {
+      desk_launch(APP_SHEET);
+      return 0;
+    }
+
+  return desk_program_open(APP_SHEET, path);    /* Its program, with it */
+}
+
+DESK_PROGRAM_APP(g_app_sheet, "Spreadsheet", sheet_icon, "sheet", false);
+#else
 const struct desk_app_s g_app_sheet =
 {
   .name     = "Spreadsheet",
@@ -4718,3 +4753,4 @@ const struct desk_app_s g_app_sheet =
   .canclose = sheet_canclose,
   .wake     = sheet_wake,
 };
+#endif

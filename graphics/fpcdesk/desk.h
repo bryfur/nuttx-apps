@@ -186,7 +186,9 @@ enum desk_evtype_e
   EV_REDRAW,
   EV_MODE,                         /* The display mode has changed */
   EV_SOUND,                        /* The mixer's state has changed */
-  EV_CLIENT                        /* A program wants a window (deskwin.h) */
+  EV_CLIENT,                       /* A program wants a window (deskwin.h) */
+  EV_LAUNCH                        /* part: the application to launch (a
+                                    * program's desk_launch()) */
 };
 
 enum desk_part_e
@@ -222,6 +224,8 @@ struct desk_event_s
   struct nxgl_size_s size;         /* Position: size of the part */
   struct nxgl_point_s wpos;        /* Position: where the window is */
   uint8_t ch[8];                   /* Keys */
+  char *arg;                       /* EV_LAUNCH: a file to open (the main
+                                    * thread frees it) */
 };
 
 /* A list of GPU operations being built */
@@ -575,6 +579,9 @@ void desk_wake(struct desk_win_s *w);
 void desk_post(uint8_t type);
 struct desk_win_s *desk_app_window(int app);
 void desk_launch(int app);
+int  desk_open_post(int app, const char *path);  /* A program's: the main
+                                                  * thread opens path in
+                                                  * app (desk_xxx_open()) */
 void desk_app_quit(int app);                /* Close all of its windows */
 uint32_t desk_ms(void);
 
@@ -754,6 +761,10 @@ void desk_program_win_close(struct desk_win_s *w);
 NXWINDOW desk_program_surface_open(int w, int h, volatile bool *lost);
 void desk_program_surface_close(NXWINDOW hwnd);
 void desk_program_wake(struct desk_win_s *w);
+void desk_program_title(struct desk_win_s *w);
+void desk_program_raise(struct desk_win_s *w);
+void desk_program_sync(struct desk_win_s *w);
+int  desk_program_open(int app, const char *arg);  /* Any task's */
 #else
 #  define desk_program_start(app)              (-ENOSYS)
 #  define desk_program_self()                  false
@@ -764,6 +775,10 @@ void desk_program_wake(struct desk_win_s *w);
 #  define desk_program_surface_open(w, h, l)   NULL
 #  define desk_program_surface_close(hwnd)
 #  define desk_program_wake(w)
+#  define desk_program_title(w)
+#  define desk_program_raise(w)
+#  define desk_program_sync(w)
+#  define desk_program_open(app, arg)          (-ENOSYS)
 #endif
 
 /* A program's handles are marked in their low bits: 01 its window, 11 a

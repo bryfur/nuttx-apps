@@ -64,6 +64,8 @@ struct pwin_s
   struct deskwin_s *d;
   struct pwin_s *next;
   bool frames;                            /* deskwin_frames() as it is */
+  const char *button;                     /* deskwin_button() as it is */
+  char title[sizeof(((struct desk_win_s *)0)->title)];  /* ... the title */
   bool closing;                           /* desk_win_close() by the app */
 };
 
@@ -282,6 +284,13 @@ static void pwin_event(struct prog_s *p, struct pwin_s *pw,
           }
         break;
 
+      case DESKWIN_EV_BUTTON:
+        if (a->button != NULL)
+          {
+            a->button(w);
+          }
+        break;
+
       case DESKWIN_EV_FOCUS:
         w->active = ev->value != 0;
         if (a->focus != NULL)
@@ -316,6 +325,22 @@ static void pwin_after(struct prog_s *p, struct pwin_s *pw)
     {
       pw->frames = w->frames;
       deskwin_frames(pw->d, w->frames);
+    }
+
+  if (w->button != pw->button)
+    {
+      pw->button = w->button;
+      deskwin_button(pw->d, w->button);
+    }
+
+  /* (An application may set w->title without desk_win_title(): the
+   * desktop draws it with the frame)
+   */
+
+  if (strcmp(w->title, pw->title) != 0)
+    {
+      strlcpy(pw->title, w->title, sizeof(pw->title));
+      deskwin_title(pw->d, w->title);
     }
 
   deskwin_flush(pw->d, -1);
@@ -355,6 +380,58 @@ int desk_program_start(int app)
  ****************************************************************************/
 
 /* Running as an application's program (the calling task's) */
+
+/* The application's desk_win_title(), desk_win_restore() (and _activate())
+ * and desk_win_sync() on one of its windows
+ */
+
+void desk_program_title(struct desk_win_s *w)
+{
+  struct pwin_s *pw = pwin_of((NXWINDOW)w->hwnd);
+
+  strlcpy(pw->title, w->title, sizeof(pw->title));
+  deskwin_title(pw->d, w->title);
+}
+
+void desk_program_raise(struct desk_win_s *w)
+{
+  deskwin_raise(pwin_of((NXWINDOW)w->hwnd)->d);
+}
+
+void desk_program_sync(struct desk_win_s *w)
+{
+  deskwin_flush(pwin_of((NXWINDOW)w->hwnd)->d, 1000);
+}
+
+/* Start an application's program with an argument (a file to open), from
+ * any task: the desktop's or a program's
+ */
+
+int desk_program_open(int app, const char *arg)
+{
+  const struct desk_app_s *a = g_apps[app];
+  FAR char *argv[3];
+  pid_t pid;
+  int ret;
+
+  if (a->program == NULL)
+    {
+      return -ENOSYS;
+    }
+
+  argv[0] = (FAR char *)a->program;
+  argv[1] = (FAR char *)arg;
+  argv[2] = NULL;
+  ret = posix_spawnp(&pid, a->program, NULL, NULL, argv, NULL);
+  if (ret != 0)
+    {
+      syslog(LOG_WARNING, "desk: %s: cannot start %s: %d\n", a->name,
+             a->program, ret);
+      return -ret;
+    }
+
+  return 0;
+}
 
 /* desk_wake() on one of the program's windows (from any of its threads) */
 
@@ -419,6 +496,7 @@ struct desk_win_s *desk_program_win_open(int app, const char *title, int w,
   pw->w.pressed   = -1;
   pw->w.pid       = getpid();
   strlcpy(pw->w.title, title != NULL ? title : "", sizeof(pw->w.title));
+  strlcpy(pw->title, pw->w.title, sizeof(pw->title));
   pw->next        = p->wins;
   p->wins         = pw;
   return &pw->w;

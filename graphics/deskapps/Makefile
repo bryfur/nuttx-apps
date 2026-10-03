@@ -15,11 +15,13 @@
 include $(APPDIR)/Make.defs
 
 PROGNAME  = calc monitor tetris breakout solitaire widgets syslog
-PRIORITY  = 100 100 100 100 100 100 100
-STACKSIZE = 8192 8192 8192 8192 8192 8192 8192
+PROGNAME += files terminal sheet
+PRIORITY  = 100 100 100 100 100 100 100 100 100 100
+STACKSIZE = 8192 8192 8192 8192 8192 8192 8192 8192 8192 8192
 MODULE    = m
 MAINSRC   = calc_main.c monitor_main.c tetris_main.c breakout_main.c
-MAINSRC  += solitaire_main.c widgets_main.c syslog_main.c
+MAINSRC  += solitaire_main.c widgets_main.c syslog_main.c files_main.c
+MAINSRC  += terminal_main.c sheet_main.c
 
 CFLAGS   += ${INCDIR_PREFIX}$(APPDIR)/graphics/fpcdesk
 

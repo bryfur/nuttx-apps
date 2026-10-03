@@ -18,6 +18,10 @@
  *   - Tabs: the title bar's "+" opens one; with two or more, a strip of
  *     them below the title bar, each with its close button: the widget
  *     kit's tabs (desk_kit.h), in a kit of their own for that strip.
+ *
+ * A program of its own (/mnt/sd0/bin/terminal, apps/graphics/deskapps):
+ * built into the desktop (DESK_PROGRAM_STUB) this file is only the icon
+ * and the name the dock shows (desk_program.c).
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -65,6 +69,8 @@
 
 #define C_CURSOR       (g_theme.term_cursor)
 
+#ifndef DESK_PROGRAM_STUB
+
 /****************************************************************************
  * Private Types
  ****************************************************************************/
@@ -91,6 +97,10 @@ struct term_io_s
 struct term_tab_s
 {
   struct term_io_s *io;
+  pthread_t reader;
+  bool join;                       /* A program's: closing waits for the
+                                    * reader (its end would end it before
+                                    * it had let go) */
   struct vt_s vt;
   int num;                         /* Terminal <num> */
   char title[40];                  /* As big as the window's */
@@ -879,20 +889,43 @@ static void *term_reader(void *arg)
 static void tab_free(struct term_tab_s *tab)
 {
   struct term_io_s *io = tab->io;
+  pid_t pid = io->pid;
+  int i;
 
   pthread_mutex_lock(&io->lock);
-  if (io->pid > 0 && !io->eof && kill(io->pid, 0) == 0)
+  if (pid > 0 && !tab->join && !io->eof && kill(pid, 0) == 0)
     {
-      task_delete(io->pid);
+      task_delete(pid);
     }
 
-  if (io->pid > 0)
+  if (pid > 0)
     {
       io->quit = true;                        /* The reader frees it */
       pthread_mutex_unlock(&io->lock);
       sem_post(&io->space);
     }
-  else
+
+  /* A program's: the reader closes the pty's master, which the shell sees
+   * as its end (and frees what it has); one that does not end soon (busy
+   * with a command) is ended.  The shell's task starts in the program's
+   * code (term_task()), so none may outlive it.
+   */
+
+  if (pid > 0 && tab->join)
+    {
+      pthread_join(tab->reader, NULL);
+      for (i = 0; i < 100 && kill(pid, 0) == 0; i++)
+        {
+          usleep(10000);
+        }
+
+      if (kill(pid, 0) == 0)
+        {
+          task_delete(pid);
+        }
+    }
+
+  if (pid <= 0)
     {
       pthread_mutex_unlock(&io->lock);        /* There is no reader */
       if (io->fd >= 0)
@@ -916,7 +949,6 @@ static struct term_tab_s *tab_new(struct desk_win_s *w)
   struct term_tab_s *tab;
   struct term_io_s *io;
   pthread_attr_t attr;
-  pthread_t thread;
   const struct builtin_s *b = NULL;
   char path[32];
   char *argv[3];
@@ -998,8 +1030,10 @@ static struct term_tab_s *tab_new(struct desk_win_s *w)
 
   pthread_attr_init(&attr);
   pthread_attr_setstacksize(&attr, READER_STACK);
-  pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-  if (pthread_create(&thread, &attr, term_reader, io) != 0)
+  tab->join = desk_program_self();
+  pthread_attr_setdetachstate(&attr, tab->join ? PTHREAD_CREATE_JOINABLE :
+                                                 PTHREAD_CREATE_DETACHED);
+  if (pthread_create(&tab->reader, &attr, term_reader, io) != 0)
     {
       task_delete(io->pid);
       io->pid = -1;
@@ -1086,6 +1120,8 @@ static void term_event(struct kit_s *k, struct kit_widget_s *wg, int ev)
     }
 }
 
+#endif /* !DESK_PROGRAM_STUB */
+
 static void term_icon(struct desk_ops_s *o, int x, int y, int s,
                           uint8_t a)
 {
@@ -1098,6 +1134,7 @@ static void term_icon(struct desk_ops_s *o, int x, int y, int s,
            RGB(0x3d, 0xdc, 0x84), a);
 }
 
+#ifndef DESK_PROGRAM_STUB
 static struct desk_win_s *term_open(void)
 {
   struct desk_win_s *w;
@@ -1500,6 +1537,8 @@ static void term_mouse(struct desk_win_s *w, int x, int y, uint8_t buttons)
     }
 }
 
+#endif /* !DESK_PROGRAM_STUB */
+
 /****************************************************************************
  * Public Data
  ****************************************************************************/
@@ -1512,6 +1551,7 @@ static void term_mouse(struct desk_win_s *w, int x, int y, uint8_t buttons)
  * the window closes when it ends
  */
 
+#ifndef DESK_PROGRAM_STUB
 struct desk_win_s *desk_term_run(const char *program)
 {
   struct desk_win_s *w;
@@ -1521,7 +1561,17 @@ struct desk_win_s *desk_term_run(const char *program)
   g_runcmd = NULL;
   return w;
 }
+#endif
 
+#ifdef DESK_PROGRAM_STUB
+struct desk_win_s *desk_term_run(const char *program)
+{
+  desk_program_open(APP_TERMINAL, program);     /* Its program's window */
+  return NULL;
+}
+
+DESK_PROGRAM_APP(g_app_terminal, "Terminal", term_icon, "terminal", false);
+#else
 const struct desk_app_s g_app_terminal =
 {
   .name   = "Terminal",
@@ -1538,3 +1588,4 @@ const struct desk_app_s g_app_terminal =
   .button = term_button,
   .theme  = term_theme,
 };
+#endif

@@ -1653,8 +1653,14 @@ static struct desk_win_s *viewer_open(void)
 
 int desk_viewer_open(const char *path)
 {
-  struct desk_win_s *w = desk_app_window(APP_VIEWER);
+  struct desk_win_s *w;
 
+  if (desk_program_self())
+    {
+      return desk_open_post(APP_VIEWER, path);  /* The desktop's thread */
+    }
+
+  w = desk_app_window(APP_VIEWER);
   if (w != NULL && path != NULL)
     {
       struct viewer_s *v = w->priv;

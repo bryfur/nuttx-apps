@@ -15,6 +15,10 @@
  * the selection moving draws just the rows concerned.  Once a second the
  * folder's names are read (without stat()): if they changed, the folder
  * is loaded again.
+ *
+ * A program of its own (/mnt/sd0/bin/files, apps/graphics/deskapps):
+ * built into the desktop (DESK_PROGRAM_STUB) this file is only the icon
+ * and the name the dock shows (desk_program.c).
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -95,6 +99,8 @@
 #define M_DELETE       2
 #define M_COPYPATH     4
 #define M_NEWDIR       5
+
+#ifndef DESK_PROGRAM_STUB
 
 /****************************************************************************
  * Private Types
@@ -1822,6 +1828,8 @@ static void place_add(struct files_s *f, const char *name, const char *path)
   f->nplaces++;
 }
 
+#endif /* !DESK_PROGRAM_STUB */
+
 static void files_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
 {
   icon_tile(o, x, y, s, RGB(0x5a, 0xb4, 0xff), RGB(0x1e, 0x6e, 0xd8), a);
@@ -1830,6 +1838,8 @@ static void files_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
   ops_rrect(o, x + s / 5, y + s / 4, s / 4, s / 8, LUT_R3, 3, C_WHITE,
             (uint8_t)(a * 230 / 255));
 }
+
+#ifndef DESK_PROGRAM_STUB
 
 /* The window's widgets */
 
@@ -1963,10 +1973,15 @@ static void files_close(struct desk_win_s *w)
   f->nhist = 0;
 }
 
+#endif /* !DESK_PROGRAM_STUB */
+
 /****************************************************************************
  * Public Data
  ****************************************************************************/
 
+#ifdef DESK_PROGRAM_STUB
+DESK_PROGRAM_APP(g_app_files, "Files", files_icon, "files", true);
+#else
 const struct desk_app_s g_app_files =
 {
   .name   = "Files",
@@ -1982,3 +1997,4 @@ const struct desk_app_s g_app_files =
   .close  = files_close,
   .single = true,
 };
+#endif

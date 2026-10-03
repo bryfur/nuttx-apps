@@ -76,9 +76,10 @@ static int g_cascade;
  * Private Functions: the event queue
  ****************************************************************************/
 
-static void q_push(const struct desk_event_s *ev)
+static bool q_push(const struct desk_event_s *ev)
 {
   bool post = true;
+  bool ok   = true;
 
   pthread_mutex_lock(&g_q.lock);
 
@@ -102,6 +103,7 @@ static void q_push(const struct desk_event_s *ev)
       if (g_q.n == QUEUE_LEN)
         {
           post = false;                   /* Full: dropped */
+          ok   = false;
         }
       else
         {
@@ -115,6 +117,8 @@ static void q_push(const struct desk_event_s *ev)
     {
       sem_post(&g_q.count);
     }
+
+  return ok;
 }
 
 static bool q_pop(struct desk_event_s *ev, int timeout_ms)
@@ -556,6 +560,12 @@ void desk_win_title(struct desk_win_s *w)
   int width = w->size.w;
   int i;
 
+  if (desk_program_hwnd(w->hwnd))
+    {
+      desk_program_title(w);               /* A program's: the desktop's */
+      return;
+    }
+
   ops_reset(&o);
   ops_fill(&o, 0, 0, width, TITLE_H,
            w->active ? C_TITLE_ACTIVE : C_TITLE_INACTIVE);
@@ -733,6 +743,12 @@ void desk_win_sync(struct desk_win_s *w)
 {
   struct timespec ts;
 
+  if (desk_program_hwnd(w->hwnd))
+    {
+      desk_program_sync(w);                /* A program's */
+      return;
+    }
+
   if (nxtk_synch(w->hwnd, w) < 0)
     {
       return;
@@ -778,6 +794,12 @@ static void win_to_top(struct desk_win_s *w)
 void desk_win_activate(struct desk_win_s *w)
 {
   struct desk_win_s *old = g_desk.active;
+
+  if (w != NULL && desk_program_hwnd(w->hwnd))
+    {
+      desk_program_raise(w);               /* A program's */
+      return;
+    }
 
   if (w != NULL && !w->minimized)
     {
@@ -935,6 +957,12 @@ void desk_win_minimize(struct desk_win_s *w)
 
 void desk_win_restore(struct desk_win_s *w)
 {
+  if (desk_program_hwnd(w->hwnd))
+    {
+      desk_program_raise(w);               /* A program's */
+      return;
+    }
+
   if (w->minimizing)
     {
       w->minimizing = false;
@@ -997,10 +1025,45 @@ struct desk_win_s *desk_app_window(int app)
   return NULL;
 }
 
+int desk_open_post(int app, const char *path)
+{
+  struct desk_event_s ev;
+
+  memset(&ev, 0, sizeof(ev));
+  ev.type = EV_LAUNCH;
+  ev.part = app;
+  ev.arg  = path != NULL ? strdup(path) : NULL;
+  if (path != NULL && ev.arg == NULL)
+    {
+      return -ENOMEM;
+    }
+
+  if (!q_push(&ev))
+    {
+      free(ev.arg);
+      return -EAGAIN;
+    }
+
+  return 0;
+}
+
 void desk_launch(int app)
 {
   const struct desk_app_s *a = g_apps[app];
   struct desk_win_s *w;
+
+  /* From a program: the desktop's main thread does it */
+
+  if (desk_program_self())
+    {
+      struct desk_event_s ev;
+
+      memset(&ev, 0, sizeof(ev));
+      ev.type = EV_LAUNCH;
+      ev.part = app;
+      q_push(&ev);
+      return;
+    }
 
   if (app == APP_LAUNCHER)
     {
@@ -1569,6 +1632,34 @@ static void on_kbd(struct desk_event_s *ev)
   kbd_bytes(w, bytes, nb);
 }
 
+/* EV_LAUNCH with a file: the application's own open (desk.h) */
+
+static void app_open(int app, const char *path)
+{
+  switch (app)
+    {
+      case APP_EDITOR:
+        desk_editor_open(path);
+        break;
+
+      case APP_SHEET:
+        desk_sheet_open(path);
+        break;
+
+      case APP_VIEWER:
+        desk_viewer_open(path);
+        break;
+
+      case APP_PAINT:
+        desk_paint_open(path);
+        break;
+
+      default:
+        desk_launch(app);
+        break;
+    }
+}
+
 static void on_event(struct desk_event_s *ev)
 {
   switch (ev->type)
@@ -1600,6 +1691,19 @@ static void on_event(struct desk_event_s *ev)
         desk_clients_poll();
         break;
 #endif
+
+      case EV_LAUNCH:
+        if (ev->part < APP_COUNT && ev->arg != NULL)
+          {
+            app_open(ev->part, ev->arg);
+          }
+        else if (ev->part < APP_COUNT)
+          {
+            desk_launch(ev->part);
+          }
+
+        free(ev->arg);
+        break;
 
       case EV_REDRAW:
         if (!ev->win->closing && ev->part == PART_TITLE)

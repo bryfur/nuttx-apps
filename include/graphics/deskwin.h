@@ -67,6 +67,8 @@
 #define DESKWIN_EV_FOCUS      9        /* value: 1 active, 0 not */
 #define DESKWIN_EV_WIDGET     10       /* id, kind, value */
 #define DESKWIN_EV_WAKE       11       /* deskwin_wake() (the client's) */
+#define DESKWIN_EV_BUTTON     12       /* The title bar's button
+                                        * (deskwin_button()) */
 
 /* DESKWIN_EV_WIDGET kinds */
 
@@ -253,6 +255,16 @@ int deskwin_flush(FAR struct deskwin_s *d, int timeout);
 /* The window */
 
 void deskwin_title(FAR struct deskwin_s *d, FAR const char *title);
+
+/* The window to the front (restored if minimised), active */
+
+void deskwin_raise(FAR struct deskwin_s *d);
+
+/* A button in the title bar, beside the title (a label of a few
+ * characters, NULL: none): DESKWIN_EV_BUTTON when it is clicked
+ */
+
+void deskwin_button(FAR struct deskwin_s *d, FAR const char *label);
 void deskwin_frames(FAR struct deskwin_s *d, bool on);
 
 /* Load an image file (BMP, PPM, PGM, PBM) into the GPU's memory, scaled

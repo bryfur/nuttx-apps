@@ -122,10 +122,11 @@ if [ -z "$varlist" ]; then
     # Get all defined symbol names
     deflist=$(nm $execlist 2>/dev/null | grep -F -v -e ' U ' -e ':' | sed -e "s/^[0-9a-z]* //g" | cut -d' ' -f2)
 
-    # Remove the intersection between them, and the remaining symbols are found in the main image
-    if [ ! -z "$varlist" ] && [ !  -z "$deflist" ]; then
-      varlist=$(echo "$varlist" | tr ' ' '\n' | sort -u | grep -vFxf <(echo "$deflist" | tr ' ' '\n' | sort -u) | tr '\n' ' ')
-    fi
+    # (FPC: not the intersection with what other modules define.  Each
+    # module is linked on its own and its undefined symbols are the main
+    # image's; one module's own copy of a function, such as an
+    # application built as a program, must not take the main image's away
+    # from the modules that call that.)
   fi
 fi
 

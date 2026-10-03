@@ -105,6 +105,9 @@
 #define CMD_IMGFREE       16                   /* img */
 #define CMD_CLOSE         17
 #define CMD_SURFFREE      19                   /* surface */
+#define CMD_RAISE         20                   /* (Restored, active) */
+#define CMD_BUTTON        21                   /* s: the title bar's button
+                                                * ("": none) */
 #define CMD_OPS           18                   /* n target, n nx_gpuop_s:
                                                 * the desktop's own drawing
                                                 * operations, frame
@@ -256,6 +259,7 @@ struct client_win_s
    * for it): the desktop's, its lost flags passed on to the program's
    */
 
+  char button[8];                      /* Its title bar's button's label */
   NXWINDOW surf[DESKWIN_SURFACES];
   volatile bool *surfclient[DESKWIN_SURFACES];
   volatile bool surflost[DESKWIN_SURFACES];
@@ -2178,6 +2182,17 @@ static void run_cmds(struct client_win_s *c, const uint8_t *buf, size_t n)
             w->frames = arg(cmd, 0) != 0;
             break;
 
+          case CMD_RAISE:
+            ops_draw(e.hwnd, g_out);
+            desk_win_restore(w);
+            break;
+
+          case CMD_BUTTON:
+            strlcpy(c->button, cmd_str(cmd, 0), sizeof(c->button));
+            w->button = c->button[0] != '\0' ? c->button : NULL;
+            desk_win_title(w);
+            break;
+
           case CMD_WIDGET:
           case CMD_WSET:
           case CMD_WMOVE:
@@ -2411,6 +2426,13 @@ static void client_frame(struct desk_win_s *w)
     }
 
   s_unlock(s);
+}
+
+static void client_button(struct desk_win_s *w)
+{
+  struct client_win_s *c = w->priv;
+
+  push_simple(c->s, DESKWIN_EV_BUTTON, 0);
 }
 
 static void client_focus(struct desk_win_s *w)
@@ -2774,6 +2796,7 @@ const struct desk_app_s g_app_client =
   .close  = client_close,
   .wake   = client_wake,
   .focus  = client_focus,
+  .button = client_button,
   .frame  = client_frame,
 };
 
@@ -3214,6 +3237,16 @@ void deskwin_clear(FAR struct deskwin_s *d, uint16_t c)
 void deskwin_title(FAR struct deskwin_s *d, FAR const char *title)
 {
   put(d, CMD_TITLE, NULL, 0, title, NULL);
+}
+
+void deskwin_button(FAR struct deskwin_s *d, FAR const char *label)
+{
+  put(d, CMD_BUTTON, NULL, 0, label != NULL ? label : "", NULL);
+}
+
+void deskwin_raise(FAR struct deskwin_s *d)
+{
+  put(d, CMD_RAISE, NULL, 0, NULL, NULL);
 }
 
 void deskwin_frames(FAR struct deskwin_s *d, bool on)

@@ -3470,6 +3470,11 @@ int desk_paint_open(const char *path)
 {
   struct desk_win_s *w;
 
+  if (desk_program_self())
+    {
+      return desk_open_post(APP_PAINT, path);    /* The desktop's thread */
+    }
+
   /* Open already: that window comes forward */
 
   for (w = g_desk.wins; path != NULL && w != NULL; w = w->next)
