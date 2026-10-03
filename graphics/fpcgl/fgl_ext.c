@@ -136,5 +136,6 @@ void fglBindRect(int x, int y, int w, int h, GLboolean repeat)
   t->wrap_s = repeat ? GL_REPEAT : GL_CLAMP;
   t->wrap_t = t->wrap_s;
   t->fmt    = 0;                          /* (RGB565) */
+  t->linear = false;                      /* (glTexParameteri() may filter it) */
   g_fgl.bound = FGL_RECT;
 }

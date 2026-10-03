@@ -49,8 +49,9 @@ void fgl_space_reset(void)
   g_ytop = 0;
 }
 
-/* w x h (w even: PUT8's x and w), on a shelf of its height or a little
- * more, or in a freed place as big; 0, or < 0 if there is no room
+/* w x h (w a multiple of 16, as x: PUT8's x and w even, a filtered
+ * repeating texture's x a multiple of 16), on a shelf of its height or a
+ * little more, or in a freed place as big; 0, or < 0 if there is no room
  */
 
 int fgl_space_alloc(int w, int h, int16_t *x, int16_t *y)
@@ -58,7 +59,7 @@ int fgl_space_alloc(int w, int h, int16_t *x, int16_t *y)
   int best = -1;
   int i;
 
-  w = (w + 1) & ~1;
+  w = (w + 15) & ~15;
   if (w <= 0 || h <= 0 || w > SPACE || h > SPACE)
     {
       return -1;
@@ -123,7 +124,7 @@ void fgl_space_free(int x, int y, int w, int h)
     {
       g_freed[g_nfreed].x = x;
       g_freed[g_nfreed].y = y;
-      g_freed[g_nfreed].w = (w + 1) & ~1;
+      g_freed[g_nfreed].w = (w + 15) & ~15;
       g_freed[g_nfreed].h = h;
       g_nfreed++;
     }
@@ -173,6 +174,7 @@ void glGenTextures(GLsizei n, GLuint *textures)
       g_fgl.tex[t].named = true;
       g_fgl.tex[t].wrap_s = GL_REPEAT;
       g_fgl.tex[t].wrap_t = GL_REPEAT;
+      g_fgl.tex[t].linear = true;         /* (GL's: magnified, GL_LINEAR) */
       textures[i] = t;
     }
 }
@@ -224,6 +226,7 @@ void glBindTexture(GLenum target, GLuint texture)
       g_fgl.tex[texture].named = true;
       g_fgl.tex[texture].wrap_s = GL_REPEAT;
       g_fgl.tex[texture].wrap_t = GL_REPEAT;
+      g_fgl.tex[texture].linear = true;
     }
 
   g_fgl.bound = texture;
@@ -248,8 +251,11 @@ void glTexParameteri(GLenum target, GLenum pname, GLint param)
         t->wrap_t = param == GL_REPEAT ? GL_REPEAT : GL_CLAMP;
         break;
 
-      case GL_TEXTURE_MAG_FILTER:
-      case GL_TEXTURE_MIN_FILTER:         /* (always the nearest texel) */
+      case GL_TEXTURE_MAG_FILTER:         /* (one filter: magnified's) */
+        t->linear = param != GL_NEAREST;
+        break;
+
+      case GL_TEXTURE_MIN_FILTER:
         break;
 
       default:
@@ -388,7 +394,7 @@ void glTexImage2D(GLenum target, GLint level, GLint internalformat,
       return;
     }
 
-  if (!t->alloc || t->aw < ((w + 1) & ~1) || t->ah < h)
+  if (!t->alloc || t->aw < ((w + 15) & ~15) || t->ah < h)
     {
       if (t->alloc)
         {
@@ -402,7 +408,7 @@ void glTexImage2D(GLenum target, GLint level, GLint internalformat,
           return;
         }
 
-      t->aw = (int16_t)((w + 1) & ~1);
+      t->aw = (int16_t)((w + 15) & ~15);
       t->ah = (int16_t)h;
       t->alloc = true;
     }

@@ -760,7 +760,8 @@ static int state_for(bool shade, bool mono, bool alpha)
                     tex << 3 | shade << 4 | key << 5 | clampm << 6 |
                     g_fgl.blend << 7 | g_fgl.fog << 8 | g_fgl.dither << 9 |
                     (tex && g_fgl.tdither) << 10 | atest << 11 | 1 << 12 |
-                    1 << 13 | (tex ? t->fmt : 0) << 14);
+                    1 << 13 | (tex ? t->fmt : 0) << 14 |
+                    (uint32_t)(tex && t->linear) << 16);
   st[0] = 10 | mode << 8;
   st[1] = (uint32_t)(g_fgl.bx[g_fgl.back] + g_fgl.ox) |
           (uint32_t)(g_fgl.by[g_fgl.back] + g_fgl.oy) << 16;

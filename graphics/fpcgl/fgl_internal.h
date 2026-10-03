@@ -32,6 +32,7 @@ struct fgl_tex_s
   GLenum  wrap_s;
   GLenum  wrap_t;
   uint8_t fmt;                            /* STATE's TFMT: 0 RGB565, 1 ARGB4444, 2 ARGB1555 */
+  bool    linear;                         /* Filtered (STATE's LINEAR) */
 };
 
 /* A vertex in clip space with its attributes: GL texture coordinates,

@@ -11,11 +11,12 @@
  * perspective-correct texturing.  The CPU transforms, clips and sets up
  * each polygon (fgl_setup.c); the GPU does every pixel.  fglInit()
  * switches the FPGA to the 3D GPU and takes the display, fglShutdown()
- * gives both back.  Nearest-texel sampling (FGL_TEXTURE_DITHER smooths
- * it), RGB565 colour (8 bits a channel inside, dithered), a 16-bit
- * floating-point depth buffer; one texture a polygon (multitexturing is
- * done in passes, blended); colour and alpha interpolated across the
- * screen.  GL_ALPHA_TEST on a texture without alpha (RGB, luminance,
+ * gives both back.  Bilinear filtering or the nearest texel
+ * (GL_TEXTURE_MAG_FILTER; FGL_TEXTURE_DITHER smooths the nearest), RGB565
+ * colour (8 bits a channel inside, dithered), a 16-bit floating-point
+ * depth buffer; one texture a polygon (multitexturing is done in passes,
+ * blended); colour and alpha interpolated across the screen.
+ * GL_ALPHA_TEST on a texture without alpha (RGB, luminance,
  * GL_COLOR_INDEX) is a colour key: fglColorKey().
  ****************************************************************************/
 
@@ -127,8 +128,8 @@ typedef void           GLvoid;
 
 /* Textures */
 
-#define GL_TEXTURE_MAG_FILTER     0x2800    /* (always nearest) */
-#define GL_TEXTURE_MIN_FILTER     0x2801
+#define GL_TEXTURE_MAG_FILTER     0x2800    /* GL_LINEAR (bilinear) or GL_NEAREST */
+#define GL_TEXTURE_MIN_FILTER     0x2801    /* (taken, as the magnified one) */
 #define GL_TEXTURE_WRAP_S         0x2802
 #define GL_TEXTURE_WRAP_T         0x2803
 #define GL_NEAREST                0x2600
@@ -201,7 +202,9 @@ void fglSpaceFree(int x, int y, int w, int h);
 void fglPut(int x, int y, int w, int h, const uint16_t *px, size_t stride);
 
 /* A rectangle of the space as the texture (as glBindTexture(), until the
- * next bind): w x h at x, y, repeated (w, h powers of two) or clamped
+ * next bind): w x h at x, y, repeated (w, h powers of two; filtered: x a
+ * multiple of 16) or clamped; the nearest texel (glTexParameteri() may
+ * filter it)
  */
 
 void fglBindRect(int x, int y, int w, int h, GLboolean repeat);
