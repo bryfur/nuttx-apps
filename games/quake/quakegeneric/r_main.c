@@ -652,7 +652,7 @@ int R_BmodelCheckBBox (model_t *clmodel, float *minmaxs)
 {
 	int			i, *pindex, clipflags;
 	vec3_t		acceptpt, rejectpt;
-	double		d;
+	float		d;			/* FPC: no double FPU */
 
 	clipflags = 0;
 

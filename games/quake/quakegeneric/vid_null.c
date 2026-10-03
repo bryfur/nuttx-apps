@@ -57,7 +57,7 @@ void	VID_Init (unsigned char *palette)
 	vid.colormap = host_colormap;
 	vid.fullbright = 256 - LittleLong (*((int *)vid.colormap + 2048));
 	vid_buffer = fpcq_fast_alloc (BASEWIDTH*BASEHEIGHT, "the frame");
-	zbuffer = malloc (BASEWIDTH*BASEHEIGHT*sizeof(short));
+	zbuffer = fpcq_fast_alloc (BASEWIDTH*BASEHEIGHT*sizeof(short), "the z-buffer");	/* FPC */
 	if (zbuffer == NULL)
 		Sys_Error ("no memory for the depth buffer");
 	vid.buffer = vid.conbuffer = vid_buffer;

@@ -454,7 +454,7 @@ FPCQ_FAST void R_RecursiveWorldNode (mnode_t *node, int clipflags)
 	mplane_t	*plane;
 	msurface_t	*surf, **mark;
 	mleaf_t		*pleaf;
-	double		d, dot;
+	float		d, dot;		/* FPC: no double FPU */
 
 	if (node->contents == CONTENTS_SOLID)
 		return;		// solid

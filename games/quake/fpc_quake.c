@@ -344,7 +344,16 @@ void fpcq_exit(int code)
 
 void QG_Init(void)
 {
+  extern void Host_Frame(float time);
+  extern void D_DrawSpans8(void *pspans);
   int k;
+
+  /* Where the loader put the code (a profile's symbols: the module's
+   * relocated by these)
+   */
+
+  syslog(LOG_INFO, "quake: Host_Frame at %p, D_DrawSpans8 at %p\n",
+         (void *)Host_Frame, (void *)D_DrawSpans8);
 
   if (fpc_gpu_version() < 8 || fpc_gpu_game_display(true) < 0)
     {

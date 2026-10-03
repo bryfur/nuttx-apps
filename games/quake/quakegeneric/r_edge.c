@@ -443,7 +443,7 @@ FPCQ_FAST void R_LeadingEdge (edge_t *edge)
 	espan_t			*span;
 	surf_t			*surf, *surf2;
 	int				iu;
-	double			fu, newzi, testzi, newzitop, newzibottom;
+	float			fu, newzi, testzi, newzitop, newzibottom;	/* FPC: no double FPU */
 
 	if (edge->surfs[1])
 	{

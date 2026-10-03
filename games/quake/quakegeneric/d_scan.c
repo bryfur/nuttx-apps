@@ -385,7 +385,7 @@ FPCQ_FAST void D_DrawZSpans (espan_t *pspan)
 	int				izi;
 	short			*pdest;
 	unsigned		ltemp;
-	double			zi;
+	float			zi;			/* FPC: no double FPU */
 	float			du, dv;
 
 // FIXME: check for clamping/range problems
