@@ -110,6 +110,27 @@ static struct
  * Private Functions
  ****************************************************************************/
 
+/* In the 64-bit simulator the hunk and the heap are static arrays: QuakeC's
+ * strings are 32-bit offsets from its string table (in the hunk), also to
+ * strings in the game's static data (sv.name, the models' names, PF_ftos's
+ * buffer), which the host's heap is more than 2 GB away from
+ */
+
+#if defined(CONFIG_ARCH_SIM) && UINTPTR_MAX > 0xffffffffu
+#  define SIM_HUNK_MAX  (32 * 1024 * 1024)
+static uint8_t g_sim_hunk[SIM_HUNK_MAX] aligned_data(16);
+static uint8_t g_sim_heap[CONFIG_GAMES_QUAKE_HEAPSIZE * 1024] aligned_data(16);
+#  define hunk_alloc(n) ((n) <= SIM_HUNK_MAX ? (void *)g_sim_hunk : NULL)
+#  define heap_alloc(n) ((void *)g_sim_heap)
+#  define hunk_free(p)
+#  define heap_free(p)
+#else
+#  define hunk_alloc(n) malloc(n)
+#  define heap_alloc(n) malloc(n)
+#  define hunk_free(p)  free(p)
+#  define heap_free(p)  free(p)
+#endif
+
 static void heap_destroy(void)
 {
   int i;
@@ -129,11 +150,11 @@ static void heap_destroy(void)
              g_heapsize / 1024, info.usmblks / 1024);
       mm_uninitialize(g_heap);
       g_heap = NULL;
-      free(g_heapmem);
+      heap_free(g_heapmem);
       g_heapmem = NULL;
     }
 
-  free(g_hunk);
+  hunk_free(g_hunk);
   g_hunk = NULL;
 }
 
@@ -146,9 +167,9 @@ static int heap_create(void)
 {
   size_t hunk = fpcq_hunk_size();
 
-  g_hunk = malloc(hunk);
+  g_hunk = hunk_alloc(hunk);
   g_heapsize = (size_t)CONFIG_GAMES_QUAKE_HEAPSIZE * 1024;
-  g_heapmem = g_hunk != NULL ? malloc(g_heapsize) : NULL;
+  g_heapmem = g_hunk != NULL ? heap_alloc(g_heapsize) : NULL;
   if (g_heapmem == NULL)
     {
       struct mallinfo info = mallinfo();
@@ -156,7 +177,7 @@ static int heap_create(void)
       fprintf(stderr, "quake: not enough memory: %zu and %zu KB wanted, %d "
               "KB in one piece (-mem N: a smaller hunk, in MB)\n",
               hunk / 1024, g_heapsize / 1024, info.mxordblk / 1024);
-      free(g_hunk);
+      hunk_free(g_hunk);
       g_hunk = NULL;
       return -1;
     }
@@ -164,7 +185,7 @@ static int heap_create(void)
   g_heap = mm_initialize("quake", g_heapmem, g_heapsize);
   if (g_heap == NULL)
     {
-      free(g_heapmem);
+      heap_free(g_heapmem);
       g_heapmem = NULL;
       return -1;
     }

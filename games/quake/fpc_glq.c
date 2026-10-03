@@ -16,9 +16,10 @@
  *     load) by BUILD into an atlas in the GPU's memory, again only when
  *     its lighting or texture frame changes (as D_CacheSurface decides);
  *     a full atlas starts again empty.
- *   - Water and the sky: their textures repeated, warped (the vertices'
- *     texture coordinates through the turbulence table) or scrolled with
- *     the view's direction.
+ *   - Water and the sky: cut into small polygons (as GLQuake does), their
+ *     textures repeated, warped (the vertices' texture coordinates as the
+ *     software renderer's turbulence) or scrolled with the view's
+ *     direction, the sky's keyed front layer over its back one.
  *   - Models: their frames' triangles lit per vertex as R_AliasSetupLighting
  *     does, the light level through the colormap's brightness (the factors
  *     BUILD uses); the gun drawn in front (a depth range of its own).
@@ -102,6 +103,7 @@ static struct
   int ntex;
   struct fgl_image8_s mip[MAXTEX][MIPLEVELS];
   GLuint gltex[MAXTEX];
+  GLuint skyfront;                        /* The sky's front layer (keyed) */
 
   /* Models' skins and sprite frames as textures */
 
@@ -259,9 +261,13 @@ static void table_check(void)
 
   if (!g_gl.palok || memcmp(lut, g_gl.pal, sizeof(g_gl.pal)) != 0)
     {
+      uint16_t tpal[256];
+
       memcpy(g_gl.pal, lut, sizeof(g_gl.pal));
       fglBuildTable(g_gl.pal, g_gl.factor);
-      fglColorTable(g_gl.pal);
+      memcpy(tpal, g_gl.pal, sizeof(tpal));
+      tpal[255] = FGL_KEY;                /* (the textures': 255 the key) */
+      fglColorTable(tpal);
       g_gl.palok = true;
     }
 }
@@ -283,6 +289,7 @@ static void free_map(void)
   fglReset();
   memset(g_gl.mip, 0, sizeof(g_gl.mip));
   memset(g_gl.gltex, 0, sizeof(g_gl.gltex));
+  g_gl.skyfront = 0;
   g_gl.ntex = 0;
   g_gl.nskin = 0;
   g_gl.nsprite = 0;
@@ -321,22 +328,43 @@ void fpcq_gl_newmap(void)
 
       if (!strncmp(t->name, "sky", 3))
         {
-          /* The sky: its back layer (the right half) as a texture */
+          /* The sky: its back layer (the right half) and its front one
+           * (the left half, 0 transparent: 255, the key) as textures
+           */
 
-          static uint8_t back[128 * 128];
+          static uint8_t layer[128 * 128];
           const uint8_t *src = (const uint8_t *)t + t->offsets[0];
           int h = t->height < 128 ? t->height : 128;
           int r;
+          int c;
 
           for (r = 0; r < h; r++)
             {
-              memcpy(back + r * 128, src + r * t->width + 128, 128);
+              memcpy(layer + r * 128, src + r * t->width + 128, 128);
             }
 
           glGenTextures(1, &g_gl.gltex[i]);
           glBindTexture(GL_TEXTURE_2D, g_gl.gltex[i]);
           glTexImage2D(GL_TEXTURE_2D, 0, GL_COLOR_INDEX, 128, h, 0,
-                       GL_COLOR_INDEX, GL_UNSIGNED_BYTE, back);
+                       GL_COLOR_INDEX, GL_UNSIGNED_BYTE, layer);
+          for (r = 0; r < h; r++)
+            {
+              for (c = 0; c < 128; c++)
+                {
+                  uint8_t p = src[r * t->width + c];
+
+                  layer[r * 128 + c] = p == 0 ? 255 : p;
+                }
+            }
+
+          if (g_gl.skyfront == 0)
+            {
+              glGenTextures(1, &g_gl.skyfront);
+            }
+
+          glBindTexture(GL_TEXTURE_2D, g_gl.skyfront);
+          glTexImage2D(GL_TEXTURE_2D, 0, GL_COLOR_INDEX, 128, h, 0,
+                       GL_COLOR_INDEX, GL_UNSIGNED_BYTE, layer);
         }
       else if (t->name[0] == '*')
         {
@@ -545,11 +573,164 @@ static int surface_verts(model_t *m, msurface_t *s, vec3_t *v)
   return n;
 }
 
-/* turbsin, as the software renderer warps water (d_sky.c's table) */
+/* The software renderer's warp (D_DrawTurbulent8Span): 8 texels across a
+ * period of 128, moving 20 a second
+ */
 
 static float turb(float x)
 {
   return 8.0f * sinf(x * (2.0f * (float)M_PI / 128.0f));
+}
+
+/* A water or sky polygon's texture coordinates at a vertex: water warped
+ * through the turbulence, the sky from the view's direction (GLQuake's
+ * flattened sphere; the front layer twice as fast)
+ */
+
+static void warp_vertex(msurface_t *s, texture_t *tex, const float *p,
+                        int layer)
+{
+  mtexinfo_t *ti = s->texinfo;
+  float ss;
+  float tt;
+
+  if (s->flags & SURF_DRAWSKY)
+    {
+      float speed = (float)cl.time * (layer ? 16.0f : 8.0f);
+      vec3_t dir;
+      float len;
+
+      VectorSubtract(p, r_origin, dir);
+      dir[2] *= 3.0f;
+      len = 6.0f * 63.0f / sqrtf(DotProduct(dir, dir));
+      ss = (speed + dir[0] * len) / 128.0f;
+      tt = (speed + dir[1] * len) / 128.0f;
+    }
+  else
+    {
+      float os = DotProduct(p, ti->vecs[0]) + ti->vecs[0][3];
+      float ot = DotProduct(p, ti->vecs[1]) + ti->vecs[1][3];
+
+      ss = (os + turb(ot + (float)cl.time * 20.0f)) / (float)tex->width;
+      tt = (ot + turb(os + (float)cl.time * 20.0f)) / (float)tex->height;
+    }
+
+  glTexCoord2f(ss, tt);
+  glVertex3fv(p);
+}
+
+/* The polygon cut on a grid (GLQuake's SubdividePolygon, without
+ * recursion: the stack is small), each piece drawn with its vertices'
+ * coordinates: water every 32 units (a quarter of the warp's period), the
+ * sky every 128
+ */
+
+#define WARP_POOL    24
+#define WARP_VERTS   64
+
+static void warp_polys(msurface_t *s, texture_t *tex, const vec3_t *v0,
+                       int n0, int layer)
+{
+  static float pool[WARP_POOL][WARP_VERTS][3];
+  static int count[WARP_POOL];
+  float grid = (s->flags & SURF_DRAWSKY) ? 128.0f : 32.0f;
+  int sp = 1;
+  int i;
+  int j;
+
+  memcpy(pool[0], v0, (size_t)n0 * sizeof(vec3_t));
+  count[0] = n0;
+  while (sp > 0)
+    {
+      float (*p)[3] = pool[--sp];
+      int n = count[sp];
+      float mins[3] = { 1e9f, 1e9f, 1e9f };
+      float maxs[3] = { -1e9f, -1e9f, -1e9f };
+      int axis = -1;
+      float m = 0.0f;
+
+      for (j = 0; j < n; j++)
+        {
+          for (i = 0; i < 3; i++)
+            {
+              mins[i] = p[j][i] < mins[i] ? p[j][i] : mins[i];
+              maxs[i] = p[j][i] > maxs[i] ? p[j][i] : maxs[i];
+            }
+        }
+
+      for (i = 0; i < 3 && sp + 2 <= WARP_POOL && n + 2 <= WARP_VERTS; i++)
+        {
+          m = grid * floorf((mins[i] + maxs[i]) * 0.5f / grid + 0.5f);
+          if (maxs[i] - m >= grid / 16.0f && m - mins[i] >= grid / 16.0f)
+            {
+              axis = i;
+              break;
+            }
+        }
+
+      if (axis < 0)
+        {
+          glBegin(GL_POLYGON);
+          for (j = 0; j < n; j++)
+            {
+              warp_vertex(s, tex, p[j], layer);
+            }
+
+          glEnd();
+          continue;
+        }
+
+      /* Cut at m: the front half into the next slot, the back half into
+       * the one after (the polygon itself is read from a copy)
+       */
+
+      {
+        static float cp[WARP_VERTS][3];
+        float (*f)[3] = pool[sp];
+        float (*b)[3] = pool[sp + 1];
+        int nf = 0;
+        int nb = 0;
+
+        memcpy(cp, p, (size_t)n * sizeof(cp[0]));
+        for (j = 0; j < n; j++)
+          {
+            const float *a = cp[j];
+            const float *c = cp[(j + 1) % n];
+            float da = a[axis] - m;
+            float dc = c[axis] - m;
+
+            if (da >= 0.0f)
+              {
+                VectorCopy(a, f[nf]);
+                nf++;
+              }
+
+            if (da <= 0.0f)
+              {
+                VectorCopy(a, b[nb]);
+                nb++;
+              }
+
+            if (da != 0.0f && dc != 0.0f && (da > 0.0f) != (dc > 0.0f))
+              {
+                float t = da / (da - dc);
+
+                for (i = 0; i < 3; i++)
+                  {
+                    f[nf][i] = a[i] + t * (c[i] - a[i]);
+                  }
+
+                VectorCopy(f[nf], b[nb]);
+                nf++;
+                nb++;
+              }
+          }
+
+        count[sp] = nf;
+        count[sp + 1] = nb;
+        sp += 2;
+      }
+    }
 }
 
 static void draw_surface(model_t *m, msurface_t *s)
@@ -576,43 +757,23 @@ static void draw_surface(model_t *m, msurface_t *s)
         }
 
       glEnable(GL_TEXTURE_2D);
-      glBindTexture(GL_TEXTURE_2D, g_gl.gltex[k]);
       glColor3f(1.0f, 1.0f, 1.0f);
-      glBegin(GL_POLYGON);
-      for (i = 0; i < n; i++)
+      glBindTexture(GL_TEXTURE_2D, g_gl.gltex[k]);
+      warp_polys(s, tex, v, n, 0);
+      if ((s->flags & SURF_DRAWSKY) && g_gl.skyfront != 0)
         {
-          float ss;
-          float tt;
+          /* The front layer over it, keyed, twice as fast (on the same
+           * depth: GL_LEQUAL)
+           */
 
-          if (s->flags & SURF_DRAWSKY)
-            {
-              /* The view's direction, flattened (GLQuake's sky) */
-
-              vec3_t dir;
-              float len;
-
-              VectorSubtract(v[i], r_origin, dir);
-              dir[2] *= 3.0f;
-              len = 6.0f * 63.0f / sqrtf(DotProduct(dir, dir));
-              ss = ((float)cl.time * 8.0f + dir[0] * len) / 128.0f;
-              tt = ((float)cl.time * 8.0f + dir[1] * len) / 128.0f;
-            }
-          else
-            {
-              float os = DotProduct(v[i], ti->vecs[0]) + ti->vecs[0][3];
-              float ot = DotProduct(v[i], ti->vecs[1]) + ti->vecs[1][3];
-
-              ss = (os + turb(ot * 0.125f + (float)cl.time * 20.0f)) /
-                   (float)tex->width;
-              tt = (ot + turb(os * 0.125f + (float)cl.time * 20.0f)) /
-                   (float)tex->height;
-            }
-
-          glTexCoord2f(ss, tt);
-          glVertex3fv(v[i]);
+          glBindTexture(GL_TEXTURE_2D, g_gl.skyfront);
+          glEnable(GL_ALPHA_TEST);
+          glDepthFunc(GL_LEQUAL);
+          warp_polys(s, tex, v, n, 1);
+          glDepthFunc(GL_LESS);
+          glDisable(GL_ALPHA_TEST);
         }
 
-      glEnd();
       return;
     }
 
