@@ -530,6 +530,30 @@ NXWINDOW desk_surface_open(int w, int h, volatile bool *lost)
   return hwnd;
 }
 
+/* Pixels from the CPU into a surface (a program's goes over deskwin) */
+
+void desk_surface_put(NXWINDOW hwnd, int x, int y, int w, int h,
+                      const uint16_t *pix, int stride)
+{
+  struct nxgl_rect_s dest;
+  struct nxgl_point_s origin;
+  const void *src[1];
+
+  if (desk_program_surf(hwnd))
+    {
+      desk_program_surface_put(hwnd, x, y, w, h, pix, stride);
+      return;
+    }
+
+  dest.pt1.x = x;
+  dest.pt1.y = y;
+  dest.pt2.x = x + w - 1;
+  dest.pt2.y = y + h - 1;
+  origin     = dest.pt1;
+  src[0]     = pix;
+  nx_bitmap(hwnd, &dest, src, &origin, stride);
+}
+
 void desk_surface_close(NXWINDOW hwnd)
 {
   if (desk_program_surf(hwnd))

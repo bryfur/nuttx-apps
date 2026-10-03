@@ -565,6 +565,14 @@ NXWINDOW desk_program_surface_open(int w, int h, volatile bool *lost)
   return (NXWINDOW)((uintptr_t)ps | 3);
 }
 
+void desk_program_surface_put(NXWINDOW hwnd, int x, int y, int w, int h,
+                              const uint16_t *pix, int stride)
+{
+  struct psurf_s *ps = psurf_of(hwnd);
+
+  deskwin_surface_put(ps->d, ps->real, x, y, w, h, pix, stride);
+}
+
 void desk_program_surface_close(NXWINDOW hwnd)
 {
   struct psurf_s *ps = psurf_of(hwnd);

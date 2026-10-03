@@ -246,6 +246,12 @@ FAR void *deskwin_surface_open(FAR struct deskwin_s *d, int w, int h,
                                FAR volatile bool *lost);
 void deskwin_surface_close(FAR struct deskwin_s *d, FAR void *surface);
 
+/* w x h RGB565 pixels (stride bytes a row) into the surface at (x, y) */
+
+void deskwin_surface_put(FAR struct deskwin_s *d, FAR void *surface, int x,
+                         int y, int w, int h, FAR const uint16_t *pix,
+                         int stride);
+
 /* Hand the queue to the desktop: 0, -ETIMEDOUT if it had no room for
  * timeout ms (-1: wait), -EPIPE if the window has gone.
  */

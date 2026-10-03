@@ -108,6 +108,9 @@
 #define CMD_RAISE         20                   /* (Restored, active) */
 #define CMD_BUTTON        21                   /* s: the title bar's button
                                                 * ("": none) */
+#define CMD_PUT           22                   /* surface x y w h, w x h
+                                                * RGB565 pixels: into one of
+                                                * the program's surfaces */
 #define CMD_OPS           18                   /* n target, n nx_gpuop_s:
                                                 * the desktop's own drawing
                                                 * operations, frame
@@ -2037,6 +2040,32 @@ static void surface_request(struct client_win_s *c)
   s_unlock(s);
 }
 
+/* Pixels into one of the program's surfaces (CMD_PUT) */
+
+static void surface_put(struct client_win_s *c, const struct cmd_s *cmd)
+{
+  int si = client_surface(c, (uint32_t)arg(cmd, 0));
+  int w  = arg(cmd, 3);
+  int h  = arg(cmd, 4);
+  struct nxgl_rect_s dest;
+  struct nxgl_point_s origin;
+  const void *src[1];
+
+  if (si < 0 || cmd->nargs != 5 || w <= 0 || h <= 0 || w > 2048 ||
+      CMD_HDR + 5 * 4 + (size_t)w * h * 2 > cmd->len)
+    {
+      return;
+    }
+
+  dest.pt1.x = arg(cmd, 1);
+  dest.pt1.y = arg(cmd, 2);
+  dest.pt2.x = dest.pt1.x + w - 1;
+  dest.pt2.y = dest.pt1.y + h - 1;
+  origin     = dest.pt1;
+  src[0]     = (const int32_t *)(cmd + 1) + 5;
+  nx_bitmap(c->surf[si], &dest, src, &origin, w * 2);
+}
+
 static void surface_free(struct client_win_s *c, int i)
 {
   if (i >= 0 && i < DESKWIN_SURFACES && c->surf[i] != NULL)
@@ -2205,6 +2234,11 @@ static void run_cmds(struct client_win_s *c, const uint8_t *buf, size_t n)
           case CMD_IMGFREE:
             ops_draw(e.hwnd, g_out);
             image_free(c, arg(cmd, 0));
+            break;
+
+          case CMD_PUT:
+            ops_draw(e.hwnd, g_out);
+            surface_put(c, cmd);
             break;
 
           case CMD_SURFFREE:
@@ -3085,6 +3119,62 @@ FAR void *deskwin_surface_open(FAR struct deskwin_s *d, int w, int h,
   hwnd = d->gone ? NULL : d->surfret;
   s_unlock(d);
   return hwnd;
+}
+
+/* Pixels (RGB565, stride bytes a row) into a surface at (x, y), in as many
+ * commands as they take
+ */
+
+void deskwin_surface_put(FAR struct deskwin_s *d, FAR void *surface, int x,
+                         int y, int w, int h, FAR const uint16_t *pix,
+                         int stride)
+{
+  const size_t room = BATCH - CMD_HDR - 5 * 4;
+  int cw = MIN(w, (int)(room / 2));             /* Columns a command */
+  int c0;
+
+  for (c0 = 0; c0 < w; c0 += cw)
+    {
+      int n = MIN(cw, w - c0);
+      int rows = MAX(1, (int)(room / (n * 2)));
+      int r0;
+
+      for (r0 = 0; r0 < h; r0 += rows)
+        {
+          int k = MIN(rows, h - r0);
+          size_t len = (CMD_HDR + 5 * 4 + (size_t)n * k * 2 + 3) &
+                       ~(size_t)3;
+          struct cmd_s *cmd;
+          int32_t *a;
+          uint8_t *p;
+          int j;
+
+          if (d->nbatch + len > BATCH)
+            {
+              deskwin_flush(d, -1);
+            }
+
+          cmd = (struct cmd_s *)(d->batch + d->nbatch);
+          cmd->op    = CMD_PUT;
+          cmd->nargs = 5;
+          cmd->len   = len;
+          a    = (int32_t *)(cmd + 1);
+          a[0] = (int32_t)(uintptr_t)surface;
+          a[1] = x + c0;
+          a[2] = y + r0;
+          a[3] = n;
+          a[4] = k;
+          p    = (uint8_t *)(a + 5);
+          for (j = 0; j < k; j++)
+            {
+              memcpy(p + j * n * 2,
+                     (const uint8_t *)pix + (size_t)(r0 + j) * stride +
+                     c0 * 2, n * 2);
+            }
+
+          d->nbatch += len;
+        }
+    }
 }
 
 void deskwin_surface_close(FAR struct deskwin_s *d, FAR void *surface)

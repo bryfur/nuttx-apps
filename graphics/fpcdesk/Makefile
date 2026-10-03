@@ -39,7 +39,7 @@ endif
 ifeq ($(CONFIG_FPCDESK_PROGRAMS),y)
 DESK_PROGRAMS  = desk_calc.c desk_monitor.c desk_tetris.c desk_breakout.c
 DESK_PROGRAMS += desk_solitaire.c desk_kitdemo.c desk_log.c desk_files.c
-DESK_PROGRAMS += desk_term.c desk_sheet.c
+DESK_PROGRAMS += desk_term.c desk_sheet.c desk_chess.c
 $(foreach f,$(DESK_PROGRAMS),$(eval $(f)_CFLAGS += -DDESK_PROGRAM_STUB))
 endif
 

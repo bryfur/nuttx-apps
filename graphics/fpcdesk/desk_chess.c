@@ -33,6 +33,10 @@
  * board is the kit's custom widget; a move draws again only the squares
  * it changed, and a dragged piece only the squares it leaves and the
  * piece where it is.
+ *
+ * A program of its own (/mnt/sd0/bin/chess, apps/graphics/deskapps):
+ * built into the desktop (DESK_PROGRAM_STUB) this file is only the icon
+ * and the name the dock shows (desk_program.c).
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -123,6 +127,8 @@ enum
 #define C_BINK          RGB(0x14, 0x12, 0x0f)
 #define C_BLINE         RGB(0xd9, 0xd4, 0xc8)
 #define C_CHECK         RGB(0xe8, 0x2a, 0x2a)
+
+#ifndef DESK_PROGRAM_STUB
 
 /****************************************************************************
  * Private Types
@@ -437,9 +443,6 @@ static void board_geometry(struct chess_s *c)
 static void mask_put(struct chess_s *c, const uint8_t *m, int size, int x,
                      int y, uint16_t *row)
 {
-  struct nxgl_rect_s dest;
-  struct nxgl_point_s origin;
-  const void *src[1];
   int i;
   int j;
 
@@ -450,13 +453,7 @@ static void mask_put(struct chess_s *c, const uint8_t *m, int size, int x,
           row[i] = m[j * size + i];
         }
 
-      dest.pt1.x = x;
-      dest.pt1.y = y + j;
-      dest.pt2.x = x + size - 1;
-      dest.pt2.y = y + j;
-      origin     = dest.pt1;
-      src[0]     = row;
-      nx_bitmap(c->surf.hwnd, &dest, src, &origin, size * 2);
+      desk_surface_put(c->surf.hwnd, x, y + j, size, 1, row, size * 2);
     }
 }
 
@@ -2145,6 +2142,8 @@ static void chess_close(struct desk_win_s *w)
     }
 }
 
+#endif /* !DESK_PROGRAM_STUB */
+
 /* The icon: a pawn on a board, on walnut.  The pawn's parts are drawn
  * twice, a pixel larger in dark first: its outline.
  */
@@ -2193,6 +2192,7 @@ static void chess_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
   icon_pawn(o, x + s / 2, y, s, 0, RGB(0xfa, 0xfa, 0xf6), a);
 }
 
+#ifndef DESK_PROGRAM_STUB
 static struct desk_win_s *chess_open(void)
 {
   struct desk_win_s *w;
@@ -2255,10 +2255,15 @@ static struct desk_win_s *chess_open(void)
   return w;
 }
 
+#endif /* !DESK_PROGRAM_STUB */
+
 /****************************************************************************
  * Public Data
  ****************************************************************************/
 
+#ifdef DESK_PROGRAM_STUB
+DESK_PROGRAM_APP(g_app_chess, "Chess", chess_icon, "chess", false);
+#else
 const struct desk_app_s g_app_chess =
 {
   .name   = "Chess",
@@ -2274,5 +2279,6 @@ const struct desk_app_s g_app_chess =
   .wake   = chess_wake,
   .close  = chess_close,
 };
+#endif
 
 #endif /* CONFIG_FPCDESK_CHESS */

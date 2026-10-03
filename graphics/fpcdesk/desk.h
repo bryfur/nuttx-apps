@@ -535,6 +535,8 @@ void desk_luts_init(void);
 
 NXWINDOW desk_surface_open(int w, int h, volatile bool *lost);
 void desk_surface_close(NXWINDOW hwnd);
+void desk_surface_put(NXWINDOW hwnd, int x, int y, int w, int h,
+                      const uint16_t *pix, int stride);   /* RGB565 */
 
 /* LUT_APP: make (if key is not what it holds) and load it; key 0 is none */
 
@@ -761,6 +763,8 @@ void desk_program_win_close(struct desk_win_s *w);
 NXWINDOW desk_program_surface_open(int w, int h, volatile bool *lost);
 void desk_program_surface_close(NXWINDOW hwnd);
 void desk_program_wake(struct desk_win_s *w);
+void desk_program_surface_put(NXWINDOW hwnd, int x, int y, int w, int h,
+                              const uint16_t *pix, int stride);
 void desk_program_title(struct desk_win_s *w);
 void desk_program_raise(struct desk_win_s *w);
 void desk_program_sync(struct desk_win_s *w);
@@ -775,6 +779,7 @@ int  desk_program_open(int app, const char *arg);  /* Any task's */
 #  define desk_program_surface_open(w, h, l)   NULL
 #  define desk_program_surface_close(hwnd)
 #  define desk_program_wake(w)
+#  define desk_program_surface_put(hwnd, x, y, w, h, pix, stride)
 #  define desk_program_title(w)
 #  define desk_program_raise(w)
 #  define desk_program_sync(w)
