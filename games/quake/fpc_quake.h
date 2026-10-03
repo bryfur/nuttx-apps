@@ -32,6 +32,7 @@ void *fpcq_fast_alloc(size_t size, const char *what);
  */
 
 size_t fpcq_hunk_size(void);
+void *fpcq_hunk(void);                  /* (Allocated before the game starts) */
 const char *fpcq_basedir(void);
 
 /* The game ends: the display, the keyboard and the memory given back */

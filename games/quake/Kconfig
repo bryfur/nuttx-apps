@@ -48,9 +48,9 @@ config GAMES_QUAKE_HEAPSIZE
 	---help---
 		The rest of what the game allocates: the surface cache (about
 		600 KB at 320 x 200), the depth buffer (125 KB), and whatever
-		of GAMES_QUAKE_SRAM's arrays the SRAM has no room for.  It and
-		the hunk are one block of the user heap, which goes back whole
-		when the game ends.
+		of GAMES_QUAKE_SRAM's arrays the SRAM has no room for: one block
+		of the user heap (the hunk another), which goes back whole when
+		the game ends.
 
 config GAMES_QUAKE_SRAM
 	bool "The renderer's hottest arrays in the internal SRAM"

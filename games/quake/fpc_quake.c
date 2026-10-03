@@ -68,6 +68,7 @@ static void *g_data0;                     /* The data as built */
 static struct mm_heap_s *g_heap;          /* The game's own */
 static void *g_heapmem;
 static size_t g_heapsize;
+static void *g_hunk;                      /* fpcq_hunk(), apart from it */
 
 static void *g_sram[SRAM_MAX];            /* fpcq_fast_alloc()'s, kmm */
 static int g_nsram;
@@ -143,23 +144,33 @@ static void heap_destroy(void)
       free(g_heapmem);
       g_heapmem = NULL;
     }
+
+  free(g_hunk);
+  g_hunk = NULL;
 }
 
-/* The game's heap: the hunk and CONFIG_GAMES_QUAKE_HEAPSIZE more */
+/* The game's memory: the hunk, and a heap of CONFIG_GAMES_QUAKE_HEAPSIZE
+ * for the rest, two blocks of the user heap (one of 6 MB and more would
+ * often not be had in one piece)
+ */
 
 static int heap_create(void)
 {
+  size_t hunk = fpcq_hunk_size();
+
   heap_destroy();                         /* (A game that was killed) */
-  g_heapsize = fpcq_hunk_size() +
-               (size_t)CONFIG_GAMES_QUAKE_HEAPSIZE * 1024;
-  g_heapmem = malloc(g_heapsize);
+  g_hunk = malloc(hunk);
+  g_heapsize = (size_t)CONFIG_GAMES_QUAKE_HEAPSIZE * 1024;
+  g_heapmem = g_hunk != NULL ? malloc(g_heapsize) : NULL;
   if (g_heapmem == NULL)
     {
       struct mallinfo info = mallinfo();
 
-      fprintf(stderr, "quake: not enough memory: %zu KB wanted, %d KB in "
-              "one piece (-mem N: a smaller hunk, in MB)\n",
-              g_heapsize / 1024, info.mxordblk / 1024);
+      fprintf(stderr, "quake: not enough memory: %zu and %zu KB wanted, %d "
+              "KB in one piece (-mem N: a smaller hunk, in MB)\n",
+              hunk / 1024, g_heapsize / 1024, info.mxordblk / 1024);
+      free(g_hunk);
+      g_hunk = NULL;
       return -1;
     }
 
@@ -330,6 +341,11 @@ void *fpcq_fast_alloc(size_t size, const char *what)
     }
 
   return p;
+}
+
+void *fpcq_hunk(void)
+{
+  return g_hunk;
 }
 
 size_t fpcq_hunk_size(void)
