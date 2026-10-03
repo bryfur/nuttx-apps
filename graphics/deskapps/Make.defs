@@ -1,0 +1,10 @@
+############################################################################
+# apps/graphics/deskapps/Make.defs
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+############################################################################
+
+ifeq ($(CONFIG_FPCDESK_PROGRAMS),y)
+CONFIGURED_APPS += $(APPDIR)/graphics/deskapps
+endif

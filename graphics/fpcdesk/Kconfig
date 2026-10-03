@@ -138,6 +138,20 @@ config FPCDESK_PYTHON
 		windows that Python programs open with the fpc module (started
 		from the IDE, a terminal, or anywhere).
 
+config FPCDESK_PROGRAMS
+	bool "Applications as programs of their own"
+	default y
+	depends on MODULES
+	select FPCDESK_CLIENTS
+	---help---
+		Applications built as loadable modules (apps/graphics/deskapps,
+		installed in /mnt/sd0/bin) instead of into the desktop, which
+		keeps only their names and icons (desk_program.c): they hold no
+		memory until they are opened, and none once they are closed.
+		Each is the application's own code with a main(); its window is
+		a deskwin window (deskwin.h), drawn with the desktop's library,
+		which stays in the firmware.
+
 config FPCDESK_CLIENTS
 	bool
 	default n

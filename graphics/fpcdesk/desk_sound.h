@@ -3,13 +3,9 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * The desktop's sound (CONFIG_FPCDESK_SOUND): its system sounds, the
- * mixer's state and volumes (/dev/mixer, nuttx/audio/fpc_mixer.h), the
- * settings kept across boots; and what shows them:
- *
- *   desk_volume.c     the speaker in the top bar and its popover
- *   desk_settings.c   the Sound page of Settings (SETTINGS_SOUND)
- *   desk_music.c      the Music application
+ * The desktop's sound (CONFIG_FPCDESK_SOUND): system sounds, the mixer's
+ * state and volumes (/dev/mixer), and their settings.  Shown by
+ * desk_volume.c (top bar), desk_settings.c (Sound page), desk_music.c.
  ****************************************************************************/
 
 #ifndef __APPS_GRAPHICS_FPCDESK_DESK_SOUND_H
@@ -79,16 +75,10 @@ void desk_sound_set_effects(bool on);
 void desk_sound_prefs_line(const char *line);
 void desk_sound_prefs_write(FILE *f);
 
-/* desk_volume.c: the top bar's speaker and its popover.  Hooks:
- *   desk_topbar_draw():   right = desk_volume_topbar(o, right, ty) - gap;
- *   desk_topbar_mouse():  desk_volume_topbar_mouse(x, y, b) (true: the
- *                         pointer is on the speaker, not the rest)
- *   on_mouse():           desk_volume_mouse_any(part, buttons) first, and
- *                         case PART_SOUND: desk_volume_popover_mouse();
- *   animate():            more |= desk_volume_animate();
- *   desk_panels_relayout(): desk_volume_relayout() (it closes; the theme
- *                         or the display has changed)
- *   the mixer changed:    desk_volume_changed()   (from desk_sound_changed)
+/* desk_volume.c: the top bar's speaker and its popover, hooked into
+ * desk_topbar_draw/_mouse(), on_mouse() (PART_SOUND), animate() and
+ * desk_panels_relayout().  desk_volume_topbar_mouse(): true if the
+ * pointer is on the speaker.
  */
 
 int  desk_volume_topbar(struct desk_ops_s *o, int right, int ty);

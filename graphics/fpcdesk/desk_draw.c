@@ -535,6 +535,12 @@ void desk_surface_close(NXWINDOW hwnd)
 
 void ops_draw(NXWINDOW hwnd, struct desk_ops_s *o)
 {
+  if (desk_program_hwnd(hwnd))
+    {
+      desk_program_ops(hwnd, o);            /* A program's window */
+      return;
+    }
+
   if (o->n > 0)
     {
       nx_gpuops(hwnd, o->op, o->n);

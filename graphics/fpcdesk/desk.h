@@ -271,6 +271,9 @@ struct desk_win_s
   bool buttonhover;
   bool buttonpressed;
   pid_t pid;                       /* A task whose exit closes the window, -1 */
+  bool client;                     /* A program's window (desk_client.c):
+                                    * g_app_client's callbacks, whichever
+                                    * application it belongs to */
 
   /* Application state */
 
@@ -337,6 +340,14 @@ struct desk_app_s
                                                   * keeps the window (to ask
                                                   * first; the app then calls
                                                   * desk_win_close()) */
+  const char *program;                           /* A program of its own
+                                                  * (desk_program.c): the
+                                                  * desktop runs it from the
+                                                  * PATH instead of open(),
+                                                  * and its windows are the
+                                                  * program's (deskwin.h):
+                                                  * the app is only its name
+                                                  * and icon here */
 };
 
 /* The settings remembered across boots (desk_prefs_load(), _save()) */
@@ -696,6 +707,56 @@ struct desk_win_s *desk_term_run(const char *program);
 void desk_clients_init(void);
 void desk_clients_poll(void);                      /* EV_CLIENT */
 extern const struct desk_app_s g_app_client;
+
+/* The callbacks a window's events go to: a program's window's are the
+ * client's (desk_client.c), any other's its application's
+ */
+
+static inline const struct desk_app_s *desk_win_app(struct desk_win_s *w)
+{
+#ifdef CONFIG_FPCDESK_CLIENTS
+  if (w->client)
+    {
+      return &g_app_client;
+    }
+#endif
+
+  return g_apps[w->app];
+}
+
+/* desk_program.c: applications as programs of their own.
+ *
+ * The desktop side: an application whose program (desk_app_s.program) is
+ * set is started from the PATH, and holds no memory while it is not.
+ *
+ * The program side: its main() calls desk_program_main() with its
+ * application, which opens the window as the desktop would (its open()),
+ * then hands it the window's events (deskwin.h) as the desktop does, until
+ * its last window has gone.  The application's code is the same: its
+ * desk_win_open() and ops_draw() go to the desktop through deskwin, its
+ * window is a deskwin window marked in its handle (desk_program_hwnd()).
+ */
+
+int  desk_program_start(int app);                  /* The desktop's */
+int  desk_program_main(int app, const struct desk_app_s *a, int argc,
+                       char *argv[]);               /* The program's */
+bool desk_program_self(void);                      /* Running as one */
+struct desk_win_s *desk_program_win_open(int app, const char *title, int w,
+                                         int h);
+void desk_program_ops(NXWINDOW hwnd, struct desk_ops_s *o);
+void desk_program_win_close(struct desk_win_s *w);
+
+#define desk_program_hwnd(h) (((uintptr_t)(h) & 1) != 0)
+
+/* A stub (DESK_PROGRAM_STUB): the application built into the desktop is
+ * only this; its program is the same file built on its own
+ */
+
+#define DESK_PROGRAM_APP(var, label, iconfn, prog, one) \
+  const struct desk_app_s var = \
+  { \
+    .name = label, .icon = iconfn, .program = prog, .single = one \
+  }
 
 /* desk_edit.c: open a file in a new editor window (NULL: a new file) */
 

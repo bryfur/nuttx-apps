@@ -1,0 +1,27 @@
+############################################################################
+# apps/graphics/deskapps/Makefile
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# The desktop's applications as programs of their own (loadable modules in
+# /mnt/sd0/bin, CONFIG_FPCDESK_PROGRAMS): each is the application's file in
+# graphics/fpcdesk, built on its own with a main() that hands it to
+# desk_program_main().  What it uses of the desktop (the drawing, the
+# fonts, the theme, the kit, the runtime) is the firmware's, resolved by the
+# loader: the module links nothing else in.
+#
+############################################################################
+
+include $(APPDIR)/Make.defs
+
+PROGNAME  = calc
+PRIORITY  = 100
+STACKSIZE = 8192
+MODULE    = m
+MAINSRC   = calc_main.c
+
+CFLAGS   += ${INCDIR_PREFIX}$(APPDIR)/graphics/fpcdesk
+
+include $(APPDIR)/Application.mk
+
+LDLIBS = $(COMPILER_RT_LIB)

@@ -20,6 +20,10 @@
  * Drawing: everything the window shows remembers what it last drew (each
  * button its look and label, the display its texts), and only what
  * changed is drawn again.
+ *
+ * A program of its own (/mnt/sd0/bin/calc, apps/graphics/deskapps): built
+ * into the desktop (DESK_PROGRAM_STUB) this file is only the icon and the
+ * name the dock shows (desk_program.c).
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -81,6 +85,8 @@ enum calc_key_e
 
 #define CH_DIVIDE       '\x01'
 #define S_DIVIDE        "\x01"
+
+#ifndef DESK_PROGRAM_STUB
 
 /****************************************************************************
  * Private Types
@@ -1333,6 +1339,8 @@ static void calc_close(struct desk_win_s *w)
   w->frames = false;
 }
 
+#endif /* !DESK_PROGRAM_STUB */
+
 /* The icon: an orange tile with a keypad of four keys, one of them the
  * operators' colour
  */
@@ -1358,6 +1366,7 @@ static void calc_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
     }
 }
 
+#ifndef DESK_PROGRAM_STUB
 static struct desk_win_s *calc_open(void)
 {
   struct desk_win_s *w;
@@ -1382,11 +1391,15 @@ static struct desk_win_s *calc_open(void)
   calc_update(w);
   return w;
 }
+#endif
 
 /****************************************************************************
  * Public Data
  ****************************************************************************/
 
+#ifdef DESK_PROGRAM_STUB
+DESK_PROGRAM_APP(g_app_calc, "Calculator", calc_icon, "calc", true);
+#else
 const struct desk_app_s g_app_calc =
 {
   .name   = "Calculator",
@@ -1400,3 +1413,4 @@ const struct desk_app_s g_app_calc =
   .frame  = calc_frame,
   .single = true,
 };
+#endif

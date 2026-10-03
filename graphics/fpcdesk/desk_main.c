@@ -3,20 +3,14 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * The FPC desktop: a shell for the NX server's compositor
- * (CONFIG_NX_COMPOSITOR).  It starts the NX server, then makes the
- * desktop out of NX windows the server composites:
+ * The FPC desktop: starts the NX server and builds the desktop out of
+ * windows its compositor (CONFIG_NX_COMPOSITOR) composites: the wallpaper
+ * (desktop layer), the top bar and dock (layer windows: translucent display
+ * lists) and application windows (nxtk frames; the toolbar is the title
+ * bar).
  *
- *   - the wallpaper: a window in the desktop layer, drawn once;
- *   - the top bar and the dock: layer windows (no pixels, a display list
- *     the compositor replays over what is below them: translucent);
- *   - application windows: framed windows (nxtk) whose toolbar is the
- *     title bar, with round corners and a soft shadow, the active one's
- *     deeper.
- *
- * NX calls its callbacks on the listener thread; they only queue events.
- * Everything else happens on the main thread: the events, a tick once a
- * second (the clock, the monitor), animation frames.
+ * NX callbacks run on the listener thread and only queue events; the rest
+ * (events, the once-a-second tick, animation frames) runs on the main thread.
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -88,9 +82,7 @@ static void q_push(const struct desk_event_s *ev)
 
   pthread_mutex_lock(&g_q.lock);
 
-  /* Pointer movement: only the latest counts, as long as the buttons are
-   * the same
-   */
+  /* Pointer moves with the same buttons coalesce: only the latest counts */
 
   if (ev->type == EV_MOUSE && g_q.n > 0)
     {
@@ -185,9 +177,9 @@ static void q_wakes(void)
       w->wakeq = false;
       pthread_mutex_unlock(&g_q.lock);
 
-      if (due && !w->closing && g_apps[w->app]->wake != NULL)
+      if (due && !w->closing && desk_win_app(w)->wake != NULL)
         {
-          g_apps[w->app]->wake(w);
+          desk_win_app(w)->wake(w);
         }
     }
 }
@@ -346,8 +338,8 @@ const struct nx_callback_s g_desk_partcb =
   cb_redraw, cb_client_pos, cb_part_mouse, cb_kbdin, cb_part_event
 };
 
-/* NX's messages.  An error is said (on the syslog: the desktop has no
- * console) and survived, unless the server has gone or it goes on.
+/* NX's messages.  Errors go to the syslog (no console) and are survived,
+ * unless the server has gone or they persist.
  */
 
 static void *listener(void *arg)
@@ -384,9 +376,7 @@ static void *listener(void *arg)
  * Private Functions: windows
  ****************************************************************************/
 
-/* A window's effects: its shadow as the theme has it, scaled by the
- * setting, its edge
- */
+/* A window's effects: the theme's shadow scaled by the setting, its edge */
 
 static void win_effects(struct desk_win_s *w, uint8_t opacity)
 {
@@ -402,15 +392,13 @@ static void win_effects(struct desk_win_s *w, uint8_t opacity)
            scale[g_prefs.shadow & 3] / 100;
   shadow = shadow > 255 ? 255 : shadow;
 
-  /* A window other than the active one may give up its pixels while it
-   * is not seen (minimised, or covered): every application draws all of
-   * its window again when asked (expose), and the title bar is drawn
-   * again on request (cb_title_redraw())
+  /* An inactive window may drop its pixels while unseen: applications
+   * redraw on expose, the title bar on request (cb_title_redraw())
    */
 
   memset(&fx, 0, sizeof(fx));
   fx.flags    = NX_FX_ROUND | (g_theme.darkedge ? NX_FX_DARKEDGE : 0) |
-                (w->active || g_apps[w->app]->nopark ? 0 : NX_FX_PARK);
+                (w->active || desk_win_app(w)->nopark ? 0 : NX_FX_PARK);
   fx.layer    = NX_LAYER_NORMAL;
   fx.opacity  = opacity;
   fx.shadow   = (uint8_t)(shadow * opacity / 255);
@@ -466,8 +454,8 @@ static void win_setpos(struct desk_win_s *w, int x, int y)
       x = 60 - w->size.w;
     }
 
-  /* The frame itself (nxtk_setposition() works from what the library last
-   * heard of the window, which may not be the latest)
+  /* The frame itself (nxtk_setposition() uses the library's possibly stale
+   * idea of the window)
    */
 
   pos.x  = x;
@@ -490,7 +478,7 @@ static void win_setsize(struct desk_win_s *w, int cw, int ch)
 
 static void win_client_redraw(struct desk_win_s *w)
 {
-  const struct desk_app_s *a = g_apps[w->app];
+  const struct desk_app_s *a = desk_win_app(w);
 
   /* The library must know the new size before drawing into it */
 
@@ -543,8 +531,8 @@ uint32_t desk_ms(void)
   return (uint32_t)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
 }
 
-/* The title bar: flat, a hairline of light along the top, the traffic
- * lights (with their symbols while the pointer is over them), the title
+/* The title bar: flat, a highlight along the top, the traffic lights
+ * (symbols on hover), the title
  */
 
 void desk_win_title(struct desk_win_s *w)
@@ -652,6 +640,15 @@ struct desk_win_s *desk_win_open(int app, const char *title, int cw, int ch)
   int x;
   int y;
 
+  /* An application running as a program of its own: a window of the
+   * desktop's for it, through deskwin (desk_program.c)
+   */
+
+  if (desk_program_self())
+    {
+      return desk_program_win_open(app, title, cw, ch);
+    }
+
   w = calloc(1, sizeof(*w));
   if (w == NULL)
     {
@@ -722,9 +719,8 @@ struct desk_win_s *desk_win_open(int app, const char *title, int cw, int ch)
   return w;
 }
 
-/* Wait until the listener has seen everything the server has said about
- * the window so far (its size, position): the library clips drawing to
- * what it knows of the client area
+/* Wait for the listener to catch up with the window's size and position:
+ * the library clips drawing to what it knows of the client area
  */
 
 void desk_win_sync(struct desk_win_s *w)
@@ -755,9 +751,7 @@ void desk_win_show(struct desk_win_s *w)
   desk_win_activate(w);
 }
 
-/* g_desk.wins is in stacking order, the top first: a window raised goes
- * to its head
- */
+/* g_desk.wins is in stacking order, the top first: raising moves to the head */
 
 static void win_to_top(struct desk_win_s *w)
 {
@@ -811,9 +805,9 @@ void desk_win_activate(struct desk_win_s *w)
       w->active = true;
       desk_win_title(w);
       win_effects(w, w->fade > 0 ? 255 / (w->fade + 1) : 255);
-      if (g_apps[w->app]->focus != NULL)
+      if (desk_win_app(w)->focus != NULL)
         {
-          g_apps[w->app]->focus(w);
+          desk_win_app(w)->focus(w);
         }
     }
 
@@ -821,9 +815,7 @@ void desk_win_activate(struct desk_win_s *w)
   desk_dock_draw();
 }
 
-/* The next window to be active: the top one not minimised (the list is
- * in stacking order)
- */
+/* The next window to be active: the topmost not minimised */
 
 static struct desk_win_s *win_next_active(struct desk_win_s *not)
 {
@@ -842,6 +834,12 @@ static struct desk_win_s *win_next_active(struct desk_win_s *not)
 
 void desk_win_close(struct desk_win_s *w)
 {
+  if (desk_program_hwnd(w->hwnd))
+    {
+      desk_program_win_close(w);            /* (A program's own) */
+      return;
+    }
+
   if (w->closing)
     {
       return;
@@ -851,9 +849,9 @@ void desk_win_close(struct desk_win_s *w)
 #ifdef CONFIG_FPCDESK_SOUND
   desk_sound_play(SND_CLOSE);
 #endif
-  if (g_apps[w->app]->close != NULL)
+  if (desk_win_app(w)->close != NULL)
     {
-      g_apps[w->app]->close(w);
+      desk_win_app(w)->close(w);
     }
 
   if (g_desk.active == w)
@@ -949,9 +947,7 @@ void desk_win_restore(struct desk_win_s *w)
   desk_win_activate(w);
 }
 
-/* A maximised window: all of the display between the top bar and the
- * dock
- */
+/* A maximised window: the display between the top bar and the dock */
 
 static void win_setmax(struct desk_win_s *w)
 {
@@ -1017,14 +1013,18 @@ void desk_launch(int app)
       return;
     }
 
-  if (a->open != NULL && (w = a->open()) != NULL)
+  if (a->program != NULL)
+    {
+      desk_program_start(app);              /* (Its window comes later) */
+    }
+  else if (a->open != NULL && (w = a->open()) != NULL)
     {
       desk_win_show(w);
     }
 }
 
-/* The display has a new size: the panels follow, maximised windows fill
- * it again, the others shrink to fit and stay on it
+/* A new display size: the panels follow, maximised windows refill it, the
+ * others shrink to stay on it
  */
 
 void desk_relayout(void)
@@ -1083,9 +1083,9 @@ void desk_relayout(void)
     {
       if (!w->closing &&
           (w->app == APP_SETTINGS || w->app == APP_ABOUT) &&
-          g_apps[w->app]->draw != NULL)
+          desk_win_app(w)->draw != NULL)
         {
-          g_apps[w->app]->draw(w);
+          desk_win_app(w)->draw(w);
         }
     }
 }
@@ -1105,8 +1105,8 @@ static void on_mode(void)
   desk_relayout();
 }
 
-/* A new theme, accent, or window effects: the panels, every title bar,
- * every window's effects and every window's contents
+/* A new theme, accent or window effects: redraw the panels, title bars,
+ * effects and every window's contents
  */
 
 void desk_theme_changed(void)
@@ -1119,7 +1119,7 @@ void desk_theme_changed(void)
 
   for (w = g_desk.wins; w != NULL; w = w->next)
     {
-      const struct desk_app_s *a = g_apps[w->app];
+      const struct desk_app_s *a = desk_win_app(w);
 
       if (w->closing)
         {
@@ -1154,9 +1154,7 @@ void desk_localtime(struct tm *tm)
   gmtime_r(&now, tm);
 }
 
-/* Quit an application: all of its windows close (asking first where they
- * would)
- */
+/* Quit an application: close all its windows (asking where they would) */
 
 void desk_app_quit(int app)
 {
@@ -1184,9 +1182,9 @@ void desk_app_quit(int app)
  * Private Functions: events
  ****************************************************************************/
 
-/* The pointer over / pressing / dragging an application window: pos is in
- * frame coordinates (while a button is held, relative to where the frame
- * was when it went down)
+/* The pointer over, pressing or dragging an application window: pos is in
+ * frame coordinates (while a button is held, relative to the frame at the
+ * press)
  */
 
 static void win_mouse(struct desk_win_s *w, int part, int x, int y,
@@ -1262,9 +1260,9 @@ static void win_mouse(struct desk_win_s *w, int part, int x, int y,
     {
       w->buttonpressed = false;
       desk_win_title(w);
-      if (release && button && g_apps[w->app]->button != NULL)
+      if (release && button && desk_win_app(w)->button != NULL)
         {
-          g_apps[w->app]->button(w);
+          desk_win_app(w)->button(w);
         }
 
       return;
@@ -1324,9 +1322,9 @@ static void win_mouse(struct desk_win_s *w, int part, int x, int y,
   /* The rest of the client area's events are the application's */
 
   if (part == PART_CLIENT && g_desk.resize != w &&
-      g_apps[w->app]->mouse != NULL)
+      desk_win_app(w)->mouse != NULL)
     {
-      g_apps[w->app]->mouse(w, x, y - TITLE_H, buttons);
+      desk_win_app(w)->mouse(w, x, y - TITLE_H, buttons);
     }
 
   if (release && w->pressed >= 0)
@@ -1339,8 +1337,8 @@ static void win_mouse(struct desk_win_s *w, int part, int x, int y,
           switch (which)
             {
               case 0:
-                if (g_apps[w->app]->canclose == NULL ||
-                    g_apps[w->app]->canclose(w))
+                if (desk_win_app(w)->canclose == NULL ||
+                    desk_win_app(w)->canclose(w))
                   {
                     desk_win_close(w);
                   }
@@ -1445,9 +1443,9 @@ static void on_mouse(struct desk_event_s *ev)
     {
       w = g_desk.pointerwin;
       g_desk.pointerwin = NULL;
-      if (!w->closing && g_apps[w->app]->mouse != NULL)
+      if (!w->closing && desk_win_app(w)->mouse != NULL)
         {
-          g_apps[w->app]->mouse(w, -1, -1, 0);
+          desk_win_app(w)->mouse(w, -1, -1, 0);
         }
     }
 
@@ -1487,10 +1485,9 @@ static void on_mouse(struct desk_event_s *ev)
   g_desk.buttons = ev->buttons;
 }
 
-/* Keys go to a menu (Escape closes it), the launcher while it is open
- * (its search), else the active window: key events (nxkeys.h) to an
- * application that takes them, else what they type, as bytes; plain bytes
- * (deskctl k) as they are
+/* Keys go to an open menu (Escape closes it), else the launcher's search,
+ * else the active window: key events (nxkeys.h) if it takes them, else the
+ * bytes they type.  Plain bytes (deskctl k) pass as they are.
  */
 
 static void kbd_bytes(struct desk_win_s *w, const uint8_t *ch, int n)
@@ -1508,9 +1505,9 @@ static void kbd_bytes(struct desk_win_s *w, const uint8_t *ch, int n)
     {
       desk_launcher_key(ch, n);
     }
-  else if (w != NULL && !w->closing && g_apps[w->app]->key != NULL)
+  else if (w != NULL && !w->closing && desk_win_app(w)->key != NULL)
     {
-      g_apps[w->app]->key(w, ch, n);
+      desk_win_app(w)->key(w, ch, n);
     }
 }
 
@@ -1540,9 +1537,9 @@ static void on_kbd(struct desk_event_s *ev)
       nb = 0;
 
 #ifdef CONFIG_FPCDESK_SOUND
-      /* The volume keys (the desktop session takes a keyboard's; these
-       * come from elsewhere: deskctl key vol+)
-       */
+          /* Volume keys from elsewhere (deskctl key vol+); the session
+           * handles a keyboard's own
+           */
 
       if (desk_sound_key(&key))
         {
@@ -1551,9 +1548,9 @@ static void on_kbd(struct desk_event_s *ev)
 #endif
 
       if (g_desk.menu == NULL && g_desk.launcher == NULL && w != NULL &&
-          !w->closing && g_apps[w->app]->keyev != NULL)
+          !w->closing && desk_win_app(w)->keyev != NULL)
         {
-          g_apps[w->app]->keyev(w, &key);
+          desk_win_app(w)->keyev(w, &key);
         }
       else
         {
@@ -1646,9 +1643,7 @@ static bool animate(void)
           more = true;
           if (w->fadeout == 0 && w->closing && !w->closedone)
             {
-              /* Nothing more from the server for it, then it goes
-               * (EV_BLOCKED)
-               */
+              /* Stop the server's events for it; it goes on EV_BLOCKED */
 
               w->closedone = true;
               nxtk_block(w->hwnd, w);
@@ -1671,8 +1666,8 @@ static bool animate(void)
   return more;
 }
 
-/* Application frames: the windows that asked for them (w->frames);
- * returns whether any did
+/* Application frames for the windows that asked (w->frames); returns
+ * whether any did
  */
 
 static bool frames(void)
@@ -1685,9 +1680,9 @@ static bool frames(void)
     {
       next = w->next;
       if (w->frames && !w->closing && !w->minimized &&
-          g_apps[w->app]->frame != NULL)
+          desk_win_app(w)->frame != NULL)
         {
-          g_apps[w->app]->frame(w);
+          desk_win_app(w)->frame(w);
           more |= w->frames;
         }
     }
@@ -1720,9 +1715,9 @@ static void tick(void)
           continue;
         }
 
-      if (g_apps[w->app]->tick != NULL && !w->minimized)
+      if (desk_win_app(w)->tick != NULL && !w->minimized)
         {
-          g_apps[w->app]->tick(w);
+          desk_win_app(w)->tick(w);
         }
     }
 }
@@ -1773,9 +1768,7 @@ int main(int argc, FAR char *argv[])
       return EXIT_FAILURE;
     }
 
-  /* Key events, not only bytes: the applications that want them get
-   * presses and releases (games), the others what the keys type
-   */
+  /* Key events, not only bytes: games want presses and releases */
 
   nx_kbdmode(g_desk.hnx, NX_KBDMODE_KEYS);
 
@@ -1785,9 +1778,7 @@ int main(int argc, FAR char *argv[])
 
   caps = nx_compositor(g_desk.hnx);
 
-  /* The display mode saved last time (the listener will see the event of
-   * the change; the panels are made at the new size)
-   */
+  /* The display mode saved last time (the panels are made at the new size) */
 
   ret = desk_prefs_load();
   if (ret >= 0 && ret != nx_getdisplaymode(g_desk.hnx, -1, NULL))
@@ -1876,9 +1867,7 @@ int main(int argc, FAR char *argv[])
 
       anim = animate();
 
-      /* Applications' frames, at most one a FRAME_MS (events do not make
-       * them come sooner)
-       */
+      /* Application frames, at most one per FRAME_MS */
 
       if ((int32_t)(desk_ms() - nextframe) >= 0)
         {

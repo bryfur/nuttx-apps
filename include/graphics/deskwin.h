@@ -36,34 +36,20 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-/* Windows of the FPC desktop (apps/graphics/fpcdesk) for other tasks:
- * programs started anywhere (a terminal, a script) that want a window,
- * such as MicroPython's fpc module.
+/* Desktop windows for other tasks (e.g. MicroPython's fpc module).  The
+ * program never talks to the NX server: it queues drawing commands and
+ * widget changes that the desktop's main thread carries out at
+ * deskwin_flush(), and reads events with deskwin_event().  A slow or
+ * crashed program can't hold the desktop up; its windows close when its
+ * task ends.
  *
- * The desktop owns the window: its title bar, its place among the others,
- * the GPU.  The program's task never talks to the NX server: it queues
- * drawing commands and widget changes (deskwin_fill() ... deskwin_flush())
- * that the desktop's main thread carries out, and reads events from a
- * queue (deskwin_event()).  So a program that stops, crashes or is slow
- * never holds the desktop up, and one that ends without a word has its
- * windows closed (the desktop watches its task).
+ * Coordinates are the client area's, colours RGB565.  The desktop replays
+ * what was drawn since the last deskwin_clear() when the window's pixels
+ * are lost; past DESKWIN_KEEP bytes it sends DESKWIN_EV_EXPOSE instead.
+ * Widgets are the desktop's kit (docs/uikit.md), ids 1 to DESKWIN_WIDGETS.
  *
- * Coordinates are the client area's: (0, 0) is its top-left, below the
- * title bar.  Colours are RGB565.  Drawing goes into the window's pixels
- * (what the GPU keeps), behind its widgets, and the desktop remembers
- * what was drawn since the window was last cleared all over
- * (deskwin_clear()) so that it can draw it again itself when the window's
- * pixels are lost (a theme change, a parked window).  If that is too much
- * (DESKWIN_KEEP bytes of commands), the program is asked to
- * (DESKWIN_EV_EXPOSE).
- *
- * Widgets are the desktop's kit (docs/uikit.md) at places the program
- * gives, with ids the program chooses (1 to DESKWIN_WIDGETS); what the
- * user does with them comes as DESKWIN_EV_WIDGET events, and their values
- * can be read at any time (deskwin_widget_get()).
- *
- * All the functions are for one task at a time (the one that opened the
- * window); deskwin_text_width() and _height(), from any.
+ * Only the task that opened the window may use it (deskwin_text_width()
+ * and _height(): any task).
  */
 
 /* Event types */
@@ -178,13 +164,19 @@ extern "C"
 
 FAR struct deskwin_s *deskwin_open(FAR const char *title, int w, int h);
 
-/* Close it (if the user has not) and let go of it: d is not to be used
- * again.
+/* The same, the window one of an application of the desktop's (its enum
+ * desk_app_e: its name and icon in the dock), for an application built as
+ * a program of its own (graphics/fpcdesk/desk_program.c); -1: none
  */
+
+FAR struct deskwin_s *deskwin_open_app(int app, FAR const char *title,
+                                       int w, int h);
+
+/* Close it (if the user has not) and free d */
 
 void deskwin_close(FAR struct deskwin_s *d);
 
-/* Whether it is still there (not closed by the user or the desktop) */
+/* Not closed by the user or the desktop */
 
 bool deskwin_alive(FAR struct deskwin_s *d);
 
@@ -200,9 +192,8 @@ void deskwin_size(FAR struct deskwin_s *d, FAR int *w, FAR int *h);
 int deskwin_event(FAR struct deskwin_s *d, FAR struct deskwin_event_s *ev,
                   int timeout);
 
-/* Drawing: commands queued, carried out in order at the next
- * deskwin_flush() (or when the queue is full).  alpha 255 is opaque;
- * radius rounds the corners (a circle: a square of 2r with radius r).
+/* Drawing: queued until deskwin_flush() (or a full queue).  alpha 255 is
+ * opaque; radius rounds the corners.
  */
 
 void deskwin_fill(FAR struct deskwin_s *d, int x, int y, int w, int h,
@@ -222,9 +213,17 @@ void deskwin_copy(FAR struct deskwin_s *d, int sx, int sy, int w, int h,
 void deskwin_clip(FAR struct deskwin_s *d, int x, int y, int w, int h);
 void deskwin_clear(FAR struct deskwin_s *d, uint16_t c);
 
-/* Hand what is queued to the desktop: 0, or -ETIMEDOUT if it has had too
- * much to do for timeout ms (-1: wait until it has room), -EPIPE if the
- * window has gone.
+/* The desktop's own drawing operations (n struct nx_gpuop_s,
+ * nuttx/nx/nxcompose.h), in frame coordinates (the client area is at y
+ * TITLE_H): what an application of the desktop's draws, run as a program
+ * (desk_program.c).  A source other than the font atlas or the window's
+ * own images is not drawn.
+ */
+
+void deskwin_ops(FAR struct deskwin_s *d, FAR const void *ops, int n);
+
+/* Hand the queue to the desktop: 0, -ETIMEDOUT if it had no room for
+ * timeout ms (-1: wait), -EPIPE if the window has gone.
  */
 
 int deskwin_flush(FAR struct deskwin_s *d, int timeout);
@@ -234,10 +233,9 @@ int deskwin_flush(FAR struct deskwin_s *d, int timeout);
 void deskwin_title(FAR struct deskwin_s *d, FAR const char *title);
 void deskwin_frames(FAR struct deskwin_s *d, bool on);
 
-/* Images: a file (BMP 1-32 bits, PPM, PGM, PBM) into the GPU's memory,
- * no larger than maxw x maxh (0: as it is, up to the GPU's limits): its
- * number (0 to DESKWIN_IMAGES - 1) and size, or a negated errno (err, if
- * not NULL, says why).  Waits for the desktop.
+/* Load an image file (BMP, PPM, PGM, PBM) into the GPU's memory, scaled
+ * to fit maxw x maxh (0: no limit).  Returns its number (< DESKWIN_IMAGES)
+ * or a negated errno, with the reason in err.  Waits for the desktop.
  */
 
 int deskwin_image_load(FAR struct deskwin_s *d, FAR const char *path,
@@ -245,8 +243,8 @@ int deskwin_image_load(FAR struct deskwin_s *d, FAR const char *path,
                        FAR char *err, int errlen);
 void deskwin_image_free(FAR struct deskwin_s *d, int img);
 
-/* Widgets: made (or made again) at (x, y), w x h (0: its natural size);
- * items for lists and drop-downs ("\n" between), a field's placeholder
+/* Widgets: (re)made at (x, y), w x h (0: natural size); items: list and
+ * drop-down rows ("\n" between), or a field's placeholder
  */
 
 void deskwin_widget(FAR struct deskwin_s *d, int id, int type, int x, int y,
@@ -259,9 +257,7 @@ void deskwin_widget_move(FAR struct deskwin_s *d, int id, int x, int y,
                          int w, int h);
 void deskwin_widget_remove(FAR struct deskwin_s *d, int id);
 
-/* Its value and text now (a field's text, a button's or label's): false
- * if there is no such widget
- */
+/* Its value and text now: false if there is no such widget */
 
 bool deskwin_widget_get(FAR struct deskwin_s *d, int id, FAR int *value,
                         FAR char *text, int textlen);

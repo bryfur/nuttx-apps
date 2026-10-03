@@ -51,9 +51,7 @@ struct vt_cell_s
   uint8_t at;                          /* VT_* */
 };
 
-/* A line: its cells (as many as it had columns when it was last written;
- * the rest are blank), and the columns changed since it was last drawn
- */
+/* A line: n cells (the rest blank) and the columns changed since drawn */
 
 struct vt_line_s
 {
@@ -82,9 +80,8 @@ struct vt_s
   struct vt_line_s **main;
   struct vt_line_s **alt;              /* The alternate screen, or NULL */
 
-  /* Scrollback: a ring of lines that scrolled off the top of the main
-   * screen, oldest first (sb[(sbhead + i) % sbcap]); the ring grows as it
-   * fills, up to sbmax lines, then the oldest are reused
+  /* Scrollback: a ring, oldest first (sb[(sbhead + i) % sbcap]), grown
+   * up to sbmax lines
    */
 
   struct vt_line_s **sb;

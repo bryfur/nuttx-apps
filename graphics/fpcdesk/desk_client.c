@@ -103,6 +103,12 @@
 #define CMD_WDEL          15                   /* id */
 #define CMD_IMGFREE       16                   /* img */
 #define CMD_CLOSE         17
+#define CMD_OPS           18                   /* n, n struct nx_gpuop_s:
+                                                * the desktop's own drawing
+                                                * operations, frame
+                                                * coordinates (a program
+                                                * built from a desktop
+                                                * application, desk_program.c) */
 
 #define CMD_HDR           4
 #define CMD_MAXARGS       10
@@ -154,6 +160,7 @@ struct deskwin_s
   sem_t    reply;                      /* Open, a sync, an image */
   int      refs;                       /* The client, the desktop */
   pid_t    pid;                        /* The client */
+  int      app;                        /* Its window's application, or -1 */
 
   /* Under the lock */
 
@@ -883,6 +890,30 @@ static const char *cmd_str(const struct cmd_s *cmd, int which)
   return s < end && memchr(s, '\0', end - s) != NULL ? s : "";
 }
 
+/* A source an operation of the program's may read: none (a fill, or the
+ * window itself), the desktop's font atlas, an image of its own
+ */
+
+static bool client_src_ok(struct client_win_s *c, FAR void *src)
+{
+  int i;
+
+  if (src == NULL || src == g_desk.atlas)
+    {
+      return true;
+    }
+
+  for (i = 0; i < DESKWIN_IMAGES; i++)
+    {
+      if (c->img[i] != NULL && src == c->img[i]->hwnd)
+        {
+          return true;
+        }
+    }
+
+  return false;
+}
+
 /* One drawing command, frame coordinates made from the client's */
 
 static void draw_cmd(struct client_win_s *c, struct emit_s *e,
@@ -963,6 +994,44 @@ static void draw_cmd(struct client_win_s *c, struct emit_s *e,
             {
               img_blend(g_tmp, img, arg(cmd, 1), arg(cmd, 2), w, h,
                         arg(cmd, 5), arg(cmd, 6) + y0, arg(cmd, 7) & 255);
+            }
+
+          emit(e);
+        }
+        break;
+
+      case CMD_OPS:
+        {
+          const struct nx_gpuop_s *op = (const struct nx_gpuop_s *)
+                                        ((const int32_t *)(cmd + 1) +
+                                         cmd->nargs);
+          int n = arg(cmd, 0);
+          int i;
+
+          if (n < 0 || cmd->nargs * 4 + CMD_HDR + n * sizeof(*op) >
+              cmd->len)
+            {
+              break;
+            }
+
+          /* Each one checked: an operation the desktop makes, from a
+           * surface the program may use (none, the font atlas, its images)
+           */
+
+          for (i = 0; i < n; i++)
+            {
+              if ((op[i].op != NX_GPUOP_FILL && op[i].op != NX_GPUOP_BLEND &&
+                   op[i].op != NX_GPUOP_COPY) || !client_src_ok(c, op[i].src))
+                {
+                  continue;
+                }
+
+              if (g_tmp->n == NX_GPUOPS_MAX)
+                {
+                  emit(e);
+                }
+
+              g_tmp->op[g_tmp->n++] = op[i];
             }
 
           emit(e);
@@ -1060,6 +1129,21 @@ static void keep(struct client_win_s *c, const struct cmd_s *cmd)
   else if (cmd->op == CMD_COPY)
     {
       c->keepok = false;                 /* Depends on what was there */
+    }
+  else if (cmd->op == CMD_OPS)
+    {
+      const struct nx_gpuop_s *op = (const struct nx_gpuop_s *)
+                                    ((const int32_t *)(cmd + 1) +
+                                     cmd->nargs);
+      int i;
+
+      for (i = 0; i < arg(cmd, 0) && c->keepok; i++)
+        {
+          if (op[i].op == NX_GPUOP_COPY && op[i].src == NULL)
+            {
+              c->keepok = false;         /* (The same) */
+            }
+        }
     }
 
   if (!c->keepok)
@@ -1895,6 +1979,7 @@ static void run_cmds(struct client_win_s *c, const uint8_t *buf, size_t n)
           case CMD_IMAGE:
           case CMD_COPY:
           case CMD_CLEAR:
+          case CMD_OPS:
             if (!placed)
               {
                 /* Widgets changed: they are where they are now */
@@ -2170,6 +2255,7 @@ static void client_focus(struct desk_win_s *w)
 static void client_close(struct desk_win_s *w)
 {
   struct client_win_s *c = w->priv;
+  struct desk_win_s *o;
   struct deskwin_s *s;
   int i;
 
@@ -2222,6 +2308,23 @@ static void client_close(struct desk_win_s *w)
     }
 
   s_unref(s);
+
+  /* The last program's window gone: the drawing buffers too (18 KB; made
+   * again by the next one, client_open())
+   */
+
+  for (o = g_desk.wins; o != NULL; o = o->next)
+    {
+      if (o != w && o->client && !o->closedone)
+        {
+          return;
+        }
+    }
+
+  free(g_tmp);
+  free(g_out);
+  g_tmp = NULL;
+  g_out = NULL;
 }
 
 /* A new window for a session (EV_CLIENT) */
@@ -2255,8 +2358,9 @@ static void client_open(struct deskwin_s *s)
       c->take = malloc(PENDING);
       if (c->take != NULL)
         {
-          w = desk_win_open(APP_PYTHON, s->title, MAX(s->reqw, MIN_W),
-                            MAX(s->reqh, MIN_H));
+          w = desk_win_open(s->app > 0 && s->app < APP_COUNT ?
+                            s->app : APP_PYTHON, s->title,
+                            MAX(s->reqw, MIN_W), MAX(s->reqh, MIN_H));
         }
     }
 
@@ -2286,6 +2390,7 @@ static void client_open(struct deskwin_s *s)
   c->keepok = true;
   w->priv   = c;
   w->pid    = s->pid;
+  w->client = true;
   s->win    = w;
   s->cw     = w->csize.w;
   s->ch     = w->csize.h;
@@ -2504,6 +2609,12 @@ const struct desk_app_s g_app_client =
 
 FAR struct deskwin_s *deskwin_open(FAR const char *title, int w, int h)
 {
+  return deskwin_open_app(-1, title, w, h);
+}
+
+FAR struct deskwin_s *deskwin_open_app(int app, FAR const char *title,
+                                       int w, int h)
+{
   pthread_mutexattr_t attr;
   struct deskwin_s *s;
   int i;
@@ -2541,6 +2652,7 @@ FAR struct deskwin_s *deskwin_open(FAR const char *title, int w, int h)
   s->magic = SESSION_MAGIC;
   s->refs  = 2;                        /* The client, the desktop */
   s->pid   = getpid();
+  s->app   = app;
   s->reqw  = MIN(MAX(w, 1), 4096);
   s->reqh  = MIN(MAX(h, 1), 4096);
   strlcpy(s->title, title != NULL ? title : "Python", sizeof(s->title));
@@ -2711,6 +2823,38 @@ int deskwin_flush(FAR struct deskwin_s *d, int timeout)
 
   s_unlock(d);
   return 0;
+}
+
+/* The desktop's own drawing operations (struct nx_gpuop_s, frame
+ * coordinates), as many commands as they take
+ */
+
+void deskwin_ops(FAR struct deskwin_s *d, FAR const void *ops, int n)
+{
+  const struct nx_gpuop_s *op = ops;
+  const int per = (BATCH - CMD_HDR - 4) / sizeof(*op);
+
+  while (d != NULL && n > 0)
+    {
+      int k = n < per ? n : per;
+      size_t len = (CMD_HDR + 4 + k * sizeof(*op) + 3) & ~(size_t)3;
+      struct cmd_s *cmd;
+
+      if (d->nbatch + len > BATCH)
+        {
+          deskwin_flush(d, -1);
+        }
+
+      cmd = (struct cmd_s *)(d->batch + d->nbatch);
+      cmd->op    = CMD_OPS;
+      cmd->nargs = 1;
+      cmd->len   = len;
+      ((int32_t *)(cmd + 1))[0] = k;
+      memcpy((int32_t *)(cmd + 1) + 1, op, k * sizeof(*op));
+      d->nbatch += len;
+      op += k;
+      n  -= k;
+    }
 }
 
 void deskwin_fill(FAR struct deskwin_s *d, int x, int y, int w, int h,

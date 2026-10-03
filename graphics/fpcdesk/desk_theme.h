@@ -3,20 +3,11 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * The desktop's look: colours by role, in a theme (dark or light) with an
- * accent colour, chosen at run time (Settings, Appearance).
- *
- * Draw with the roles, never with fixed colours for anything the theme
- * should change: g_theme.<role>, or the C_* names of desk.h, which read
- * it.  Colours of an application's own that differ by theme are
- * THEMED(dark, light).  Nothing may keep a theme colour in a static
- * initialiser: the theme changes while windows are open.
- *
- * When the theme changes (desk_theme_set()), the desktop draws everything
- * again: its panels, every title bar, every window's effects, and every
- * application window through its application's theme callback (struct
- * desk_app_s; by default its expose over all of the client area, or its
- * draw).
+ * The desktop's colours by role, for a dark or light theme and an accent
+ * chosen at run time.  Draw with g_theme.<role> (or desk.h's C_* names),
+ * or THEMED(dark, light) for an application's own colours; never keep a
+ * theme colour in a static initialiser, since the theme changes while
+ * windows are open and everything is then drawn again.
  ****************************************************************************/
 
 #ifndef __APPS_GRAPHICS_FPCDESK_DESK_THEME_H
@@ -181,9 +172,7 @@ extern struct desk_theme_s g_theme;
  * Public Function Prototypes
  ****************************************************************************/
 
-/* Make g_theme theme's (THEME_*) with accent (ACCENT_*).  Only the colours:
- * desk_theme_changed() (desk_main.c) then draws everything again.
- */
+/* Set g_theme's colours only; desk_theme_changed() redraws */
 
 void desk_theme_set(int theme, int accent);
 

@@ -25,8 +25,20 @@ CSRCS    += desk_kitdemo.c
 CSRCS    += desk_alarm.c desk_clock.c desk_calendar.c
 CSRCS    += desk_num.c desk_sheet.c desk_sheet_eng.c desk_sheet_io.c
 
+ifeq ($(CONFIG_FPCDESK_CLIENTS),y)
+CSRCS    += desk_client.c desk_program.c
+endif
+
 ifeq ($(CONFIG_FPCDESK_PYTHON),y)
-CSRCS    += desk_client.c desk_python.c desk_ide.c desk_pyexamples.c
+CSRCS    += desk_python.c desk_ide.c desk_pyexamples.c
+endif
+
+# Applications that are programs of their own (apps/graphics/deskapps):
+# built into the desktop, only their names and icons (desk_program.c)
+
+ifeq ($(CONFIG_FPCDESK_PROGRAMS),y)
+DESK_PROGRAMS = desk_calc.c
+$(foreach f,$(DESK_PROGRAMS),$(eval $(f)_CFLAGS += -DDESK_PROGRAM_STUB))
 endif
 
 ifeq ($(CONFIG_FPCDESK_SOUND),y)

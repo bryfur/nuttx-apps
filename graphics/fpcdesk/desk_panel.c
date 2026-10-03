@@ -1084,7 +1084,12 @@ static void dock_pick(int id, void *arg)
         break;
 
       case M_NEW:
-        if (g_apps[app]->open != NULL && (w = g_apps[app]->open()) != NULL)
+        if (g_apps[app]->program != NULL)
+          {
+            desk_program_start(app);
+          }
+        else if (g_apps[app]->open != NULL &&
+                 (w = g_apps[app]->open()) != NULL)
           {
             desk_win_title(w);
             nxtk_setvisibility(w->hwnd, false);
