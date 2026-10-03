@@ -155,6 +155,9 @@ surfcache_t     *D_SCAlloc (int width, int size)
 		sc_rover = sc_base;
 	}
 		
+// FPC: nothing a queued surface reads (fpc_drawq.c) is reused before it is drawn
+	fpcq_dq_guard (sc_rover, size + sizeof(surfcache_t));
+
 // colect and free surfcache_t blocks until the rover block is large enough
 	new = sc_rover;
 	if (sc_rover->owner)

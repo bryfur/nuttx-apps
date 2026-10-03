@@ -38,6 +38,7 @@ const char *fpcq_basedir(void);
 /* The game ends: the display, the keyboard and the memory given back */
 
 void fpcq_exit(int code) __attribute__((noreturn));
+void fpcq_dq_shutdown(void);              /* fpc_drawq.c */
 
 /* A function the renderer spends its time in: run from the SRAM rather
  * than from the flash through the XIP cache the game's data in the PSRAM

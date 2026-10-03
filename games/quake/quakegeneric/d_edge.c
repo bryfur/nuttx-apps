@@ -304,9 +304,13 @@ FPCQ_FAST void D_DrawSurfaces (void)
 
 				D_CalcGradients (pface);
 
-				(*d_drawspans) (s->spans);
+				// FPC: drawn on the other core where it can be
+				if (!fpcq_dq_surface (s->spans, pcurrentcache))
+				{
+					(*d_drawspans) (s->spans);
 
-				D_DrawZSpans (s->spans);
+					D_DrawZSpans (s->spans);
+				}
 
 				if (s->insubmodel)
 				{
@@ -327,5 +331,7 @@ FPCQ_FAST void D_DrawSurfaces (void)
 			}
 		}
 	}
+
+	fpcq_dq_wait ();	// FPC: the other core's spans drawn
 }
 

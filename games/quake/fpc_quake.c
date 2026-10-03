@@ -335,6 +335,7 @@ const char *fpcq_basedir(void)
 
 void fpcq_exit(int code)
 {
+  fpcq_dq_shutdown();                     /* (It runs the game's code) */
   fs_close();
   heap_destroy();
   fflush(stdout);

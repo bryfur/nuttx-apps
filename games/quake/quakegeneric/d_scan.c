@@ -246,18 +246,64 @@ void Turbulent8 (espan_t *pspan)
 D_DrawSpans8
 =============
 */
+/* FPC: the globals as one value, for D_DrawSpans8Ctx and D_DrawZSpansCtx */
+
+FPCQ_FAST void D_SpanCtx (dspanctx_t *c)
+{
+	c->cacheblock = cacheblock;
+	c->cachewidth = cachewidth;
+	c->viewbuffer = d_viewbuffer;
+	c->screenwidth = screenwidth;
+	c->pzbuffer = d_pzbuffer;
+	c->zwidth = d_zwidth;
+	c->sdivzstepu = d_sdivzstepu;
+	c->tdivzstepu = d_tdivzstepu;
+	c->zistepu = d_zistepu;
+	c->sdivzstepv = d_sdivzstepv;
+	c->tdivzstepv = d_tdivzstepv;
+	c->zistepv = d_zistepv;
+	c->sdivzorigin = d_sdivzorigin;
+	c->tdivzorigin = d_tdivzorigin;
+	c->ziorigin = d_ziorigin;
+	c->sadjust = sadjust;
+	c->tadjust = tadjust;
+	c->bbextents = bbextents;
+	c->bbextentt = bbextentt;
+}
+
 FPCQ_FAST void D_DrawSpans8 (espan_t *pspan)
+{
+	dspanctx_t		c;
+
+	D_SpanCtx (&c);
+	D_DrawSpans8Ctx (&c, pspan);
+}
+
+/* FPC: D_DrawSpans8 with what it reads passed in (either core) */
+
+FPCQ_FAST void D_DrawSpans8Ctx (const dspanctx_t *c, espan_t *pspan)
 {
 	int				count, spancount;
 	unsigned char	*pbase, *pdest;
 	fixed16_t		s, t, snext, tnext, sstep, tstep;
 	float			sdivz, tdivz, zi, z, du, dv, spancountminus1;
 	float			sdivz8stepu, tdivz8stepu, zi8stepu;
+	const int		cachewidth = c->cachewidth;
+	pixel_t * const	d_viewbuffer = c->viewbuffer;
+	const int		screenwidth = c->screenwidth;
+	const float		d_sdivzstepu = c->sdivzstepu, d_tdivzstepu = c->tdivzstepu;
+	const float		d_zistepu = c->zistepu;
+	const float		d_sdivzstepv = c->sdivzstepv, d_tdivzstepv = c->tdivzstepv;
+	const float		d_zistepv = c->zistepv;
+	const float		d_sdivzorigin = c->sdivzorigin, d_tdivzorigin = c->tdivzorigin;
+	const float		d_ziorigin = c->ziorigin;
+	const fixed16_t	sadjust = c->sadjust, tadjust = c->tadjust;
+	const fixed16_t	bbextents = c->bbextents, bbextentt = c->bbextentt;
 
 	sstep = 0;	// keep compiler happy
 	tstep = 0;	// ditto
 
-	pbase = (unsigned char *)cacheblock;
+	pbase = (unsigned char *)c->cacheblock;
 
 	sdivz8stepu = d_sdivzstepu * 8;
 	tdivz8stepu = d_tdivzstepu * 8;
@@ -381,12 +427,24 @@ D_DrawZSpans
 */
 FPCQ_FAST void D_DrawZSpans (espan_t *pspan)
 {
+	dspanctx_t		c;
+
+	D_SpanCtx (&c);
+	D_DrawZSpansCtx (&c, pspan);
+}
+
+FPCQ_FAST void D_DrawZSpansCtx (const dspanctx_t *c, espan_t *pspan)
+{
 	int				count, doublecount, izistep;
 	int				izi;
 	short			*pdest;
 	unsigned		ltemp;
 	float			zi;			/* FPC: no double FPU */
 	float			du, dv;
+	short * const	d_pzbuffer = c->pzbuffer;
+	const int		d_zwidth = c->zwidth;
+	const float		d_zistepu = c->zistepu, d_zistepv = c->zistepv;
+	const float		d_ziorigin = c->ziorigin;
 
 // FIXME: check for clamping/range problems
 // we count on FP exceptions being turned off to avoid range problems

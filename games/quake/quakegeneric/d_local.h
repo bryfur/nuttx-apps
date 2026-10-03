@@ -73,6 +73,31 @@ extern fixed16_t	bbextents, bbextentt;
 void D_DrawSpans8 (espan_t *pspans);
 void D_DrawSpans16 (espan_t *pspans);
 void D_DrawZSpans (espan_t *pspans);
+
+// FPC: what D_DrawSpans8 and D_DrawZSpans read, as one value (a surface's
+// spans drawn on the other core, fpc_drawq.c)
+
+typedef struct
+{
+	pixel_t		*cacheblock;
+	int			cachewidth;
+	pixel_t		*viewbuffer;
+	int			screenwidth;
+	short		*pzbuffer;
+	int			zwidth;
+	float		sdivzstepu, tdivzstepu, zistepu;
+	float		sdivzstepv, tdivzstepv, zistepv;
+	float		sdivzorigin, tdivzorigin, ziorigin;
+	fixed16_t	sadjust, tadjust;
+	fixed16_t	bbextents, bbextentt;
+} dspanctx_t;
+
+void D_SpanCtx (dspanctx_t *c);			// from the globals
+void D_DrawSpans8Ctx (const dspanctx_t *c, espan_t *pspan);
+void D_DrawZSpansCtx (const dspanctx_t *c, espan_t *pspan);
+qboolean fpcq_dq_surface (espan_t *spans, surfcache_t *cache);
+void fpcq_dq_wait (void);
+void fpcq_dq_guard (const void *p, int n);
 void Turbulent8 (espan_t *pspan);
 void D_SpriteDrawSpans (sspan_t *pspan);
 
