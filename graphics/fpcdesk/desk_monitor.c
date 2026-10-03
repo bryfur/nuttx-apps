@@ -31,6 +31,10 @@
  * and draws the newest sample's columns; the table redraws the cells whose
  * contents changed and scrolls with a COPY.  Everything is drawn in full
  * only when the window opens, is resized or is exposed.
+ *
+ * A program of its own (/mnt/sd0/bin/monitor, apps/graphics/deskapps):
+ * built into the desktop (DESK_PROGRAM_STUB) this file is only the icon
+ * and the name the dock shows (desk_program.c).
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -196,6 +200,8 @@ enum
 #define ROW_EMPTY        0xfe
 #define ROW_ODD          0x01
 #define ROW_SELECTED     0x02
+
+#ifndef DESK_PROGRAM_STUB
 
 /****************************************************************************
  * Private Types
@@ -3568,6 +3574,8 @@ static struct desk_win_s *mon_open(void)
   return w;
 }
 
+#endif /* !DESK_PROGRAM_STUB */
+
 /* The icon: bars on a teal tile (few operations: every icon shares the
  * dock's and the launcher's display lists)
  */
@@ -3600,6 +3608,9 @@ static void mon_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
  * Public Data
  ****************************************************************************/
 
+#ifdef DESK_PROGRAM_STUB
+DESK_PROGRAM_APP(g_app_monitor, "System Monitor", mon_icon, "monitor", true);
+#else
 const struct desk_app_s g_app_monitor =
 {
   .name   = "System Monitor",
@@ -3613,3 +3624,4 @@ const struct desk_app_s g_app_monitor =
   .key    = mon_key,
   .single = true,
 };
+#endif

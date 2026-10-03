@@ -14,11 +14,11 @@
 
 include $(APPDIR)/Make.defs
 
-PROGNAME  = calc
-PRIORITY  = 100
-STACKSIZE = 8192
+PROGNAME  = calc monitor
+PRIORITY  = 100 100
+STACKSIZE = 8192 8192
 MODULE    = m
-MAINSRC   = calc_main.c
+MAINSRC   = calc_main.c monitor_main.c
 
 CFLAGS   += ${INCDIR_PREFIX}$(APPDIR)/graphics/fpcdesk
 
