@@ -10,7 +10,7 @@ include $(APPDIR)/Make.defs
 # The SDK (a library in libapps), the TRI games' runtime on it (tri/), and
 # fgdemo, its demonstration and test, and fgbench, the sprites a frame
 
-CSRCS  = fg_core.c fg_gfx.c fg_audio.c fg_audio_engine.c
+CSRCS  = fg_core.c fg_gfx.c fg_3d.c fg_audio.c fg_audio_engine.c
 
 ifeq ($(CONFIG_FPCGAME_TRI),y)
 CSRCS += tri_gfx.c tri_text.c tri_audio.c tri_fpc.c
@@ -26,11 +26,11 @@ MODULE    = m
 endif
 
 ifneq ($(CONFIG_FPCGAME_DEMO),)
-PROGNAME  = fgdemo fgbench
+PROGNAME  = fgdemo fgbench fg3d
 PRIORITY  = 100
 STACKSIZE = 8192
 MODULE    = $(CONFIG_FPCGAME_DEMO)
-MAINSRC   = fg_demo.c fg_bench.c
+MAINSRC   = fg_demo.c fg_bench.c fg_3ddemo.c
 endif
 
 # TRI's engine and SDK files come as they are: their warnings stay theirs

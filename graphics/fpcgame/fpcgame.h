@@ -175,6 +175,36 @@ void fg_sprite_rot(int img, int sx, int sy, int w, int h, int cx, int cy,
 void fg_sprite_matrix(int img, int sx, int sy, int w, int h, int cx, int cy,
                       uint32_t flags, int a, int b, int c, int d);
 
+/* 3D effects (fg_3d.c: the GPU's textured rows).  The w x h rectangle at
+ * (sx, sy) of an image drawn as any convex quadrilateral, in perspective:
+ * its corner k (0 top-left, 1 top-right, 2 bottom-right, 3 bottom-left)
+ * at (x[k], y[k]) of the canvas, 12.4 (1/16 pixel).  Flags: FG_OPAQUE
+ */
+
+void fg_quad(int img, int sx, int sy, int w, int h,
+             FAR const int32_t x[4], FAR const int32_t y[4], uint32_t flags);
+
+/* ... turned in 3D about its centre, which is at (cx, cy): by roll (about
+ * the view axis), then pitch (about the horizontal axis: its top towards
+ * the viewer),
+ * then yaw (about the vertical axis), each 0..4095 a turn, scaled by scale
+ * (8.8), seen from 256 pixels.  False (nothing drawn) while its back faces
+ * the viewer or it reaches the viewer
+ */
+
+bool fg_quad3d(int img, int sx, int sy, int w, int h, int cx, int cy,
+               uint32_t flags, int yaw, int pitch, int roll, int scale);
+
+/* A floor in perspective (Mode 7) on canvas rows top..bottom - 1 below
+ * the horizon row: the image's plane seen from (camx, camy) of it (8.8
+ * pixels), facing angle (0 up the image, clockwise, 0..4095 a turn), from
+ * height pixels above it with a lens of focal pixels.  Only the part
+ * showing the image is drawn.  Flags: FG_OPAQUE
+ */
+
+void fg_mode7(int img, int top, int bottom, int32_t camx, int32_t camy,
+              int angle, int height, int horizon, int focal, uint32_t flags);
+
 int  fg_sin(int angle);                   /* 8.8; angle 0..4095 a turn */
 int  fg_cos(int angle);
 
