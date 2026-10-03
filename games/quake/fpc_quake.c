@@ -42,6 +42,7 @@ void fpcq_g3_report(void);
 int  fpcq_g3_drawing(void);
 void fpcq_g3_end(void);
 const unsigned short *fpcq_base_lut(void);
+const unsigned short *fpcq_gpu_lut(void);
 void fpcq_dq_wait(void);                  /* fpc_drawq.c */
 
 #define FPCQ_PLATFORM
@@ -87,6 +88,7 @@ static struct
   uint16_t lut[256];                      /* The palette, RGB565 */
   uint16_t base[256];                     /* ... without the tints (the GPU's world) */
   bool baseok;
+  bool basesent;                          /* The GPU has base (PUT8 with NULL) */
   uint16_t tint;                          /* The tints as one BLEND (RGB565, alpha) */
   uint8_t tintalpha;
   uint32_t frames;
@@ -418,6 +420,64 @@ void QG_Quit(void)
   fs_close();
 }
 
+/* The GPU drew the world: what was drawn here goes over it, the rows
+ * with something in them (bands of them, each as wide as what is in it),
+ * keyed (255: nothing drawn), in the base palette
+ */
+
+static void overlay_send(int k, const uint8_t *pixels)
+{
+  int y0 = -1;
+  int x0 = FS_W;
+  int x1 = 0;
+  int y;
+
+  for (y = 0; y <= FS_H; y++)
+    {
+      int l = FS_W;
+      int r = -1;
+
+      if (y < FS_H)
+        {
+          const uint32_t *w = (const uint32_t *)(pixels + y * FS_W);
+          int i;
+
+          for (i = 0; i < FS_W / 4; i++)      /* (a word of four at a time) */
+            {
+              if (w[i] != 0xffffffffu)
+                {
+                  if (l == FS_W)
+                    {
+                      l = i * 4;
+                    }
+
+                  r = i * 4 + 3;
+                }
+            }
+        }
+
+      if (r >= 0)                             /* Something: in the band */
+        {
+          if (y0 < 0)
+            {
+              y0 = y;
+            }
+
+          x0 = l < x0 ? l : x0;
+          x1 = r > x1 ? r : x1;
+        }
+      else if (y0 >= 0)                       /* The band ends */
+        {
+          fpc_gpu_put8_key(g_fs.x[k] + x0, g_fs.y[k] + y0, x1 - x0 + 1,
+                           y - y0, pixels + y0 * FS_W + x0, FS_W,
+                           fpcq_gpu_lut(), 255);
+          y0 = -1;
+          x0 = FS_W;
+          x1 = 0;
+        }
+    }
+}
+
 void QG_DrawFrame(void *pixels)
 {
   int k = g_fs.back;
@@ -437,8 +497,7 @@ void QG_DrawFrame(void *pixels)
        * was drawn here), in the base palette, then the tints as a BLEND
        */
 
-      fpc_gpu_put8_key(g_fs.x[k], g_fs.y[k], FS_W, FS_H, pixels, FS_W,
-                       fpcq_base_lut(), 255);
+      overlay_send(k, pixels);
       if (g_fs.tintalpha > 0)
         {
           struct fpc_gpu_blend_s b;
@@ -459,6 +518,7 @@ void QG_DrawFrame(void *pixels)
   else
     {
       fpc_gpu_put8(g_fs.x[k], g_fs.y[k], FS_W, FS_H, pixels, FS_W, g_fs.lut);
+      g_fs.basesent = false;              /* (the GPU has the tinted one) */
     }
 
   fpc_gpu_game_flip(g_fs.x[k], g_fs.y[k]);
@@ -506,6 +566,21 @@ const unsigned short *fpcq_base_lut(void)
   return g_fs.baseok ? g_fs.base : g_fs.lut;
 }
 
+/* For a PUT8 of the GPU's world: the base palette the first time after it
+ * changed (or another was sent), else NULL (the GPU's, no compare)
+ */
+
+const unsigned short *fpcq_gpu_lut(void)
+{
+  if (g_fs.basesent && g_fs.baseok)
+    {
+      return NULL;
+    }
+
+  g_fs.basesent = g_fs.baseok;
+  return fpcq_base_lut();
+}
+
 void fpcq_palette_parts(const unsigned char *base, int r, int g, int b,
                         int alpha)
 {
@@ -520,6 +595,7 @@ void fpcq_palette_parts(const unsigned char *base, int r, int g, int b,
     }
 
   g_fs.baseok = true;
+  g_fs.basesent = false;
   g_fs.tint = (uint16_t)((r >> 3) << 11 | (g >> 2) << 5 | (b >> 3));
   g_fs.tintalpha = alpha < 0 ? 0 : alpha > 255 ? 255 : alpha;
 }

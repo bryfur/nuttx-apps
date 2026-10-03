@@ -50,7 +50,6 @@
 #define PAGES_MAX   32
 #define ATLAS_MAX   (4096 * 1024)         /* Bytes of the GPU's memory at most */
 #define SHELVES     64                    /* A page's at most */
-#define JOBS_WORDS  1024                  /* A surface's jobs, batched */
 
 /****************************************************************************
  * Private Types
@@ -85,8 +84,6 @@ static struct
   int npage;
   struct page_s page[PAGES_MAX];
   unsigned gen;                           /* The atlas's generation */
-  uint32_t jobs[JOBS_WORDS];
-  int njobs;
   uint32_t uploads, upbytes, flushes, spans, frames, fallbacks;
 } g_g3;
 
@@ -293,7 +290,7 @@ FPCQ_FAST qboolean fpcq_g3_surface(surfcache_t *c)
       c->gen = g_g3.gen;
     }
 
-  lut = fpcq_base_lut();
+  lut = fpcq_gpu_lut();                   /* (NULL: the GPU has it) */
   fpc_gpu_put8(c->gx, c->gy, c->width, c->height, c->data, c->width, lut);
   c->gdirty = 0;
   g_g3.uploads++;
@@ -335,7 +332,7 @@ FPCQ_FAST void fpcq_g3_spans_ctx(espan_t *pspan, surfcache_t *c,
   float zi16 = d_zistepu * 16;
 
   fpcq_canvas(&cx, &cy);
-  g_g3.njobs = 0;
+  fpc_gpu_jobs_lock();                    /* (the jobs written into the batch) */
   do
     {
       int count = pspan->count;
@@ -348,13 +345,7 @@ FPCQ_FAST void fpcq_g3_spans_ctx(espan_t *pspan, surfcache_t *c,
       float zi = d_ziorigin + dv * d_zistepv + du * d_zistepu;
       int k;
 
-      if (g_g3.njobs + 5 + np > JOBS_WORDS)
-        {
-          fpc_gpu_jobs(g_g3.jobs, g_g3.njobs);
-          g_g3.njobs = 0;
-        }
-
-      j = g_g3.jobs + g_g3.njobs;
+      j = fpc_gpu_jobs_room(5 + np);
       j[0] = FPC_GPU_JOB_TSPAN;
       j[1] = (uint32_t)(cx + pspan->u) | (uint32_t)(cy + pspan->v) << 16;
       j[2] = (uint32_t)count | 1u << 16;
@@ -374,12 +365,11 @@ FPCQ_FAST void fpcq_g3_spans_ctx(espan_t *pspan, surfcache_t *c,
           zi += zi16;
         }
 
-      g_g3.njobs += 5 + np;
       g_g3.spans++;
     }
   while ((pspan = pspan->pnext) != NULL);
 
-  fpc_gpu_jobs(g_g3.jobs, g_g3.njobs);
+  fpc_gpu_jobs_unlock();
 }
 
 /* A surface the atlas can take (its block at miplevel): the biggest

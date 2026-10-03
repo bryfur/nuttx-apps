@@ -119,6 +119,7 @@ qboolean fpcq_g3_queue (espan_t *spans, msurface_t *pface, int miplevel,
 void fpcq_g3_cpu (void);
 void fpcq_canvas (int *x, int *y);
 const unsigned short *fpcq_base_lut (void);
+const unsigned short *fpcq_gpu_lut (void);
 void Turbulent8 (espan_t *pspan);
 void D_SpriteDrawSpans (sspan_t *pspan);
 
