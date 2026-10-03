@@ -872,9 +872,10 @@ void r_execute_set_view_size(void)
 
 void r_init(void)
 {
-#ifdef CONFIG_GAMES_NXDOOM_FASTCODE
+#if defined(CONFIG_GAMES_NXDOOM_FASTCODE) && !defined(NXDOOM_MODULE)
   /* The renderer's variables in the SRAM (NXDOOM_SRAM) to zero, as the
-   * rest of the game's .bss is at every start
+   * rest of the game's .bss is at every start (built in: a module gets
+   * them fresh from the loader)
    */
 
   extern char __nxdoom_sram_start[];

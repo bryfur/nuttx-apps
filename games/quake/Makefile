@@ -56,8 +56,9 @@ GAMEFLAGS += -Wno-strict-prototypes -Wno-shadow -Wno-undef
 # A loadable module (/mnt/sd0/bin/quake): its code and variables are the
 # loader's for the time the game runs, nothing in the firmware's memory
 # the rest of the time.  The game's objects go into the module itself, not
-# into libapps.a (the module link would take NSH's cmd_alias for the game's
-# from there), ahead of the libraries; they get GAMEFLAGS, fpc_quake.c,
+# into libapps.a, and the module link takes nothing from libapps.a (it took
+# NSH's cmd_alias for the game's): what the game calls outside itself is
+# the firmware's, resolved by the loader.  They get GAMEFLAGS; fpc_quake.c,
 # which allocates the game's heap, does not.
 
 GAMEOBJS = $(GAMESRCS:%=$(PREFIX)%$(SUFFIX)$(OBJEXT))
@@ -70,6 +71,8 @@ $(GAMEOBJS): $(PREFIX)%.c$(SUFFIX)$(OBJEXT): %.c
 	$(call ELFCOMPILE, $<, $@)
 
 $(PROGLIST): $(GAMEOBJS)
+
+LDLIBS = $(GAMEOBJS) $(COMPILER_RT_LIB)
 
 -include $(GAMEOBJS:=.d)
 

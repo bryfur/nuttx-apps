@@ -240,7 +240,39 @@ GAMELD     = nxdoom.ld
 endif
 endif
 
+# A loadable module (CONFIG_GAMES_NXDOOM=m, /mnt/sd0/bin/nxdoom): the
+# loader gives the game fresh variables every run, and its code and
+# variables are in memory only while it runs (the renderer's NXDOOM_FAST
+# code and NXDOOM_SRAM variables in the SRAM, the board's fpc_modheap.c).
+# The game's objects go into the module, and not into libapps.a; nor does
+# the module link take anything from libapps.a, which holds the desktop
+# whose game API (graphics/deskgame.h) the game calls: that is the
+# firmware's, resolved by the loader, not a copy of its own.
+
+ifeq ($(CONFIG_GAMES_NXDOOM),m)
+GAMESRCS := $(CSRCS)
+CSRCS    :=
+GAMEOBJS  = $(GAMESRCS:%=$(PREFIX)%$(SUFFIX)$(OBJEXT))
+LDLIBS    = $(GAMEOBJS)
+CFLAGS   += -DNXDOOM_MODULE
+$(foreach f,$(GAMESRCS),$(eval $(f)_CELFFLAGS += -MMD -MP -MF $(f)$(SUFFIX)$(OBJEXT).d))
+endif
+
 include $(APPDIR)/Application.mk
+
+ifeq ($(CONFIG_GAMES_NXDOOM),m)
+LDLIBS = $(GAMEOBJS) $(COMPILER_RT_LIB)
+
+$(GAMEOBJS): $(PREFIX)%.c$(SUFFIX)$(OBJEXT): %.c
+	$(call ELFCOMPILE, $<, $@)
+
+$(PROGLIST): $(GAMEOBJS)
+
+-include $(GAMEOBJS:=.d)
+
+clean::
+	$(Q) rm -f $(GAMEOBJS) $(GAMEOBJS:=.d)
+endif
 
 ifeq ($(CONFIG_GAMES_NXDOOM_RESTART),y)
 GAMEOBJS = $(GAMESRCS:%=$(PREFIX)%$(SUFFIX)$(OBJEXT))

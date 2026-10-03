@@ -49,6 +49,7 @@
 #include <strings.h>
 #include <syslog.h>
 #include <time.h>
+#include <spawn.h>
 #include <unistd.h>
 #include <sys/stat.h>
 
@@ -1013,7 +1014,42 @@ static bool doom_find_wad(struct game_win_s *gw)
   return false;
 }
 
-/* Start the game: the nxdoom builtin, a task of its own */
+/* Start the game, a task of its own: the nxdoom builtin, or the nxdoom
+ * module on the PATH (/mnt/sd0/bin), loaded for the time it runs
+ */
+
+static pid_t doom_spawn(FAR char *argv[])
+{
+  posix_spawnattr_t attr;
+  struct sched_param param;
+  FAR char *args[8];
+  pid_t pid;
+  int ret;
+  int i;
+
+  args[0] = "nxdoom";
+  for (i = 0; argv[i] != NULL && i < 6; i++)
+    {
+      args[i + 1] = argv[i];
+    }
+
+  args[i + 1] = NULL;
+
+  posix_spawnattr_init(&attr);
+  param.sched_priority = CONFIG_FPCDESK_DOOM_PRIORITY;
+  posix_spawnattr_setschedparam(&attr, &param);
+  posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSCHEDPARAM);
+  posix_spawnattr_setstacksize(&attr, CONFIG_FPCDESK_DOOM_STACKSIZE);
+  ret = posix_spawnp(&pid, "nxdoom", NULL, &attr, args, NULL);
+  posix_spawnattr_destroy(&attr);
+  if (ret != 0)
+    {
+      errno = ret;
+      return -1;
+    }
+
+  return pid;
+}
 
 static int doom_start(struct desk_win_s *w)
 {
@@ -1028,12 +1064,6 @@ static int doom_start(struct desk_win_s *w)
 
   index = builtin_isavail("nxdoom");
   b     = index >= 0 ? builtin_for_index(index) : NULL;
-  if (b == NULL)
-    {
-      strlcpy(g->error, "The nxdoom program is not in this system",
-              sizeof(g->error));
-      return -ENOENT;
-    }
 
   /* The configuration and the saved games beside the WAD */
 
@@ -1053,14 +1083,32 @@ static int doom_start(struct desk_win_s *w)
   g->refs++;                                  /* The task's */
   pthread_mutex_unlock(&g->lock);
 
-  pid = task_create("Doom", CONFIG_FPCDESK_DOOM_PRIORITY,
-                    CONFIG_FPCDESK_DOOM_STACKSIZE, b->main, argv);
+  if (b != NULL)
+    {
+      pid = task_create("Doom", CONFIG_FPCDESK_DOOM_PRIORITY,
+                        CONFIG_FPCDESK_DOOM_STACKSIZE, b->main, argv);
+    }
+  else
+    {
+      pid = doom_spawn(argv);
+    }
+
   if (pid < 0)
     {
       int err = errno;
 
       pthread_mutex_lock(&g->lock);
-      snprintf(g->error, sizeof(g->error), "Cannot start Doom: %d", err);
+      if (b == NULL && err == ENOENT)
+        {
+          strlcpy(g->error, "No nxdoom program in this system or on its "
+                  "PATH", sizeof(g->error));
+        }
+      else
+        {
+          snprintf(g->error, sizeof(g->error), "Cannot start Doom: %d",
+                   err);
+        }
+
       game_unref(g);
       return -err;
     }
