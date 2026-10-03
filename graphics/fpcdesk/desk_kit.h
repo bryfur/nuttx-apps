@@ -511,6 +511,7 @@ struct kit_s
  * what happens (may be NULL)
  */
 
+void kit_release(FAR void *ctx);       /* A program's state (desk_program.c) */
 void kit_init(struct kit_s *k, struct desk_win_s *w,
               struct kit_widget_s *wg, int max, kit_event_t event);
 

@@ -8,6 +8,10 @@
  * a sidebar and a table that sort and scroll, dialogs, a menu, tooltips
  * and a custom widget; the status bar says what each did.  It is also
  * the kit's test: it lays itself out at any size and display mode.
+ *
+ * A program of its own (/mnt/sd0/bin/widgets, apps/graphics/deskapps):
+ * built into the desktop (DESK_PROGRAM_STUB) this file is only the icon
+ * and the name the dock shows (desk_program.c).
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -59,6 +63,8 @@ enum
   W_CANVAS,
   W_IMAGE
 };
+
+#ifndef DESK_PROGRAM_STUB
 
 /****************************************************************************
  * Private Types
@@ -735,6 +741,8 @@ static void demo_wake(struct desk_win_s *w)
     }
 }
 
+#endif /* !DESK_PROGRAM_STUB */
+
 static void demo_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
 {
   icon_tile(o, x, y, s, RGB(0x8e, 0x9a, 0xff), RGB(0x4a, 0x3c, 0xc8), a);
@@ -745,6 +753,7 @@ static void demo_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
   ops_disc(o, x + s * 2 / 3 + 2, y + s * 13 / 20, LUT_R6, 6, C_WHITE, a);
 }
 
+#ifndef DESK_PROGRAM_STUB
 static struct desk_win_s *demo_open(void)
 {
   struct desk_win_s *w;
@@ -799,10 +808,15 @@ static struct desk_win_s *demo_open(void)
   return w;
 }
 
+#endif /* !DESK_PROGRAM_STUB */
+
 /****************************************************************************
  * Public Data
  ****************************************************************************/
 
+#ifdef DESK_PROGRAM_STUB
+DESK_PROGRAM_APP(g_app_widgets, "Widgets", demo_icon, "widgets", true);
+#else
 const struct desk_app_s g_app_widgets =
 {
   .name   = "Widgets",
@@ -819,5 +833,6 @@ const struct desk_app_s g_app_widgets =
   .close  = demo_close,
   .single = true,
 };
+#endif
 
 #endif /* CONFIG_FPCDESK_WIDGETS */

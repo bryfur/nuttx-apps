@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <syslog.h>
+#include <unistd.h>
 #include <sys/param.h>
 
 #include "desk_kit.h"
@@ -68,14 +69,72 @@ struct lgeom_s
  * Private Data
  ****************************************************************************/
 
-static struct desk_ops_s *g_kops;     /* Every kit's (the main thread's),
-                                        * from the heap (PSRAM on the
-                                        * board): the first kit makes it */
-static NXWINDOW g_khwnd;               /* ... the window it is for */
-static struct kit_rect_s g_cut;        /* What is being drawn is cut to */
-static int g_cutfrom = -1;             /* ... from this operation (-1: no) */
-static bool g_dropped;                 /* Told once */
-static struct kit_widget_s g_spare;    /* When a kit's array is full */
+/* The kits' state: the desktop's main thread's, or a program's own (an
+ * application built as a program of its own, desk_program.c, runs the kit
+ * in its task: the same code, its own state)
+ */
+
+struct kit_ctx_s
+{
+  struct desk_ops_s *kops;             /* Every kit's, from the heap (PSRAM
+                                        * on the board): the first kit
+                                        * makes it */
+  NXWINDOW khwnd;                      /* ... the window it is for */
+  struct kit_rect_s cut;               /* What is being drawn is cut to */
+  int cutfrom;                         /* ... from this operation (-1: no) */
+  bool dropped;                        /* Told once */
+  struct kit_widget_s spare;           /* When a kit's array is full */
+};
+
+static struct kit_ctx_s g_kitdesk =
+{
+  .cutfrom = -1
+};
+
+static struct kit_ctx_s *kit_ctx(void)
+{
+  FAR void **slot;
+
+  if (gettid() == g_desk.tid || (slot = desk_program_kit()) == NULL)
+    {
+      return &g_kitdesk;
+    }
+
+  if (*slot == NULL)
+    {
+      struct kit_ctx_s *c = calloc(1, sizeof(*c));
+
+      if (c == NULL)
+        {
+          return &g_kitdesk;                 /* (No memory: shared) */
+        }
+
+      c->cutfrom = -1;
+      *slot = c;
+    }
+
+  return *slot;
+}
+
+/* A program's kit state, when it ends */
+
+void kit_release(FAR void *ctx)
+{
+  struct kit_ctx_s *c = ctx;
+
+  if (c != NULL && c != &g_kitdesk)
+    {
+      free(c->kops);
+      free(c);
+    }
+}
+
+#define g_kops    (kit_ctx()->kops)
+#define g_khwnd   (kit_ctx()->khwnd)
+#define g_cut     (kit_ctx()->cut)
+#define g_cutfrom (kit_ctx()->cutfrom)
+#define g_dropped (kit_ctx()->dropped)
+#define g_spare   (kit_ctx()->spare)
 
 /****************************************************************************
  * Private Functions: the list of operations

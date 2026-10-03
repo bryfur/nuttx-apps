@@ -1762,9 +1762,9 @@ static void sol_close(struct desk_win_s *w)
   g_sol_made   = false;
 }
 
-/* The icon: two cards, fanned */
-
 #endif /* !DESK_PROGRAM_STUB */
+
+/* The icon: two cards, fanned */
 
 static void sol_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
 {

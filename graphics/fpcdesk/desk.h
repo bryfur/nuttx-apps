@@ -11,6 +11,7 @@
 
 #include <nuttx/config.h>
 
+#include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <sys/types.h>
@@ -378,6 +379,9 @@ struct desk_prefs_s
 struct desk_s
 {
   NXHANDLE hnx;
+  pid_t tid;                       /* The main thread (desk_kit.c: its
+                                    * state is that thread's; a program's
+                                    * is its own) */
   int w;                           /* The display's size */
   int h;
   bool composited;
@@ -737,16 +741,30 @@ static inline const struct desk_app_s *desk_win_app(struct desk_win_s *w)
  * window is a deskwin window marked in its handle (desk_program_hwnd()).
  */
 
+#ifdef CONFIG_FPCDESK_CLIENTS
 int  desk_program_start(int app);                  /* The desktop's */
 int  desk_program_main(int app, const struct desk_app_s *a, int argc,
                        char *argv[]);               /* The program's */
 bool desk_program_self(void);                      /* Running as one */
+FAR void **desk_program_kit(void);                 /* desk_kit.c's state */
 struct desk_win_s *desk_program_win_open(int app, const char *title, int w,
                                          int h);
 void desk_program_ops(NXWINDOW hwnd, struct desk_ops_s *o);
 void desk_program_win_close(struct desk_win_s *w);
 NXWINDOW desk_program_surface_open(int w, int h, volatile bool *lost);
 void desk_program_surface_close(NXWINDOW hwnd);
+void desk_program_wake(struct desk_win_s *w);
+#else
+#  define desk_program_start(app)              (-ENOSYS)
+#  define desk_program_self()                  false
+#  define desk_program_kit()                   NULL
+#  define desk_program_win_open(app, t, w, h)  NULL
+#  define desk_program_ops(hwnd, o)            ((o)->n = 0)
+#  define desk_program_win_close(w)
+#  define desk_program_surface_open(w, h, l)   NULL
+#  define desk_program_surface_close(hwnd)
+#  define desk_program_wake(w)
+#endif
 
 /* A program's handles are marked in their low bits: 01 its window, 11 a
  * surface of its own (real handles are aligned pointers)

@@ -188,6 +188,7 @@ struct deskwin_s
   int      qn;
   bool     frameq;                     /* A frame is waiting */
   bool     tickq;
+  bool     wakeq;                      /* deskwin_wake(): the client's own */
 
   struct
   {
@@ -2922,6 +2923,15 @@ int deskwin_event(FAR struct deskwin_s *d, FAR struct deskwin_event_s *ev,
   for (; ; )
     {
       s_lock(d);
+      if (d->wakeq)
+        {
+          d->wakeq = false;
+          s_unlock(d);
+          memset(ev, 0, sizeof(*ev));
+          ev->type = DESKWIN_EV_WAKE;
+          return 1;
+        }
+
       if (d->qn > 0)
         {
           *ev = d->q[d->qhead];
@@ -2951,6 +2961,24 @@ int deskwin_event(FAR struct deskwin_s *d, FAR struct deskwin_event_s *ev,
         {
           return 0;
         }
+    }
+}
+
+/* Its own thread or another of the client's: deskwin_event() returns
+ * DESKWIN_EV_WAKE (once for any number before it)
+ */
+
+void deskwin_wake(FAR struct deskwin_s *d)
+{
+  bool post;
+
+  s_lock(d);
+  post     = !d->wakeq;
+  d->wakeq = true;
+  s_unlock(d);
+  if (post)
+    {
+      sem_post(&d->evsem);
     }
 }
 

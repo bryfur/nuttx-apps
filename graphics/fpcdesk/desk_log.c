@@ -23,6 +23,10 @@
  * The tool bar, the filter, the scroll bar and the status bar are the
  * widget kit's (desk_kit.h); the list is the log's own, a custom widget
  * of the kit that it draws itself.
+ *
+ * A program of its own (/mnt/sd0/bin/syslog, apps/graphics/deskapps):
+ * built into the desktop (DESK_PROGRAM_STUB) this file is only the icon
+ * and the name the dock shows (desk_program.c).
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -82,6 +86,8 @@
 #define L_DOT            8
 #define L_COUNTS         9
 
+#ifndef DESK_PROGRAM_STUB
+
 /****************************************************************************
  * Private Types
  ****************************************************************************/
@@ -118,6 +124,10 @@ struct log_row_s
 struct log_s
 {
   struct log_io_s *io;
+  pthread_t reader;
+  bool join;                           /* A program's: its end waits for
+                                        * the reader (else it would end it
+                                        * before it had let go) */
   bool nolog;                          /* No RAM log to read */
 
   /* The lines: line[i] is number first + i */
@@ -1194,6 +1204,10 @@ static void log_close(struct desk_win_s *w)
       pthread_mutex_unlock(&l->io->lock);
       sem_post(&l->io->go);
       l->io = NULL;                          /* The thread's now */
+      if (l->join)
+        {
+          pthread_join(l->reader, NULL);
+        }
     }
 
   for (i = 0; i < l->nline; i++)
@@ -1212,7 +1226,6 @@ static struct desk_win_s *log_open(void)
   struct desk_win_s *w;
   struct log_s *l;
   pthread_attr_t attr;
-  pthread_t thread;
   int fd;
 
   l    = calloc(1, sizeof(*l));
@@ -1262,7 +1275,7 @@ static struct desk_win_s *log_open(void)
 
           pthread_attr_init(&attr);
           pthread_attr_setstacksize(&attr, READER_STACK);
-          if (pthread_create(&thread, &attr, log_reader, l->io) != 0)
+          if (pthread_create(&l->reader, &attr, log_reader, l->io) != 0)
             {
               close(fd);
               sem_destroy(&l->io->go);
@@ -1270,9 +1283,13 @@ static struct desk_win_s *log_open(void)
               free(l->io);
               l->io = NULL;
             }
+          else if (desk_program_self())
+            {
+              l->join = true;
+            }
           else
             {
-              pthread_detach(thread);
+              pthread_detach(l->reader);
             }
         }
     }
@@ -1280,6 +1297,8 @@ static struct desk_win_s *log_open(void)
   log_draw(w);
   return w;
 }
+
+#endif /* !DESK_PROGRAM_STUB */
 
 /* A dark tile with lines of text, a red and a yellow one among them */
 
@@ -1312,6 +1331,9 @@ static void log_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
  * Public Data
  ****************************************************************************/
 
+#ifdef DESK_PROGRAM_STUB
+DESK_PROGRAM_APP(g_app_log, "System Log", log_icon, "syslog", true);
+#else
 const struct desk_app_s g_app_log =
 {
   .name   = "System Log",
@@ -1328,3 +1350,4 @@ const struct desk_app_s g_app_log =
   .close  = log_close,
   .single = true,
 };
+#endif

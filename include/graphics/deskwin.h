@@ -66,6 +66,7 @@
 #define DESKWIN_EV_TICK       8        /* Once a second */
 #define DESKWIN_EV_FOCUS      9        /* value: 1 active, 0 not */
 #define DESKWIN_EV_WIDGET     10       /* id, kind, value */
+#define DESKWIN_EV_WAKE       11       /* deskwin_wake() (the client's) */
 
 /* DESKWIN_EV_WIDGET kinds */
 
@@ -221,6 +222,12 @@ void deskwin_clear(FAR struct deskwin_s *d, uint16_t c);
  */
 
 void deskwin_ops(FAR struct deskwin_s *d, FAR const void *ops, int n);
+
+/* Wake the client's deskwin_event() (DESKWIN_EV_WAKE): from another of
+ * its threads, which has something for it
+ */
+
+void deskwin_wake(FAR struct deskwin_s *d);
 
 /* The same into a surface of the window's (deskwin_surface_open()) */
 

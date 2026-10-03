@@ -11,6 +11,7 @@
 
 #include <nuttx/config.h>
 
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -22,6 +23,7 @@
 
 static char *g_clip;
 static size_t g_cliplen;
+static pthread_mutex_t g_cliplock = PTHREAD_MUTEX_INITIALIZER;
 
 /****************************************************************************
  * Public Functions: operations
@@ -664,13 +666,23 @@ void desk_clip_set(const char *s, size_t n)
 
   memcpy(c, s, n);
   c[n] = '\0';
+
+  /* Programs of their own set and get it too (desk_program.c) */
+
+  pthread_mutex_lock(&g_cliplock);
   free(g_clip);
   g_clip    = c;
   g_cliplen = n;
+  pthread_mutex_unlock(&g_cliplock);
 }
 
 const char *desk_clip_get(size_t *n)
 {
+  const char *c;
+
+  pthread_mutex_lock(&g_cliplock);
   *n = g_cliplen;
-  return g_clip;
+  c  = g_clip;
+  pthread_mutex_unlock(&g_cliplock);
+  return c;
 }

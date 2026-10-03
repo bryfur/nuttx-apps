@@ -613,6 +613,12 @@ void desk_wake(struct desk_win_s *w)
 {
   bool post;
 
+  if (desk_program_hwnd(w->hwnd))
+    {
+      desk_program_wake(w);                /* A program's: its own loop */
+      return;
+    }
+
   pthread_mutex_lock(&g_q.lock);
   w->wakeq = true;
   post     = !g_q.wake;
@@ -1739,6 +1745,7 @@ int main(int argc, FAR char *argv[])
   int ret;
 
   memset(&g_desk, 0, sizeof(g_desk));
+  g_desk.tid       = gettid();
   g_desk.dockhover = -1;
   g_desk.dockout   = -1;                  /* Not placed yet */
   pthread_mutex_init(&g_q.lock, NULL);

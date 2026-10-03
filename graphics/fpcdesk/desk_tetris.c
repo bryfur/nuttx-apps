@@ -1171,9 +1171,9 @@ static void tet_close(struct desk_win_s *w)
   g_tet_tilecell = 0;
 }
 
-/* The icon: a T, an L and part of a J, stacked */
-
 #endif /* !DESK_PROGRAM_STUB */
+
+/* The icon: a T, an L and part of a J, stacked */
 
 static void tet_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
 {

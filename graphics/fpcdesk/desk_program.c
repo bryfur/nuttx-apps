@@ -37,6 +37,7 @@
 #include <graphics/deskwin.h>
 
 #include "desk.h"
+#include "desk_kit.h"
 
 #ifdef CONFIG_FPCDESK_CLIENTS
 
@@ -82,6 +83,7 @@ struct prog_s
   int app;
   const struct desk_app_s *a;
   struct pwin_s *wins;
+  FAR void *kit;                       /* Its widget kit's state (desk_kit.c) */
 };
 
 /****************************************************************************
@@ -273,6 +275,13 @@ static void pwin_event(struct prog_s *p, struct pwin_s *pw,
           }
         break;
 
+      case DESKWIN_EV_WAKE:
+        if (a->wake != NULL)
+          {
+            a->wake(w);
+          }
+        break;
+
       case DESKWIN_EV_FOCUS:
         w->active = ev->value != 0;
         if (a->focus != NULL)
@@ -347,9 +356,25 @@ int desk_program_start(int app)
 
 /* Running as an application's program (the calling task's) */
 
+/* desk_wake() on one of the program's windows (from any of its threads) */
+
+void desk_program_wake(struct desk_win_s *w)
+{
+  deskwin_wake(pwin_of((NXWINDOW)w->hwnd)->d);
+}
+
 bool desk_program_self(void)
 {
   return prog_self() != NULL;
+}
+
+/* Where the kit keeps a program's own state (NULL: not a program) */
+
+FAR void **desk_program_kit(void)
+{
+  struct prog_s *p = prog_self();
+
+  return p != NULL ? &p->kit : NULL;
 }
 
 /* The application's desk_win_open(): a deskwin window of the desktop's,
@@ -506,6 +531,7 @@ int desk_program_main(int app, const struct desk_app_s *a, int argc,
       fprintf(stderr, "%s: no window (is the desktop running?)\n",
               argv[0]);
       prog_register(&prog, false);
+      kit_release(prog.kit);
       return EXIT_FAILURE;
     }
 
@@ -552,6 +578,7 @@ int desk_program_main(int app, const struct desk_app_s *a, int argc,
     }
 
   prog_register(&prog, false);
+  kit_release(prog.kit);
   return EXIT_SUCCESS;
 }
 

@@ -84,6 +84,27 @@ int kit_surface_open(struct kit_surface_s *s, int w, int h,
   struct nxgl_point_s pos;
 
   memset(s, 0, sizeof(*s));
+
+  /* In a program of its own: one of the desktop's for its window (the
+   * desktop sets lost; ops_draw() sends what is drawn into it)
+   */
+
+  if (desk_program_self())
+    {
+      s->hwnd = desk_program_surface_open(w, h, &s->lost);
+      if (s->hwnd == NULL)
+        {
+          return -ENOMEM;
+        }
+
+      s->w     = w;
+      s->h     = h;
+      s->owner = owner;
+      s->gpu   = true;
+      s->armed = true;
+      return 0;
+    }
+
   sem_init(&s->sem, 0, 0);
   s->hwnd = nx_openwindow(g_desk.hnx,
                           NXBE_WINDOW_RAMBACKED | NXBE_WINDOW_HIDDEN,
@@ -123,6 +144,13 @@ void kit_surface_close(struct kit_surface_s *s)
       return;
     }
 
+  if (desk_program_surf(s->hwnd))
+    {
+      desk_program_surface_close(s->hwnd);
+      s->hwnd = NULL;
+      return;
+    }
+
   /* Nothing more from the server for it (a redraw), then it goes */
 
   s->armed = false;
@@ -138,7 +166,11 @@ void kit_surface_close(struct kit_surface_s *s)
 
 void kit_surface_draw(struct kit_surface_s *s, struct desk_ops_s *o)
 {
-  if (s->hwnd != NULL && o->n > 0)
+  if (s->hwnd != NULL && desk_program_surf(s->hwnd))
+    {
+      ops_draw(s->hwnd, o);                 /* (A program's) */
+    }
+  else if (s->hwnd != NULL && o->n > 0)
     {
       nx_gpuops(s->hwnd, o->op, o->n);
     }

@@ -1208,9 +1208,9 @@ static void brk_close(struct desk_win_s *w)
   g_brk_spritew = 0;
 }
 
-/* The icon: bricks, a ball and a paddle */
-
 #endif /* !DESK_PROGRAM_STUB */
+
+/* The icon: bricks, a ball and a paddle */
 
 static void brk_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
 {
