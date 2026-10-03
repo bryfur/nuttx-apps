@@ -22,6 +22,10 @@
  * ball in them, clipped.  A brick is one COPY from a hidden surface that
  * holds one brick of each row, drawn once with its gradient over the
  * background it will be on.  A frame of play is about 10 to 30 operations.
+ *
+ * A program of its own (/mnt/sd0/bin/breakout, apps/graphics/deskapps):
+ * built into the desktop (DESK_PROGRAM_STUB) this file is only the icon
+ * and the name the dock shows (desk_program.c).
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -66,6 +70,16 @@
 #define ST_PLAY         1
 #define ST_PAUSED       2
 #define ST_OVER         3
+
+/* The rows' colours (the icon's too) */
+
+static const uint16_t g_brk_colour[BRK_ROWS] =
+{
+  RGB(0xff, 0x4a, 0x5a), RGB(0xff, 0x94, 0x2c), RGB(0xff, 0xd6, 0x2e),
+  RGB(0x4c, 0xd9, 0x64), RGB(0x2c, 0xc4, 0xf0), RGB(0x7a, 0x6c, 0xff)
+};
+
+#ifndef DESK_PROGRAM_STUB
 
 /****************************************************************************
  * Private Types
@@ -144,12 +158,6 @@ struct breakout_s
 /****************************************************************************
  * Private Data
  ****************************************************************************/
-
-static const uint16_t g_brk_colour[BRK_ROWS] =
-{
-  RGB(0xff, 0x4a, 0x5a), RGB(0xff, 0x94, 0x2c), RGB(0xff, 0xd6, 0x2e),
-  RGB(0x4c, 0xd9, 0x64), RGB(0x2c, 0xc4, 0xf0), RGB(0x7a, 0x6c, 0xff)
-};
 
 static NXWINDOW g_brk_sprite;           /* One brick of each row */
 static int g_brk_spritew;               /* The brick width drawn in it */
@@ -1202,6 +1210,8 @@ static void brk_close(struct desk_win_s *w)
 
 /* The icon: bricks, a ball and a paddle */
 
+#endif /* !DESK_PROGRAM_STUB */
+
 static void brk_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
 {
   int bw = s / 5;
@@ -1225,6 +1235,7 @@ static void brk_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
             LUT_R3, 1, C_WHITE, a);
 }
 
+#ifndef DESK_PROGRAM_STUB
 static struct desk_win_s *brk_open(void)
 {
   struct desk_win_s *w;
@@ -1252,10 +1263,15 @@ static struct desk_win_s *brk_open(void)
   return w;
 }
 
+#endif /* !DESK_PROGRAM_STUB */
+
 /****************************************************************************
  * Public Data
  ****************************************************************************/
 
+#ifdef DESK_PROGRAM_STUB
+DESK_PROGRAM_APP(g_app_breakout, "Breakout", brk_icon, "breakout", true);
+#else
 const struct desk_app_s g_app_breakout =
 {
   .name   = "Breakout",
@@ -1270,3 +1286,4 @@ const struct desk_app_s g_app_breakout =
   .focus  = brk_focus,
   .single = true,
 };
+#endif

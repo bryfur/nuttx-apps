@@ -22,6 +22,10 @@
  * copies only the cells that change: a piece falling a row is eight
  * COPYs.  The game runs on the desktop's frames (w->frames) while it is
  * being played, and asks for none when paused or over.
+ *
+ * A program of its own (/mnt/sd0/bin/tetris, apps/graphics/deskapps):
+ * built into the desktop (DESK_PROGRAM_STUB) this file is only the icon
+ * and the name the dock shows (desk_program.c).
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -69,6 +73,21 @@
 #define ST_CLEAR        1               /* Lines flashing */
 #define ST_PAUSED       2
 #define ST_OVER         3
+
+/* The pieces' colours (the icon's too) */
+
+static const uint16_t g_tet_colour[7] =
+{
+  RGB(0x1e, 0xc8, 0xf0),                /* I cyan */
+  RGB(0xf5, 0xc8, 0x14),                /* O yellow */
+  RGB(0xa8, 0x48, 0xe8),                /* T purple */
+  RGB(0x48, 0xd0, 0x48),                /* S green */
+  RGB(0xf0, 0x44, 0x48),                /* Z red */
+  RGB(0x30, 0x74, 0xf4),                /* J blue */
+  RGB(0xf8, 0x94, 0x20),                /* L orange */
+};
+
+#ifndef DESK_PROGRAM_STUB
 
 /****************************************************************************
  * Private Types
@@ -165,17 +184,6 @@ static const int8_t g_tet_shape[7][8] =
   {
     2, 0, 0, 1, 1, 1, 2, 1
   }
-};
-
-static const uint16_t g_tet_colour[7] =
-{
-  RGB(0x1e, 0xc8, 0xf0),                /* I cyan */
-  RGB(0xf5, 0xc8, 0x14),                /* O yellow */
-  RGB(0xa8, 0x48, 0xe8),                /* T purple */
-  RGB(0x48, 0xd0, 0x48),                /* S green */
-  RGB(0xf0, 0x44, 0x48),                /* Z red */
-  RGB(0x30, 0x74, 0xf4),                /* J blue */
-  RGB(0xf8, 0x94, 0x20),                /* L orange */
 };
 
 /* Wall kicks: tried in turn (x right, y down) */
@@ -1165,6 +1173,8 @@ static void tet_close(struct desk_win_s *w)
 
 /* The icon: a T, an L and part of a J, stacked */
 
+#endif /* !DESK_PROGRAM_STUB */
+
 static void tet_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
 {
   static const int8_t cells[30] =
@@ -1190,6 +1200,7 @@ static void tet_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
     }
 }
 
+#ifndef DESK_PROGRAM_STUB
 static struct desk_win_s *tet_open(void)
 {
   struct desk_win_s *w;
@@ -1217,10 +1228,15 @@ static struct desk_win_s *tet_open(void)
   return w;
 }
 
+#endif /* !DESK_PROGRAM_STUB */
+
 /****************************************************************************
  * Public Data
  ****************************************************************************/
 
+#ifdef DESK_PROGRAM_STUB
+DESK_PROGRAM_APP(g_app_tetris, "Tetris", tet_icon, "tetris", true);
+#else
 const struct desk_app_s g_app_tetris =
 {
   .name   = "Tetris",
@@ -1235,3 +1251,4 @@ const struct desk_app_s g_app_tetris =
   .focus  = tet_focus,
   .single = true,
 };
+#endif

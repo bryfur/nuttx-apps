@@ -222,6 +222,21 @@ void deskwin_clear(FAR struct deskwin_s *d, uint16_t c);
 
 void deskwin_ops(FAR struct deskwin_s *d, FAR const void *ops, int n);
 
+/* The same into a surface of the window's (deskwin_surface_open()) */
+
+void deskwin_ops_to(FAR struct deskwin_s *d, FAR void *target,
+                    FAR const void *ops, int n);
+
+/* A hidden surface of w x h in the GPU's memory for the window's program
+ * to draw into (deskwin_ops_to()) and copy from (an operation's source):
+ * NULL if there is no room.  *lost is set when the desktop had to let its
+ * pixels go (draw it again).  Closed with the window at the latest.
+ */
+
+FAR void *deskwin_surface_open(FAR struct deskwin_s *d, int w, int h,
+                               FAR volatile bool *lost);
+void deskwin_surface_close(FAR struct deskwin_s *d, FAR void *surface);
+
 /* Hand the queue to the desktop: 0, -ETIMEDOUT if it had no room for
  * timeout ms (-1: wait), -EPIPE if the window has gone.
  */

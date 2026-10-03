@@ -37,7 +37,8 @@ endif
 # built into the desktop, only their names and icons (desk_program.c)
 
 ifeq ($(CONFIG_FPCDESK_PROGRAMS),y)
-DESK_PROGRAMS = desk_calc.c desk_monitor.c
+DESK_PROGRAMS  = desk_calc.c desk_monitor.c desk_tetris.c desk_breakout.c
+DESK_PROGRAMS += desk_solitaire.c
 $(foreach f,$(DESK_PROGRAMS),$(eval $(f)_CFLAGS += -DDESK_PROGRAM_STUB))
 endif
 

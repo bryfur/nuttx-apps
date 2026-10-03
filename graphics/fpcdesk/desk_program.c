@@ -66,6 +66,16 @@ struct pwin_s
   bool closing;                           /* desk_win_close() by the app */
 };
 
+/* A surface of the program's: made by the desktop for its window's
+ * session (deskwin_surface_open()), the desktop's handle behind it
+ */
+
+struct psurf_s
+{
+  struct deskwin_s *d;
+  FAR void *real;
+};
+
 struct prog_s
 {
   pid_t pid;
@@ -125,7 +135,12 @@ static bool prog_register(struct prog_s *p, bool add)
 
 static struct pwin_s *pwin_of(NXWINDOW hwnd)
 {
-  return (struct pwin_s *)((uintptr_t)hwnd & ~(uintptr_t)1);
+  return (struct pwin_s *)((uintptr_t)hwnd & ~(uintptr_t)3);
+}
+
+static struct psurf_s *psurf_of(NXWINDOW hwnd)
+{
+  return (struct psurf_s *)((uintptr_t)hwnd & ~(uintptr_t)3);
 }
 
 /* A window gone (closed by the user, the desktop, or the application):
@@ -390,14 +405,69 @@ struct desk_win_s *desk_program_win_open(int app, const char *title, int w,
 
 void desk_program_ops(NXWINDOW hwnd, struct desk_ops_s *o)
 {
-  struct pwin_s *pw = pwin_of(hwnd);
+  int i;
 
-  if (o->n > 0)
+  /* A source that is one of its surfaces: the desktop's handle */
+
+  for (i = 0; i < o->n; i++)
     {
-      deskwin_ops(pw->d, o->op, o->n);
+      if (desk_program_surf(o->op[i].src))
+        {
+          o->op[i].src = psurf_of(o->op[i].src)->real;
+        }
+    }
+
+  if (o->n > 0 && desk_program_surf(hwnd))
+    {
+      struct psurf_s *ps = psurf_of(hwnd);
+
+      deskwin_ops_to(ps->d, ps->real, o->op, o->n);
+    }
+  else if (o->n > 0)
+    {
+      deskwin_ops(pwin_of(hwnd)->d, o->op, o->n);
     }
 
   o->n = 0;
+}
+
+/* The application's desk_surface_open(): one of the desktop's for the
+ * session of its (first) window: NULL before it has one
+ */
+
+NXWINDOW desk_program_surface_open(int w, int h, volatile bool *lost)
+{
+  struct prog_s *p = prog_self();
+  struct psurf_s *ps;
+
+  if (p == NULL || p->wins == NULL)
+    {
+      return NULL;
+    }
+
+  ps = malloc(sizeof(*ps));
+  if (ps == NULL)
+    {
+      return NULL;
+    }
+
+  ps->d    = p->wins->d;
+  ps->real = deskwin_surface_open(ps->d, w, h, lost);
+  if (ps->real == NULL)
+    {
+      free(ps);
+      return NULL;
+    }
+
+  return (NXWINDOW)((uintptr_t)ps | 3);
+}
+
+void desk_program_surface_close(NXWINDOW hwnd)
+{
+  struct psurf_s *ps = psurf_of(hwnd);
+
+  deskwin_surface_close(ps->d, ps->real);
+  free(ps);
 }
 
 /* The application's desk_win_close(): gone once the event is done */

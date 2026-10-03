@@ -508,6 +508,11 @@ NXWINDOW desk_surface_open(int w, int h, volatile bool *lost)
   struct nxgl_size_s size;
   NXWINDOW hwnd;
 
+  if (desk_program_self())
+    {
+      return desk_program_surface_open(w, h, lost);   /* The desktop's */
+    }
+
   hwnd = nx_openwindow(g_desk.hnx,
                        NXBE_WINDOW_RAMBACKED | NXBE_WINDOW_HIDDEN,
                        &g_surfacecb, (void *)lost);
@@ -527,6 +532,12 @@ NXWINDOW desk_surface_open(int w, int h, volatile bool *lost)
 
 void desk_surface_close(NXWINDOW hwnd)
 {
+  if (desk_program_surf(hwnd))
+    {
+      desk_program_surface_close(hwnd);
+      return;
+    }
+
   if (hwnd != NULL)
     {
       nx_closewindow(hwnd);

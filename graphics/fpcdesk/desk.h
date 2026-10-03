@@ -745,8 +745,15 @@ struct desk_win_s *desk_program_win_open(int app, const char *title, int w,
                                          int h);
 void desk_program_ops(NXWINDOW hwnd, struct desk_ops_s *o);
 void desk_program_win_close(struct desk_win_s *w);
+NXWINDOW desk_program_surface_open(int w, int h, volatile bool *lost);
+void desk_program_surface_close(NXWINDOW hwnd);
+
+/* A program's handles are marked in their low bits: 01 its window, 11 a
+ * surface of its own (real handles are aligned pointers)
+ */
 
 #define desk_program_hwnd(h) (((uintptr_t)(h) & 1) != 0)
+#define desk_program_surf(h) (((uintptr_t)(h) & 3) == 3)
 
 /* A stub (DESK_PROGRAM_STUB): the application built into the desktop is
  * only this; its program is the same file built on its own

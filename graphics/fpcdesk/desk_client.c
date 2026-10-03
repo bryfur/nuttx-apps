@@ -78,6 +78,7 @@
 #define MAX_TEXT          255                  /* A widget's text */
 #define MAX_ITEMS         4096                 /* A list's items, bytes */
 #define MAX_PIECES        64                   /* The canvas less widgets */
+#define DESKWIN_SURFACES  8                    /* A program's at once */
 #define CANVAS_ID         250                  /* The kit's id of it */
 #define NWG               (DESKWIN_WIDGETS + 4)
 #define MIN_W             120
@@ -103,12 +104,16 @@
 #define CMD_WDEL          15                   /* id */
 #define CMD_IMGFREE       16                   /* img */
 #define CMD_CLOSE         17
-#define CMD_OPS           18                   /* n, n struct nx_gpuop_s:
+#define CMD_SURFFREE      19                   /* surface */
+#define CMD_OPS           18                   /* n target, n nx_gpuop_s:
                                                 * the desktop's own drawing
                                                 * operations, frame
-                                                * coordinates (a program
-                                                * built from a desktop
-                                                * application, desk_program.c) */
+                                                * coordinates, into the
+                                                * window (target 0) or a
+                                                * surface of the program's
+                                                * (a program built from a
+                                                * desktop application,
+                                                * desk_program.c) */
 
 #define CMD_HDR           4
 #define CMD_MAXARGS       10
@@ -204,6 +209,14 @@ struct deskwin_s
   int16_t  imgh;
   char     imgerr[80];
 
+  /* A surface to make (under the lock; the client waits on reply) */
+
+  bool     surfreq;
+  int16_t  surfw;
+  int16_t  surfh;
+  volatile bool *surflost;             /* The client's: set when lost */
+  NXWINDOW surfret;
+
   /* The client's own (its task only) */
 
   uint8_t  batch[BATCH];
@@ -237,6 +250,14 @@ struct client_win_s
   char    *imgpath[DESKWIN_IMAGES];
   int16_t  imgmaxw[DESKWIN_IMAGES];
   int16_t  imgmaxh[DESKWIN_IMAGES];
+
+  /* Surfaces the program draws into and copies from (desk_surface_open()
+   * for it): the desktop's, its lost flags passed on to the program's
+   */
+
+  NXWINDOW surf[DESKWIN_SURFACES];
+  volatile bool *surfclient[DESKWIN_SURFACES];
+  volatile bool surflost[DESKWIN_SURFACES];
 
   /* The key being handed to the kit (its KIT_EV_KEY is that key) */
 
@@ -911,7 +932,32 @@ static bool client_src_ok(struct client_win_s *c, FAR void *src)
         }
     }
 
+  for (i = 0; i < DESKWIN_SURFACES; i++)
+    {
+      if (c->surf[i] != NULL && src == c->surf[i])
+        {
+          return true;
+        }
+    }
+
   return false;
+}
+
+/* One of the program's surfaces, or -1 */
+
+static int client_surface(struct client_win_s *c, uintptr_t h)
+{
+  int i;
+
+  for (i = 0; h != 0 && i < DESKWIN_SURFACES; i++)
+    {
+      if ((uintptr_t)c->surf[i] == h)
+        {
+          return i;
+        }
+    }
+
+  return -1;
 }
 
 /* One drawing command, frame coordinates made from the client's */
@@ -1011,6 +1057,39 @@ static void draw_cmd(struct client_win_s *c, struct emit_s *e,
           if (n < 0 || cmd->nargs * 4 + CMD_HDR + n * sizeof(*op) >
               cmd->len)
             {
+              break;
+            }
+
+          /* Into one of its surfaces: all of it there, as it is */
+
+          if (arg(cmd, 1) != 0)
+            {
+              int si = client_surface(c, (uint32_t)arg(cmd, 1));
+
+              if (si < 0)
+                {
+                  break;
+                }
+
+              ops_draw(e->hwnd, g_out);          /* (What was before) */
+              g_tmp->n = 0;
+              for (i = 0; i < n; i++)
+                {
+                  if ((op[i].op == NX_GPUOP_FILL ||
+                       op[i].op == NX_GPUOP_BLEND ||
+                       op[i].op == NX_GPUOP_COPY) &&
+                      client_src_ok(c, op[i].src))
+                    {
+                      if (g_tmp->n == NX_GPUOPS_MAX)
+                        {
+                          ops_draw(c->surf[si], g_tmp);
+                        }
+
+                      g_tmp->op[g_tmp->n++] = op[i];
+                    }
+                }
+
+              ops_draw(c->surf[si], g_tmp);
               break;
             }
 
@@ -1129,6 +1208,10 @@ static void keep(struct client_win_s *c, const struct cmd_s *cmd)
   else if (cmd->op == CMD_COPY)
     {
       c->keepok = false;                 /* Depends on what was there */
+    }
+  else if (cmd->op == CMD_OPS && arg(cmd, 1) != 0)
+    {
+      return;                            /* (A surface's, not the canvas) */
     }
   else if (cmd->op == CMD_OPS)
     {
@@ -1905,6 +1988,84 @@ static void image_request(struct client_win_s *c)
   s_unlock(s);
 }
 
+/* A surface for the program (deskwin_surface_open()) */
+
+static void surface_request(struct client_win_s *c)
+{
+  struct deskwin_s *s = c->s;
+  NXWINDOW hwnd = NULL;
+  int w;
+  int h;
+  int i;
+
+  s_lock(s);
+  if (!s->surfreq)
+    {
+      s_unlock(s);
+      return;
+    }
+
+  w = s->surfw;
+  h = s->surfh;
+  s_unlock(s);
+
+  for (i = 0; i < DESKWIN_SURFACES && c->surf[i] != NULL; i++)
+    {
+    }
+
+  if (i < DESKWIN_SURFACES && w > 0 && h > 0)
+    {
+      c->surflost[i] = false;
+      hwnd = desk_surface_open(w, h, &c->surflost[i]);
+    }
+
+  s_lock(s);
+  if (hwnd != NULL)
+    {
+      c->surf[i]       = hwnd;
+      c->surfclient[i] = s->surflost;
+    }
+
+  s->surfreq = false;
+  s->surfret = hwnd;
+  sem_post(&s->reply);
+  s_unlock(s);
+}
+
+static void surface_free(struct client_win_s *c, int i)
+{
+  if (i >= 0 && i < DESKWIN_SURFACES && c->surf[i] != NULL)
+    {
+      desk_surface_close(c->surf[i]);
+      c->surf[i]       = NULL;
+      c->surfclient[i] = NULL;
+    }
+}
+
+/* A surface that lost its pixels: the program's flag set (its own, in the
+ * same memory: it draws the surface again when it sees it)
+ */
+
+static void surfaces_lost(struct client_win_s *c)
+{
+  int i;
+
+  for (i = 0; i < DESKWIN_SURFACES; i++)
+    {
+      if (c->surf[i] != NULL && c->surflost[i])
+        {
+          c->surflost[i] = false;
+          s_lock(c->s);
+          if (!c->s->clientgone && c->surfclient[i] != NULL)
+            {
+              *c->surfclient[i] = true;
+            }
+
+          s_unlock(c->s);
+        }
+    }
+}
+
 static void image_free(struct client_win_s *c, int i)
 {
   if (i >= 0 && i < DESKWIN_IMAGES && c->img[i] != NULL)
@@ -2030,6 +2191,11 @@ static void run_cmds(struct client_win_s *c, const uint8_t *buf, size_t n)
             image_free(c, arg(cmd, 0));
             break;
 
+          case CMD_SURFFREE:
+            ops_draw(e.hwnd, g_out);
+            surface_free(c, client_surface(c, (uint32_t)arg(cmd, 0)));
+            break;
+
           case CMD_CLOSE:
             ops_draw(e.hwnd, g_out);
             desk_win_close(w);
@@ -2065,6 +2231,8 @@ static void client_wake(struct desk_win_s *w)
 
   images_lost(c);
   image_request(c);
+  surfaces_lost(c);
+  surface_request(c);
 
   s_lock(s);
   if (s->clientgone && s->npend == 0)
@@ -2273,6 +2441,11 @@ static void client_close(struct desk_win_s *w)
   for (i = 0; i <= DESKWIN_WIDGETS; i++)
     {
       cw_free(&c->cw[i]);
+    }
+
+  for (i = 0; i < DESKWIN_SURFACES; i++)
+    {
+      surface_free(c, i);
     }
 
   free(c->keep);
@@ -2825,19 +2998,74 @@ int deskwin_flush(FAR struct deskwin_s *d, int timeout)
   return 0;
 }
 
+/* A surface of the desktop's for the program: hidden, w x h, drawn into
+ * with deskwin_ops_to() and copied from by its operations (its pointer is
+ * their source); *lost is set when it has lost its pixels.  Waits.
+ */
+
+FAR void *deskwin_surface_open(FAR struct deskwin_s *d, int w, int h,
+                               FAR volatile bool *lost)
+{
+  NXWINDOW hwnd;
+
+  if (deskwin_flush(d, -1) < 0)
+    {
+      return NULL;
+    }
+
+  s_lock(d);
+  d->surfw    = MIN(MAX(w, 1), 2048);
+  d->surfh    = MIN(MAX(h, 1), 2048);
+  d->surflost = lost;
+  d->surfret  = NULL;
+  d->surfreq  = true;
+  while (d->surfreq && !d->gone)
+    {
+      if (d->win != NULL)
+        {
+          desk_wake(d->win);
+        }
+
+      s_unlock(d);
+      timed_wait(&d->reply, 1000);
+      s_lock(d);
+    }
+
+  hwnd = d->gone ? NULL : d->surfret;
+  s_unlock(d);
+  return hwnd;
+}
+
+void deskwin_surface_close(FAR struct deskwin_s *d, FAR void *surface)
+{
+  int32_t a[1] =
+    {
+      (int32_t)(uintptr_t)surface
+    };
+
+  put(d, CMD_SURFFREE, a, 1, NULL, NULL);
+}
+
 /* The desktop's own drawing operations (struct nx_gpuop_s, frame
- * coordinates), as many commands as they take
+ * coordinates), as many commands as they take: into the window, or one of
+ * the program's surfaces
  */
 
 void deskwin_ops(FAR struct deskwin_s *d, FAR const void *ops, int n)
 {
+  deskwin_ops_to(d, NULL, ops, n);
+}
+
+void deskwin_ops_to(FAR struct deskwin_s *d, FAR void *target,
+                    FAR const void *ops, int n)
+{
   const struct nx_gpuop_s *op = ops;
-  const int per = (BATCH - CMD_HDR - 4) / sizeof(*op);
+  const int per = (BATCH - CMD_HDR - 8) / sizeof(*op);
 
   while (d != NULL && n > 0)
     {
       int k = n < per ? n : per;
-      size_t len = (CMD_HDR + 4 + k * sizeof(*op) + 3) & ~(size_t)3;
+      size_t len = (CMD_HDR + 8 + k * sizeof(*op) + 3) & ~(size_t)3;
       struct cmd_s *cmd;
 
       if (d->nbatch + len > BATCH)
@@ -2847,10 +3075,11 @@ void deskwin_ops(FAR struct deskwin_s *d, FAR const void *ops, int n)
 
       cmd = (struct cmd_s *)(d->batch + d->nbatch);
       cmd->op    = CMD_OPS;
-      cmd->nargs = 1;
+      cmd->nargs = 2;
       cmd->len   = len;
       ((int32_t *)(cmd + 1))[0] = k;
-      memcpy((int32_t *)(cmd + 1) + 1, op, k * sizeof(*op));
+      ((int32_t *)(cmd + 1))[1] = (int32_t)(uintptr_t)target;
+      memcpy((int32_t *)(cmd + 1) + 2, op, k * sizeof(*op));
       d->nbatch += len;
       op += k;
       n  -= k;

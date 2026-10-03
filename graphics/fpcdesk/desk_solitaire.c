@@ -23,6 +23,10 @@
  * again only where it changes: the columns a move touches, and under a
  * dragged stack, the part of the table it leaves (clipped), then the stack
  * where it is now.
+ *
+ * A program of its own (/mnt/sd0/bin/solitaire, apps/graphics/deskapps):
+ * built into the desktop (DESK_PROGRAM_STUB) this file is only the icon
+ * and the name the dock shows (desk_program.c).
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -107,6 +111,8 @@
 #define M_DEAL          1               /* n cards stock -> waste */
 #define M_REDEAL        2               /* n cards waste -> stock */
 #define M_TURN          3               /* A column's top turned up */
+
+#ifndef DESK_PROGRAM_STUB
 
 /****************************************************************************
  * Private Types
@@ -1758,6 +1764,8 @@ static void sol_close(struct desk_win_s *w)
 
 /* The icon: two cards, fanned */
 
+#endif /* !DESK_PROGRAM_STUB */
+
 static void sol_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
 {
   int cw = s * 2 / 5;
@@ -1778,6 +1786,7 @@ static void sol_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
   ops_text(o, f, x + s * 2 / 5 + 3, cy + s / 16 + 1, "A", C_RED, a);
 }
 
+#ifndef DESK_PROGRAM_STUB
 static struct desk_win_s *sol_open(void)
 {
   struct desk_win_s *w;
@@ -1808,10 +1817,15 @@ static struct desk_win_s *sol_open(void)
   return w;
 }
 
+#endif /* !DESK_PROGRAM_STUB */
+
 /****************************************************************************
  * Public Data
  ****************************************************************************/
 
+#ifdef DESK_PROGRAM_STUB
+DESK_PROGRAM_APP(g_app_solitaire, "Solitaire", sol_icon, "solitaire", true);
+#else
 const struct desk_app_s g_app_solitaire =
 {
   .name   = "Solitaire",
@@ -1827,3 +1841,4 @@ const struct desk_app_s g_app_solitaire =
   .focus  = sol_focus,
   .single = true,
 };
+#endif
