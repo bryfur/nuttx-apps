@@ -17,7 +17,15 @@ CSRCS += tri_gfx.c tri_text.c tri_audio.c tri_fpc.c
 VPATH += :tri
 endif
 
-ifeq ($(CONFIG_FPCGAME_DEMO),y)
+# The SDK goes into the games, which are loadable modules: compiled as
+# module code (long calls: a module in the PSRAM is more than a branch's
+# 16 MB from the firmware in the flash), archived for their links
+
+ifeq ($(CONFIG_MODULES),y)
+MODULE    = m
+endif
+
+ifneq ($(CONFIG_FPCGAME_DEMO),)
 PROGNAME  = fgdemo fgbench
 PRIORITY  = 100
 STACKSIZE = 8192
@@ -37,5 +45,9 @@ TRI_FRESH = -fno-data-sections -fno-toplevel-reorder
 tri/tri_gfx.c_CFLAGS += $(TRI_FRESH)
 tri/tri_text.c_CFLAGS += $(TRI_FRESH)
 tri/tri_audio.c_CFLAGS += $(TRI_FRESH)
+
+# The same for a loadable module's compile (it reads _CELFFLAGS)
+
+$(foreach f,$(CSRCS) $(addprefix tri/,$(filter tri_%,$(CSRCS))),$(eval $(f)_CELFFLAGS += $($(f)_CFLAGS)))
 
 include $(APPDIR)/Application.mk

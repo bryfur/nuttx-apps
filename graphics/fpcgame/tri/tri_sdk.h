@@ -108,7 +108,9 @@ typedef struct {
 #ifdef CONFIG_ARCH_SIM
 #define TRI_PSRAM __attribute__((aligned(4)))
 #else
-#define TRI_PSRAM __attribute__((section(".psram_bss"), aligned(4)))
+// (A .bss name, so it is bss: no zeros in a module's file; the board's
+// linker script puts .bss.psram* in the PSRAM)
+#define TRI_PSRAM __attribute__((section(".bss.psram"), aligned(4)))
 #endif
 size_t tri_psram_size(void);                // bytes present (8 MB), 0 if absent
 size_t tri_psram_free(void);                // bytes still available to tri_psram_alloc()

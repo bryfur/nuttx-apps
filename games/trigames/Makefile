@@ -27,4 +27,8 @@ skyrocks.c_CFLAGS    += -fno-data-sections -fno-toplevel-reorder
 spritebench.c_CFLAGS += -fno-data-sections -fno-toplevel-reorder
 fmsynth.c_CFLAGS     += -fno-data-sections -fno-toplevel-reorder
 
+# The same for a loadable module's compile (it reads _CELFFLAGS)
+
+$(foreach f,$(MAINSRC) $(CSRCS),$(eval $(f)_CELFFLAGS += $($(f)_CFLAGS)))
+
 include $(APPDIR)/Application.mk

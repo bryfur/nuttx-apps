@@ -94,7 +94,11 @@ void fg_script(FAR const char *script);
 #ifdef CONFIG_ARCH_SIM
 #  define FG_PSRAM __attribute__((aligned(4)))
 #else
-#  define FG_PSRAM __attribute__((section(".psram_bss"), aligned(4)))
+/* (A .bss name, so the compiler makes it bss: no zeros in a module's file;
+ * the board's linker script puts .bss.psram* in the PSRAM)
+ */
+
+#  define FG_PSRAM __attribute__((section(".bss.psram"), aligned(4)))
 #endif
 
 int fg_width(void);                       /* The canvas */

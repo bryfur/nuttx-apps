@@ -38,4 +38,8 @@ distclean::
 	$(call DELFILE, assets.c)
 	$(call DELFILE, assets.h)
 
+# The same for a loadable module's compile (it reads _CELFFLAGS)
+
+$(foreach f,$(MAINSRC) $(CSRCS),$(eval $(f)_CELFFLAGS += $($(f)_CFLAGS)))
+
 include $(APPDIR)/Application.mk
