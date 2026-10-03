@@ -821,9 +821,9 @@ void desk_win_activate(struct desk_win_s *w)
         {
           desk_win_title(old);
           win_effects(old, 255);
-          if (g_apps[old->app]->focus != NULL)
+          if (desk_win_app(old)->focus != NULL)
             {
-              g_apps[old->app]->focus(old);
+              desk_win_app(old)->focus(old);
             }
         }
     }
@@ -1712,7 +1712,7 @@ static void on_event(struct desk_event_s *ev)
           }
         else if (!ev->win->closing)
           {
-            const struct desk_app_s *a = g_apps[ev->win->app];
+            const struct desk_app_s *a = desk_win_app(ev->win);   /* (a program's: the client's) */
 
             if (a->expose != NULL)
               {
