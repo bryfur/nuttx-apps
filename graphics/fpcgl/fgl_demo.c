@@ -9,9 +9,9 @@
  * its corners (untextured), a sign with a keyed texture (GL_ALPHA_TEST)
  * from an 8-bit image (GL_COLOR_INDEX), a pane of tinted glass (blended
  * by alpha) and a glow (added).
- * "fgldemo N" ends after N frames (else 600); "fgldemo N hold" shows frame
- * N for three seconds first (the tests' picture), then goes back to the
- * desktop.
+ * "fgldemo N" ends after N frames (else 600); "fgldemo N hold [SECS]" shows
+ * frame N for SECS seconds (3) first (the tests' picture), then goes back
+ * to the desktop.
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -245,6 +245,7 @@ int main(int argc, FAR char *argv[])
 {
   int frames = argc > 1 ? atoi(argv[1]) : 600;
   bool hold = argc > 2 && strcmp(argv[2], "hold") == 0;
+  int holds = argc > 3 ? atoi(argv[3]) : 3;
   int f;
   int ret;
 
@@ -316,7 +317,7 @@ int main(int argc, FAR char *argv[])
 
   if (hold)
     {
-      sleep(3);
+      sleep(holds);
     }
 
   printf("fgldemo: %d frames, %u triangles\n", frames + 1, (unsigned)fglTriangles());
