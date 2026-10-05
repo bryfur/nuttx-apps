@@ -681,8 +681,9 @@ static void update(void) {
 			else { player_reset(); gs = GS_PLAY; }
 		}
 	} else if (gs == GS_CLEAR) {
+		gs_t++;                                         // (FPC: TRI's never counted, so the next mission never came)
 		if (P.alive && P.inv < 60) P.inv = 60;          // untouchable while the train burns
-		if (gs_t == 240) { score += 1000 * level; start_mission(level + 1); }
+		if (gs_t == 240) { score += 1000 * level; tri_text_clear(); start_mission(level + 1); }
 	}
 }
 
