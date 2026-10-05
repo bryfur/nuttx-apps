@@ -206,7 +206,8 @@ enum desk_part_e
   PART_EDGE,                       /* Where the hidden dock comes out */
   PART_SOUND,                      /* The volume popover */
   PART_NOTIFY,                     /* A notification (desk_alarm.c) */
-  PART_CALPOP                      /* The top bar's calendar popover */
+  PART_CALPOP,                     /* The top bar's calendar popover */
+  PART_SWITCH                      /* The window switcher (desk_fx.c) */
 };
 
 /****************************************************************************
@@ -286,6 +287,20 @@ struct desk_win_s
   /* Application state */
 
   void *priv;
+
+  /* 3D effects (desk_fx.c) */
+
+  bool fxdrag;                     /* Being dragged */
+  bool fxswing;                    /* Swinging: shown in perspective */
+  bool fxzoom;                     /* Maximising or restoring */
+  float fxang[3];                  /* The swing: yaw, pitch, roll */
+  float fxvel[3];                  /* ... how fast they change */
+  float fxv[2];                    /* The drag's velocity (smoothed) */
+  struct nxgl_point_s fxlast;      /* Where it was at the last frame */
+  struct nxgl_point_s fxpivot;     /* Held there (frame coordinates) */
+  uint32_t fxms;                   /* The swing's last step */
+  uint32_t fxzoomt0;               /* The zoom's start */
+  struct nxgl_rect_s fxzoomfrom;   /* ... from this frame rectangle */
 };
 
 /* An application.  Client coordinates: (0, 0) is the top-left of the
@@ -379,6 +394,7 @@ struct desk_prefs_s
   int16_t tzoff;                   /* Time zone: minutes east of UTC */
   uint8_t npinned;                 /* The dock's favourites, in order */
   uint8_t pinned[APP_COUNT];
+  bool effects;                    /* 3D effects (where the GPU can) */
 };
 
 /* The desktop */
@@ -432,6 +448,9 @@ struct desk_s
   int cpuload;
   unsigned int memused;            /* KB */
   unsigned int memtotal;
+
+  bool quad;                       /* Windows can be shown in perspective
+                                    * (NX_CAP_QUAD): 3D effects */
 };
 
 /****************************************************************************
@@ -575,6 +594,32 @@ void desk_win_maximize(struct desk_win_s *w);
 void desk_win_sync(struct desk_win_s *w);
 void desk_win_show(struct desk_win_s *w);  /* A window just opened (and
                                             * drawn): it fades in, active */
+void desk_win_effects(struct desk_win_s *w);  /* Its effects again, as its
+                                               * state has them */
+
+/* desk_fx.c: 3D effects (NX_FX_QUAD), where the GPU can and Settings have
+ * them on: a dragged window swings, maximising zooms, Alt-Tab's switcher
+ */
+
+enum
+{
+  FX_DRAG_START,
+  FX_DRAG_MOVE,
+  FX_DRAG_END
+};
+
+bool desk_fx_on(void);
+bool desk_fx_quad(struct desk_win_s *w, int16_t q[8], bool *shadow);
+bool desk_fx_shows(struct desk_win_s *w);  /* In the switcher */
+void desk_fx_drag(struct desk_win_s *w, int how);
+void desk_fx_zoom(struct desk_win_s *w, const struct nxgl_rect_s *from);
+bool desk_fx_animate(void);                /* A frame: true while moving */
+void desk_fx_hold(int t);                  /* deskctl fx hold: permille */
+bool desk_switch_key(const struct nx_key_s *k);
+bool desk_switch_mouse(int x, int y, bool press);
+bool desk_switch_open(void);
+void desk_switch_forget(struct desk_win_s *w);
+void desk_switch_cancel(void);
 
 /* From any thread: have w's application's wake callback called on the
  * main thread soon (once, however many calls come before it runs).  The
@@ -648,6 +693,8 @@ bool desk_launcher_key(const uint8_t *ch, int n);
 bool desk_dock_pinned(int app);
 bool desk_dock_where(int app, int *x, int *y);   /* deskctl dock */
 void desk_dock_pin(int app, bool pin);
+void desk_icon_put(struct desk_ops_s *o, int app, int x, int y, int s,
+                   uint8_t alpha);                /* An application's icon */
 
 /* Pop-up menus: items (a label of "-" is a separator) with ids; pick is
  * called with the id of the one chosen.  At (x, y) on the display, moved

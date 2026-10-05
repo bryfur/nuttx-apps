@@ -30,6 +30,7 @@
 #include <unistd.h>
 #include <sys/boardctl.h>
 
+#include <nuttx/input/kbd_codec.h>
 #include <nuttx/nx/nxbe.h>
 
 #include "desk.h"
@@ -461,6 +462,7 @@ static void win_effects(struct desk_win_s *w, uint8_t opacity)
   };
 
   struct nx_effects_s fx;
+  bool keep = true;
   int shadow;
 
   shadow = (w->active ? g_theme.shadow_active : g_theme.shadow_inactive) *
@@ -468,19 +470,25 @@ static void win_effects(struct desk_win_s *w, uint8_t opacity)
   shadow = shadow > 255 ? 255 : shadow;
 
   /* An inactive window may drop its pixels while unseen: applications
-   * redraw on expose, the title bar on request (cb_title_redraw())
+   * redraw on expose, the title bar on request (cb_title_redraw()); not
+   * while the switcher shows it
    */
 
   memset(&fx, 0, sizeof(fx));
   fx.flags    = NX_FX_ROUND | (g_theme.darkedge ? NX_FX_DARKEDGE : 0) |
-                (w->active || desk_win_app(w)->nopark ? 0 : NX_FX_PARK);
+                (w->active || desk_win_app(w)->nopark || desk_fx_shows(w) ?
+                 0 : NX_FX_PARK);
   fx.layer    = NX_LAYER_NORMAL;
   fx.opacity  = opacity;
   fx.shadow   = (uint8_t)(shadow * opacity / 255);
   fx.shadowdy = w->active ? 8 : 4;
   fx.border   = g_prefs.border ? (uint8_t)(g_theme.border * opacity / 255) :
                                  0;
-  if (w->fade > 0 && !w->closing)         /* Opening, restoring: t 1 to 0 */
+  if (!desk_fx_on())
+    {
+      /* Only the opacity changes */
+    }
+  else if (w->fade > 0 && !w->closing)    /* Opening, restoring: t 1 to 0 */
     {
       float t = (float)w->fade / (FADE_STEPS + 1);
 
@@ -488,6 +496,7 @@ static void win_effects(struct desk_win_s *w, uint8_t opacity)
       if (w->restoring)
         {
           quad_genie(w, t, fx.quad);
+          keep = false;
         }
       else
         {
@@ -502,14 +511,46 @@ static void win_effects(struct desk_win_s *w, uint8_t opacity)
       if (w->minimizing)
         {
           quad_genie(w, t, fx.quad);
+          keep = false;
         }
       else
         {
           quad_tilt(w, t, fx.quad);
         }
     }
+  else if (desk_fx_quad(w, fx.quad, &keep))  /* Swinging, zooming... */
+    {
+      fx.flags |= NX_FX_QUAD;
+    }
+
+  /* (In perspective the shadow falls under the quadrilateral's average
+   * rectangle: not for the genie's shapes)
+   */
+
+  if (!keep)
+    {
+      fx.shadow = 0;
+    }
 
   nx_seteffects((NXWINDOW)w->hwnd, &fx);
+}
+
+/* Its effects again, at the opacity its state has */
+
+void desk_win_effects(struct desk_win_s *w)
+{
+  if (w->fade > 0 && !w->closing)
+    {
+      win_effects(w, 255 - w->fade * 255 / (FADE_STEPS + 1));
+    }
+  else if (w->fadeout > 0)
+    {
+      win_effects(w, w->fadeout * 255 / (FADE_STEPS + 1));
+    }
+  else
+    {
+      win_effects(w, 255);
+    }
 }
 
 /* Which traffic light is at (x, y) in the title bar, or -1 */
@@ -887,6 +928,7 @@ void desk_win_sync(struct desk_win_s *w)
 
 void desk_win_show(struct desk_win_s *w)
 {
+  desk_switch_cancel();                   /* (It needs the screen) */
 #ifdef CONFIG_FPCDESK_SOUND
   desk_sound_play(SND_OPEN);
 #endif
@@ -996,6 +1038,7 @@ void desk_win_close(struct desk_win_s *w)
     }
 
   w->closing = true;
+  desk_switch_forget(w);
 #ifdef CONFIG_FPCDESK_SOUND
   desk_sound_play(SND_CLOSE);
 #endif
@@ -1044,6 +1087,7 @@ static void win_destroy(struct desk_win_s *w)
       g_desk.pointerwin = NULL;
     }
 
+  desk_switch_forget(w);
   nxtk_closewindow(w->hwnd);
   sem_destroy(&w->synced);
   free(w->priv);
@@ -1116,6 +1160,12 @@ static void win_setmax(struct desk_win_s *w)
 
 void desk_win_maximize(struct desk_win_s *w)
 {
+  struct nxgl_rect_s from;
+
+  from.pt1.x = w->pos.x;                  /* (Where it zooms from) */
+  from.pt1.y = w->pos.y;
+  from.pt2.x = w->pos.x + w->size.w;
+  from.pt2.y = w->pos.y + w->size.h;
   if (!w->maximized)
     {
       w->restore.pt1   = w->pos;
@@ -1133,6 +1183,7 @@ void desk_win_maximize(struct desk_win_s *w)
 
   desk_win_title(w);
   win_client_redraw(w);
+  desk_fx_zoom(w, &from);
 }
 
 struct desk_win_s *desk_app_window(int app)
@@ -1296,6 +1347,7 @@ static void on_mode(void)
 
   g_desk.w = size.w;
   g_desk.h = size.h;
+  desk_switch_cancel();
   desk_relayout();
 }
 
@@ -1397,9 +1449,11 @@ static void win_mouse(struct desk_win_s *w, int part, int x, int y,
     {
       win_setpos(w, g_desk.grabpos.x + x - g_desk.grab.x,
                  g_desk.grabpos.y + y - g_desk.grab.y);
+      desk_fx_drag(w, FX_DRAG_MOVE);
       if (release)
         {
           g_desk.drag = NULL;
+          desk_fx_drag(w, FX_DRAG_END);
         }
 
       return;
@@ -1503,6 +1557,7 @@ static void win_mouse(struct desk_win_s *w, int part, int x, int y,
           g_desk.grab.x   = x;
           g_desk.grab.y   = y;
           g_desk.grabpos  = w->pos;
+          desk_fx_drag(w, FX_DRAG_START);
         }
       else if (x >= w->size.w - RESIZE_GRIP && y >= w->size.h - RESIZE_GRIP)
         {
@@ -1559,6 +1614,41 @@ static void win_mouse(struct desk_win_s *w, int part, int x, int y,
 static void on_mouse(struct desk_event_s *ev)
 {
   struct desk_win_s *w = ev->win;
+
+  /* The switcher, open, takes the pointer over windows (where they really
+   * are is not where it shows them) and its own; a press on the panels
+   * closes it, and goes on to them
+   */
+
+  if (desk_switch_open())
+    {
+      bool press = (ev->buttons & ~g_desk.buttons) != 0;
+      int x = ev->pos.x;
+      int y = ev->pos.y;
+      bool mine = true;
+
+      if (ev->part == PART_TITLE || ev->part == PART_CLIENT)
+        {
+          x += w->pos.x;
+          y += w->pos.y + (ev->part == PART_CLIENT ? TITLE_H : 0);
+        }
+      else if (ev->part != PART_SWITCH)
+        {
+          mine = false;
+        }
+
+      if (mine)
+        {
+          desk_switch_mouse(x, y, press);
+          g_desk.buttons = ev->buttons;
+          return;
+        }
+
+      if (press)
+        {
+          desk_switch_cancel();
+        }
+    }
 
   /* A press anywhere but on it closes a menu */
 
@@ -1729,6 +1819,34 @@ static void on_kbd(struct desk_event_s *ev)
 
       kbd_bytes(w, bytes, nb);
       nb = 0;
+
+      /* Alt-Tab: the switcher (and while it is open, every key).  An
+       * application that had the modifier's press hears it let go now
+       */
+
+      if (!desk_switch_open() && desk_switch_key(&key))
+        {
+          if (w != NULL && !w->closing && desk_win_app(w)->keyev != NULL)
+            {
+              struct nx_key_s up;
+
+              up.flags = NX_KEY_RELEASE |
+                         (key.flags & ~(NX_KEY_ALT | NX_KEY_GUI) &
+                          NX_KEY_MODS);
+              up.code  = NX_KEY_SPECIAL((key.flags & NX_KEY_ALT) ?
+                                        KEYCODE_LALT : KEYCODE_LGUI);
+              up.ch    = 0;
+              desk_win_app(w)->keyev(w, &up);
+            }
+
+          continue;
+        }
+
+      if (desk_switch_open() && desk_switch_key(&key))
+        {
+          w = g_desk.active;
+          continue;
+        }
 
 #ifdef CONFIG_FPCDESK_SOUND
           /* Volume keys from elsewhere (deskctl key vol+); the session
@@ -1902,6 +2020,7 @@ static bool animate(void)
         }
     }
 
+  more |= desk_fx_animate();
   more |= desk_panels_animate();
 #ifdef CONFIG_FPCDESK_SOUND
   more |= desk_volume_animate();
@@ -2044,6 +2163,7 @@ int main(int argc, FAR char *argv[])
   }
 
   g_desk.composited = (caps & NX_CAP_COMPOSITOR) != 0;
+  g_desk.quad       = (caps & NX_CAP_QUAD) != 0;
   if (!g_desk.composited)
     {
       fprintf(stderr, "desk: the display is not composited (not a v5 GPU: "

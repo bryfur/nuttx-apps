@@ -262,6 +262,7 @@ static void prefs_defaults(void)
   g_prefs.repdelay  = 500;
   g_prefs.reprate   = 40;
   g_prefs.ptrspeed  = 100;
+  g_prefs.effects   = true;
   g_prefs.npinned   = sizeof(pinned);
   memcpy(g_prefs.pinned, pinned, sizeof(pinned));
 }
@@ -342,6 +343,10 @@ int desk_prefs_load(void)
       else if (strcmp(line, "border") == 0)
         {
           g_prefs.border = n != 0;
+        }
+      else if (strcmp(line, "effects") == 0)
+        {
+          g_prefs.effects = n != 0;
         }
       else if (strcmp(line, "clock24") == 0)
         {
@@ -443,8 +448,9 @@ void desk_prefs_save(void)
 
   fprintf(f, "mode %d\nwallpaper %d\n",
           nx_getdisplaymode(g_desk.hnx, -1, NULL), g_desk.wallstyle);
-  fprintf(f, "theme %d\naccent %d\nshadow %d\nborder %d\n",
-          g_prefs.theme, g_prefs.accent, g_prefs.shadow, g_prefs.border);
+  fprintf(f, "theme %d\naccent %d\nshadow %d\nborder %d\neffects %d\n",
+          g_prefs.theme, g_prefs.accent, g_prefs.shadow, g_prefs.border,
+          g_prefs.effects);
   fprintf(f, "clock24 %d\nclockdate %d\nclocksecs %d\n",
           g_prefs.clock24, g_prefs.clockdate, g_prefs.clocksecs);
   fprintf(f, "dockicon %d\ndockpos %d\ndockhide %d\n",

@@ -322,6 +322,12 @@ static void icon_put(struct desk_ops_s *o, int app, int x, int y, int s,
   op->p[3]   = y + s - 1 - 12;
 }
 
+void desk_icon_put(struct desk_ops_s *o, int app, int x, int y, int s,
+                   uint8_t alpha)
+{
+  icon_put(o, app, x, y, s, alpha);
+}
+
 /****************************************************************************
  * Public Functions: the wallpaper
  ****************************************************************************/

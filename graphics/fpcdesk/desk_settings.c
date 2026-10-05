@@ -36,7 +36,7 @@
  ****************************************************************************/
 
 #define SET_W          700             /* The window's client area */
-#define SET_H          492
+#define SET_H          536
 #define SIDE_W         188             /* The sidebar */
 #define SIDE_ROW       32
 #define PAD            24              /* Around a page */
@@ -61,6 +61,7 @@ enum
   S_ACCENTLBL,
   S_SHADOW,
   S_BORDER,
+  S_FX3D,
   S_CLOCK24,
   S_CLOCKDATE,
   S_CLOCKSECS,
@@ -420,6 +421,7 @@ static void page_appearance(struct settings_s *st)
         kit_size(k, 260, 28);
       kit_end(k);
       row_switch(k, S_BORDER, "Window edges\nA hairline around each window");
+      row_switch(k, S_FX3D, "3D effects\nWindows move in perspective");
     kit_end(k);
 
     kit_card(k);
@@ -693,6 +695,8 @@ static void settings_sync(struct settings_s *st)
            "Accent colour\n%s", desk_accent_name(g_prefs.accent));
   kit_set_value(k, S_SHADOW, g_prefs.shadow);
   kit_set_value(k, S_BORDER, g_prefs.border);
+  kit_set_value(k, S_FX3D, g_prefs.effects && g_desk.quad);
+  kit_enable(k, S_FX3D, g_desk.quad);
   kit_set_value(k, S_CLOCK24, g_prefs.clock24);
   kit_set_value(k, S_CLOCKDATE, g_prefs.clockdate);
   kit_set_value(k, S_CLOCKSECS, g_prefs.clocksecs);
@@ -1028,6 +1032,11 @@ static void settings_event(struct kit_s *k, struct kit_widget_s *wg, int ev)
       case S_BORDER:
         g_prefs.border = v;
         desk_theme_changed();
+        desk_prefs_save();
+        break;
+
+      case S_FX3D:
+        g_prefs.effects = v;
         desk_prefs_save();
         break;
 

@@ -551,7 +551,8 @@ static void deskctl_usage(void)
           "usage: deskctl m X Y [BUTTONS] | c X Y | d X0 Y0 X1 Y1 [N] |\n"
           "               k TEXT | key [+|-]NAME|@MS... | shot FILE |\n"
           "               stats [clear|N] | mode [N] | redraw | test | link [MB [S C [rb]]] |\n"
-          "               freeze [SECONDS|off] | dock APP [r] | wins\n");
+          "               freeze [SECONDS|off] | dock APP [r] | wins |\n"
+          "               fx hold PERMILLE|off | fx on|off\n");
 }
 
 /****************************************************************************
@@ -607,6 +608,27 @@ int main(int argc, FAR char *argv[])
   if (strcmp(argv[1], "wins") == 0)
     {
       deskctl_wins();
+      return EXIT_SUCCESS;
+    }
+
+  /* The 3D effects held at a point (permille of the way), for
+   * screenshots: maximising, the switcher opening; a drag's swing as its
+   * last move's velocity gives it
+   */
+
+  if (strcmp(argv[1], "fx") == 0 && argc >= 4 &&
+      strcmp(argv[2], "hold") == 0)
+    {
+      desk_fx_hold(strcmp(argv[3], "off") == 0 ? 0 : atoi(argv[3]));
+      return EXIT_SUCCESS;
+    }
+
+  /* ... on or off, not saved (Settings has the setting) */
+
+  if (strcmp(argv[1], "fx") == 0 && argc >= 3 &&
+      (strcmp(argv[2], "on") == 0 || strcmp(argv[2], "off") == 0))
+    {
+      g_prefs.effects = strcmp(argv[2], "on") == 0;
       return EXIT_SUCCESS;
     }
 

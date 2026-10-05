@@ -22,6 +22,7 @@ CSRCS    += desk_game.c desk_games.c
 CSRCS    += desk_image.c desk_viewer.c desk_paint.c
 CSRCS    += desk_kit.c desk_kit_paint.c desk_kit_dialog.c desk_kit_surface.c
 CSRCS    += desk_kitdemo.c
+CSRCS    += desk_fx.c
 CSRCS    += desk_alarm.c desk_clock.c desk_calendar.c
 CSRCS    += desk_num.c desk_sheet.c desk_sheet_eng.c desk_sheet_io.c
 
