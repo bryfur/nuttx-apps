@@ -13,7 +13,7 @@ include $(APPDIR)/Make.defs
 CSRCS  = fg_core.c fg_gfx.c fg_3d.c fg_audio.c fg_audio_engine.c
 
 ifeq ($(CONFIG_FPCGAME_TRI),y)
-CSRCS += tri_gfx.c tri_text.c tri_audio.c tri_fpc.c
+CSRCS += tri_gfx.c tri_text.c tri_audio.c tri_fpc.c tri_fpc3d.c
 VPATH += :tri
 endif
 

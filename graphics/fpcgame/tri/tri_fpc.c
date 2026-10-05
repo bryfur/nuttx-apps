@@ -15,6 +15,10 @@
  *   objects of the frame (VDP1's list: sprites, rectangles, affine
  *   sprites, in call order); the layers above them.
  *
+ * It also draws the FPC's own extension (tri_fpc3d.h, not TRI's): sprites
+ * turned in 3D or drawn as any quadrilateral, with the other objects, and
+ * layers drawn as a Mode 7 floor instead of flat (fg_3d.c).
+ *
  * Sheets (VDP1, 8 bits a pixel) become RGB565 images through each palette
  * they are drawn with, kept until their bytes or the palette change;
  * tilesets (VDP2) likewise.  A layer keeps its map drawn in a surface
@@ -41,6 +45,7 @@
 #include "fg_internal.h"
 #include "fpc_gpu.h"
 #include "tri_sdk_internal.h"
+#include "tri_fpc3d.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -102,6 +107,18 @@ struct layer_s
   int drawn_h;
   FAR uint16_t *drawn;                    /* The entries drawn */
   bool all;                               /* Every tile again */
+
+  /* A Mode 7 floor instead (tri_fpc3d.h: tri_layer_mode7()) */
+
+  bool m7;
+  int16_t m7top;
+  int16_t m7bottom;
+  int16_t m7angle;
+  int16_t m7height;
+  int16_t m7horizon;
+  int16_t m7focal;
+  int32_t m7camx;
+  int32_t m7camy;
 };
 
 /****************************************************************************
@@ -518,7 +535,16 @@ static void layer_draw(int n)
 
   l->all = false;
   l->drawn_cfg = l->cfg;
-  fg_blit_wrap(&l->surf, l->sx, l->sy);
+  if (l->m7)
+    {
+      fg_mode7_rect(&l->surf, l->m7top, l->m7bottom, l->m7camx, l->m7camy,
+                    l->m7angle, l->m7height, l->m7horizon, l->m7focal,
+                    FG_WRAP);
+    }
+  else
+    {
+      fg_blit_wrap(&l->surf, l->sx, l->sy);
+    }
 }
 
 /* What a change of tileset id (its bytes) or VDP2 palette pal means for
@@ -685,6 +711,8 @@ static void exec(int dest, FAR const uint32_t *w, int n)
       case TRI_OP_SPRITE:
       case TRI_OP_RECT:
       case TRI_OP_SPRITE_AFFINE:
+      case TRI_OP_FPC_SPRITE_3D:
+      case TRI_OP_FPC_QUAD:
         if (dest == TRI_DEST_VDP1)
           {
             obj_add(w, n);                /* Drawn in order, with the frame */
@@ -733,6 +761,26 @@ static void exec(int dest, FAR const uint32_t *w, int n)
         g_tri.backdrop = imm & 0x7fff;
         break;
 
+      case TRI_OP_FPC_LAYER_MODE7:
+        if (dest == TRI_DEST_VDP2 && imm < TRI_LAYERS)
+          {
+            FAR struct layer_s *l = &g_tri.layer[imm];
+
+            l->m7 = nw >= 5;
+            if (l->m7)
+              {
+                l->m7top     = (int16_t)(p[0] & 0xffff);
+                l->m7bottom  = (int16_t)(p[0] >> 16);
+                l->m7camx    = (int32_t)p[1];
+                l->m7camy    = (int32_t)p[2];
+                l->m7angle   = (int16_t)(p[3] & 0xffff);
+                l->m7height  = (int16_t)(p[3] >> 16);
+                l->m7horizon = (int16_t)(p[4] & 0xffff);
+                l->m7focal   = (int16_t)(p[4] >> 16);
+              }
+          }
+        break;
+
       default:
         if (dest == TRI_DEST_VDP2 && op >= TRI_OP_AUDIO_SAMPLE_DEF &&
             op <= TRI_OP_AUDIO_FM_FREQ)
@@ -741,6 +789,34 @@ static void exec(int dest, FAR const uint32_t *w, int n)
           }
         break;
     }
+}
+
+/* A sprite turned in 3D (TRI_OP_FPC_SPRITE_3D's words at p); its back,
+ * when it faces the viewer, as back says (tri_fpc3d.h: 0 not drawn, 1
+ * mirrored, 2 turned over sideways, 3 top to bottom)
+ */
+
+static void sprite_3d(int img, int sx, int sy, int cw, int ch,
+                      FAR const uint32_t *p, uint32_t fl, int back)
+{
+  int32_t x[4];
+  int32_t y[4];
+  bool behind;
+
+  if (!fg_quad3d_corners(cw, ch, (int16_t)(p[0] & 0xffff),
+                         (int16_t)(p[0] >> 16), p[4] & 0xffff, p[4] >> 16,
+                         p[5] & 0xffff, p[5] >> 16, x, y, &behind) ||
+      (behind && back == 0))
+    {
+      return;
+    }
+
+  if (behind)
+    {
+      fl ^= back == 2 ? FG_HFLIP : back == 3 ? FG_VFLIP : 0;
+    }
+
+  fg_quad(img, sx, sy, cw, ch, x, y, fl);
 }
 
 /* The frame's objects, in order */
@@ -773,6 +849,8 @@ static void draw_objects(void)
 
           case TRI_OP_SPRITE:
           case TRI_OP_SPRITE_AFFINE:
+          case TRI_OP_FPC_SPRITE_3D:
+          case TRI_OP_FPC_QUAD:
             if (n >= 5)
               {
                 uint32_t attr = p[3];
@@ -803,7 +881,7 @@ static void draw_objects(void)
                     fg_sprite(img, sx, sy, cw, ch, (int16_t)(p[0] & 0xffff),
                               (int16_t)(p[0] >> 16), fl);
                   }
-                else if (n >= 7)
+                else if (TRI_HDR_OP(w[0]) == TRI_OP_SPRITE_AFFINE && n >= 7)
                   {
                     fg_sprite_matrix(img, sx, sy, cw, ch,
                                      (int16_t)(p[0] & 0xffff),
@@ -812,6 +890,26 @@ static void draw_objects(void)
                                      (int16_t)(p[4] >> 16),
                                      (int16_t)(p[5] & 0xffff),
                                      (int16_t)(p[5] >> 16));
+                  }
+                else if (TRI_HDR_OP(w[0]) == TRI_OP_FPC_SPRITE_3D && n >= 7)
+                  {
+                    sprite_3d(img, sx, sy, cw, ch, p,
+                              fl & (FG_HFLIP | FG_VFLIP), (attr >> 12) & 3);
+                  }
+                else if (TRI_HDR_OP(w[0]) == TRI_OP_FPC_QUAD && n >= 9)
+                  {
+                    int32_t x[4];
+                    int32_t y[4];
+                    int k;
+
+                    for (k = 0; k < 4; k++)
+                      {
+                        x[k] = (int16_t)(p[4 + k] & 0xffff);
+                        y[k] = (int16_t)(p[4 + k] >> 16);
+                      }
+
+                    fg_quad(img, sx, sy, cw, ch, x, y,
+                            fl & (FG_HFLIP | FG_VFLIP));
                   }
               }
             break;
