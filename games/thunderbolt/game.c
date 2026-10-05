@@ -10,6 +10,13 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "tri_sdk.h"
+// FPC: the FPC's 3D extension of the SDK (tri_fpc3d.h: TRI_FPC3D), where
+// there is one; on stock TRI the game builds and plays without the effects
+#if defined(__has_include)
+#if __has_include("tri_fpc3d.h")
+#include "tri_fpc3d.h"
+#endif
+#endif
 #include "assets.h"
 #include "sprites.h"
 #include "tiles.h"
@@ -162,6 +169,275 @@ static void shot_add(int kind, int x, int y, int vx, int vy) {
 	}
 }
 static void say(const char *s) { strncpy(msg, s, sizeof msg - 1); msg_t = 150; }
+
+#ifdef TRI_FPC3D
+// ---- FPC: 3D effects (tri_fpc3d.h) ----------------------------------------------------------------------------
+// Only what is seen changes: nothing here takes a random number, touches an
+// entity or takes part in a collision, so the game plays out as without them.
+#include "font8x8_basic.h"
+
+// Shot-down aircraft tumble in 3D as they fall, burning and trailing smoke,
+// and blow up where they hit the ground.
+#define N_WRECK 8
+#define N_WSMOKE 32
+typedef struct { uint8_t spr; int32_t x, y, vx, vy; int16_t t, yaw, pitch, roll, dyaw, dpitch, droll; } wreck_t;
+static wreck_t wreck[N_WRECK];
+static fx_t wsmoke[N_WSMOKE];
+static void wreck_add(int id, int cx, int cy, int32_t vx, bool faces_right) {
+	if (cy > ground_y(cx) - 12) return;                          // already down
+	for (int i = 0; i < N_WRECK; i++) if (!wreck[i].t) {
+		uint32_t h = hash(t * 131u + (uint32_t)i * 977u + (uint32_t)cx * 7u + (uint32_t)cy);
+		int nose = faces_right ? 1 : -1;                         // the roll that puts its nose down
+		wreck[i] = (wreck_t){ .spr = (uint8_t)id, .x = FX(cx), .y = FX(cy), .vx = vx, .vy = -FX(1) / 2 - (int32_t)(h & 63), .t = 1,
+			.dyaw = (int16_t)((h >> 8 & 1 ? 1 : -1) * (24 + (int)(h >> 9 & 31))),
+			.dpitch = (int16_t)((int)(h >> 14 & 15) - 8),
+			.droll = (int16_t)(nose * (14 + (int)(h >> 18 & 15))) };
+		return;
+	}
+}
+static void wreck_update(void) {
+	for (int i = 0; i < N_WRECK; i++) if (wreck[i].t) {
+		wreck_t *w = &wreck[i];
+		w->t++;
+		w->vy += 14; if (w->vy > FX(4)) w->vy = FX(4);           // gravity
+		w->vx += (-SCROLL_SPEED - w->vx) / 48;                   // its way slowed to the ground's
+		w->x += w->vx; w->y += w->vy;
+		w->yaw = (int16_t)((w->yaw + w->dyaw) & 4095);
+		w->pitch = (int16_t)((w->pitch + w->dpitch) & 4095);
+		w->roll = (int16_t)((w->roll + w->droll) & 4095);
+		int x = TOI(w->x), y = TOI(w->y);
+		if (w->t % 3 == 0)
+			for (int j = 0; j < N_WSMOKE; j++) if (!wsmoke[j].kind) { wsmoke[j] = (fx_t){ .kind = F_SMOKE, .x = w->x, .y = w->y, .vx = -SCROLL_SPEED / 2, .scale = 70 }; break; }
+		int gy = ground_y(x);
+		if (y > gy - 6) {
+			fx_t *f = fx_add(F_BOOM, x, gy - 10); if (f) f->scale = SPR[w->spr].w > 60 ? 380 : 290;
+			f = fx_add(F_BOOMSMALL, x + 12, gy - 4); if (f) { f->scale = 170; f->t = -6; }
+			sfx_boom(ASSET_BOOM_SAMPLE, 190, x);
+			w->t = 0;
+		} else if (x < -90 || x > W() + 90 || y > H + 40) w->t = 0;
+	}
+	for (int j = 0; j < N_WSMOKE; j++) if (wsmoke[j].kind) {
+		fx_t *f = &wsmoke[j];
+		f->x += f->vx; f->y -= 20; f->scale += 5;
+		if (++f->t > 34) f->kind = 0;
+	}
+}
+static void wreck_draw(void) {
+	for (int j = 0; j < N_WSMOKE; j++) if (wsmoke[j].kind)
+		spr_rot(TOI(wsmoke[j].x), TOI(wsmoke[j].y), SPR_SMOKE, TRI_SPRITE_BLEND_HALF, (int)(t * 8 + j * 300), wsmoke[j].scale);
+	for (int i = 0; i < N_WRECK; i++) if (wreck[i].t) {
+		const wreck_t *w = &wreck[i]; const spr_t *s = &SPR[w->spr];
+		int x = TOI(w->x), y = TOI(w->y);
+		int scale = 256 - (w->t > 120 ? 60 : w->t / 2);         // falling away from us
+		tri_sprite_draw_3d(x, y, s->sheet, s->x, s->y, s->w, s->h, s->pal, TRI_SPRITE_BACK_MIRROR, w->yaw, w->pitch, w->roll, scale);
+		spr_rot(x, y, SPR_FIREBALL, TRI_SPRITE_BLEND_ADD, (int)(t * 300 + i * 900), 40 + (int)(hash(t * 7u + (uint32_t)i) & 15));
+	}
+}
+
+// Banners turned in 3D: the mission's start, its end, the game's end. The
+// font drawn into a sheet of their own (sheet 5, palette 5, VDP1 bulk memory).
+enum { BN_NONE, BN_START, BN_CLEAR, BN_OVER };
+#define BANNER_SHEET 5
+#define BANNER_PAL 5
+#define BANNER_VRAM (TRI_VRAM_PSRAM + 0x6000)
+#define BANNER_MAXW 324
+#define BANNER_MAXH 48
+#define HAZE_SHEET 6                                             // 8 x 8 of palette 5's haze
+#define HAZE_VRAM (TRI_VRAM_PSRAM + 0xA000)
+static const uint16_t banner_pal[] = { 0, TRI_RGB555(2, 3, 7), TRI_RGB555(4, 6, 12), TRI_RGB555(30, 24, 8), TRI_RGB555(16, 11, 3),
+	TRI_RGB555(31, 31, 31), TRI_RGB555(31, 27, 15), TRI_RGB555(1, 1, 3), TRI_RGB555(22, 25, 31), TRI_RGB555(25, 28, 31) };
+static int banner, banner_t, banner_w, banner_h;
+static uint8_t banner_px[BANNER_MAXW * BANNER_MAXH];
+static void banner_text(int x0, int y0, const char *s, int sc, int c_top, int c_bot) {
+	for (; *s; s++, x0 += 8 * sc) {
+		const char *g = font8x8_basic[(unsigned char)*s & 127];
+		for (int y = 0; y < 8 * sc; y++) for (int x = 0; x < 8 * sc; x++) {
+			int px = x0 + x, py = y0 + y;
+			if (((g[y / sc] >> (x / sc)) & 1) && px >= 0 && px < banner_w && py >= 0 && py < banner_h)
+				banner_px[py * banner_w + px] = (uint8_t)(y < 4 * sc ? c_top : c_bot);
+		}
+	}
+}
+static void banner_show(int kind, const char *big, const char *small) {
+	int nb = (int)strlen(big), ns = small ? (int)strlen(small) : 0;
+	banner_w = clampi((nb * 16 > ns * 8 ? nb * 16 : ns * 8) + 36, 8, BANNER_MAXW);
+	banner_h = small ? 48 : 36;
+	// a gold rim, its corners cut, in a margin of 2 see-through pixels (a
+	// perspective row's last texels can fall a little short of the edge)
+	for (int y = 0; y < banner_h; y++) for (int x = 0; x < banner_w; x++) {
+		int ex = x < banner_w - 1 - x ? x : banner_w - 1 - x, ey = y < banner_h - 1 - y ? y : banner_h - 1 - y;
+		int d = (ex < ey ? ex : ey) - 2;
+		uint8_t c = d < 0 || ex + ey < 6 ? 0 : d == 0 || d == 2 ? 4 : d == 1 ? 3 : y < banner_h / 2 ? 2 : 1;
+		banner_px[y * banner_w + x] = c;
+	}
+	int bx = (banner_w - nb * 16) / 2;
+	banner_text(bx + 2, 12, big, 2, 7, 7);                       // a shadow, then the letters
+	banner_text(bx, 10, big, 2, 5, 6);
+	if (small) {
+		int sx = (banner_w - ns * 8) / 2;
+		banner_text(sx + 1, 31, small, 1, 7, 7);
+		banner_text(sx, 30, small, 1, 8, 8);
+	}
+	tri_vram_upload(TRI_VDP1, BANNER_VRAM, banner_px, (uint32_t)(banner_w * banner_h));
+	tri_sheet_define(BANNER_SHEET, BANNER_VRAM, banner_w, banner_h);
+	banner = kind; banner_t = 0;
+}
+static void banner_draw(void) {
+	int tt = banner_t, yaw = 0, pitch = 0, scale = 256, cy = 64;
+	unsigned back = TRI_SPRITE_BACK_PITCH;
+	switch (banner) {
+	case BN_START:                                               // swings down into place, then tips away
+		if (tt >= 150) { banner = BN_NONE; return; }
+		if (tt < 40) pitch = 1024 * (40 - tt) * (40 - tt) / 1600 * tri_cos(tt * 160) / 256;
+		else if (tt > 128) pitch = -1024 * (tt - 128) * (tt - 128) / 484;
+		break;
+	case BN_CLEAR: {                                             // spins in from afar, like a medal
+		cy = 108; back = TRI_SPRITE_BACK_YAW;
+		if (tt < 60) { int q = 256 - tt * 256 / 60, e = 256 - q * q / 256 * q / 256; yaw = 8192 * (256 - e) / 256; scale = 40 + 216 * e / 256; }
+		else yaw = 100 * tri_sin(tt * 12) / 256;
+		break; }
+	case BN_OVER:                                                // falls into place and settles
+		cy = 108;
+		if (tt < 80) pitch = 1024 * (80 - tt) * (80 - tt) / 6400 * tri_cos(tt * 100) / 256;
+		break;
+	default:
+		return;
+	}
+	tri_sprite_draw_3d(W() / 2, cy, BANNER_SHEET, 0, 0, banner_w, banner_h, BANNER_PAL, back, yaw, pitch, 0, scale);
+}
+
+// The title: a flight over the fields of Normandy (a Mode 7 floor, layer 1:
+// a 256 x 256 patchwork made here, tileset 1, map 3, VDP2 palette 4, which
+// repeats as the layer wraps), the far hills beyond it, the logo flying in.
+#define FIELDS_TILESET 1
+#define FIELDS_TILEMAP 3
+#define FIELDS_PAL 4
+#define FIELDS_VRAM (TRI_VRAM_PSRAM + 0x10000)
+#define FIELDS_MAP_VRAM (TRI_VRAM_PSRAM + 0x21000)
+#define FIELDS_N 32                                              // tiles across and down
+#define HORIZON 158
+enum { C_HEDGE = 1, C_HEDGE2, C_TREE, C_PASTURE, C_PASTURE2, C_MEADOW, C_MEADOW2, C_WHEAT, C_WHEAT2, C_PLOUGH, C_PLOUGH2,
+	C_CROP, C_CROP2, C_ROAD, C_ROADEDGE, C_RIVER, C_RIVER2, C_BANK, C_ROOF, C_ROOF2, C_SHADOW, C_CRATER, C_RIM, C_FLOWER, C_COLOURS };
+static const uint16_t fields_pal[C_COLOURS] = { 0,
+	TRI_RGB555(5, 12, 7), TRI_RGB555(7, 15, 8), TRI_RGB555(11, 19, 9), TRI_RGB555(11, 20, 9), TRI_RGB555(12, 22, 10),
+	TRI_RGB555(16, 24, 12), TRI_RGB555(18, 25, 13), TRI_RGB555(27, 24, 13), TRI_RGB555(25, 21, 11), TRI_RGB555(17, 12, 8),
+	TRI_RGB555(14, 10, 7), TRI_RGB555(8, 17, 8), TRI_RGB555(10, 19, 9), TRI_RGB555(24, 21, 16), TRI_RGB555(18, 16, 12),
+	TRI_RGB555(8, 14, 23), TRI_RGB555(12, 19, 27), TRI_RGB555(13, 16, 10), TRI_RGB555(22, 8, 6), TRI_RGB555(15, 6, 5),
+	TRI_RGB555(9, 9, 8), TRI_RGB555(9, 8, 7), TRI_RGB555(17, 15, 12), TRI_RGB555(29, 28, 20) };
+static const uint8_t field_cols[] = { 0, 44, 96, 138, 188, 224 };     // the fields' columns, each with its rows staggered
+static const uint8_t field_rows[] = { 0, 40, 76, 118, 162, 208 };
+typedef struct { uint8_t x, y, w, h; } box_t;
+static const box_t houses[] = { { 143, 100, 6, 5 }, { 151, 102, 5, 5 }, { 143, 108, 7, 5 }, { 128, 100, 5, 6 }, { 127, 87, 6, 5 },
+	{ 145, 86, 5, 5 }, { 153, 89, 6, 4 } };
+static const box_t craters[] = { { 205, 40, 5, 0 }, { 30, 185, 4, 0 }, { 172, 226, 6, 0 }, { 108, 30, 4, 0 }, { 238, 140, 4, 0 } };
+static int river_x(int y) { return 72 + (tri_sin(y * 16) * 10 >> 8) + (tri_sin(y * 48 + 700) * 3 >> 8); }
+static int field_px(int x, int y, int rx) {
+	uint32_t hp = hash((uint32_t)(y * 256 + x) ^ 0x9e3779b9u);
+	int iabs_r = iabs(x - rx);
+	if ((y >= 94 && y < 99) || (x >= 135 && x < 140)) {          // two roads, crossing; a bridge over the river
+		bool edge = (y >= 94 && y < 99) ? (y == 94 || y == 98) && !(x > 135 && x < 139) : (x == 135 || x == 139) && !(y > 94 && y < 98);
+		return edge ? C_ROADEDGE : C_ROAD;
+	}
+	if (iabs_r <= 3) return iabs_r == 3 ? C_BANK : (hp & 7) == 0 || (x + y) % 9 == 0 ? C_RIVER2 : C_RIVER;
+	for (unsigned i = 0; i < sizeof houses / sizeof houses[0]; i++) {
+		const box_t *b = &houses[i];
+		if (x >= b->x && x < b->x + b->w && y >= b->y && y < b->y + b->h) return y == b->y + b->h - 1 || x == b->x + b->w - 1 ? C_ROOF2 : C_ROOF;
+		if (x >= b->x + 1 && x <= b->x + b->w && y >= b->y + 1 && y <= b->y + b->h) return C_SHADOW;
+	}
+	for (unsigned i = 0; i < sizeof craters / sizeof craters[0]; i++) {
+		int dx = x - craters[i].x, dy = y - craters[i].y, r = craters[i].w;
+		if (dx * dx + dy * dy <= r * r) return dx * dx + dy * dy >= (r - 1) * (r - 1) ? C_RIM : C_CRATER;
+	}
+	int c = 0; while (c + 1 < (int)sizeof field_cols && x >= field_cols[c + 1]) c++;
+	int x0 = field_cols[c], x1 = c + 1 < (int)sizeof field_cols ? field_cols[c + 1] : 256;
+	int yy = (y + (int)(hash((uint32_t)c * 7u + 1u) % 48u)) & 255;
+	int r = 0; while (r + 1 < (int)sizeof field_rows && yy >= field_rows[r + 1]) r++;
+	int y0 = field_rows[r], y1 = r + 1 < (int)sizeof field_rows ? field_rows[r + 1] : 256;
+	int dx = x - x0 < x1 - 1 - x ? x - x0 : x1 - 1 - x, dy = yy - y0 < y1 - 1 - yy ? yy - y0 : y1 - 1 - yy;
+	if (dx < 2 || dy < 2) return (hp & 3) == 0 ? C_HEDGE : (hp & 15) == 1 ? C_TREE : C_HEDGE2;   // hedgerows: the bocage
+	if ((dx < 4 || dy < 4) && (hash((uint32_t)((x >> 2) * 64 + (yy >> 2))) & 7) == 0) return (hp & 1) ? C_TREE : C_HEDGE;   // trees by them
+	uint32_t f = hash((uint32_t)(c * 31 + r * 17 + 5));
+	int along = (f >> 8) & 1 ? x - x0 : yy - y0;                // its furrows' or rows' way
+	switch (f % 6) {
+	case 0: return (hp & 15) < 5 ? C_PASTURE2 : C_PASTURE;
+	case 1: return (along >> 1) & 1 ? C_WHEAT : C_WHEAT2;
+	case 2: return along % 4 < 2 ? C_PLOUGH : C_PLOUGH2;
+	case 3: return along % 5 < 2 ? C_CROP : C_CROP2;
+	case 4: return (hp & 31) == 0 ? C_FLOWER : (hp & 7) < 3 ? C_MEADOW2 : C_MEADOW;
+	default: { int ox = (x - x0) % 7, oy = (yy - y0) % 7;     // an orchard
+		return ox < 3 && oy < 3 ? (ox == 0 && oy == 0 ? C_TREE : C_HEDGE2) : (hp & 15) < 5 ? C_PASTURE2 : C_PASTURE; }
+	}
+}
+static void make_fields(void) {
+	static uint8_t tiles[FIELDS_N * 64];                        // a row of tiles at a time
+	static uint16_t map[FIELDS_N * FIELDS_N];
+	int rx[8];
+	tri_palette_set(TRI_VDP2, FIELDS_PAL, 0, fields_pal, C_COLOURS);
+	memset(tiles, 0, 64);
+	tri_vram_upload(TRI_VDP2, FIELDS_VRAM, tiles, 64);           // tile 0: empty
+	for (int ty = 0; ty < FIELDS_N; ty++) {
+		for (int py = 0; py < 8; py++) rx[py] = river_x(ty * 8 + py);
+		for (int tx = 0; tx < FIELDS_N; tx++)
+			for (int py = 0; py < 8; py++) for (int px = 0; px < 8; px++)
+				tiles[tx * 64 + py * 8 + px] = (uint8_t)field_px(tx * 8 + px, ty * 8 + py, rx[py]);
+		tri_vram_upload(TRI_VDP2, FIELDS_VRAM + (uint32_t)(1 + ty * FIELDS_N) * 64, tiles, sizeof tiles);
+	}
+	for (int i = 0; i < FIELDS_N * FIELDS_N; i++) map[i] = TRI_TILE(1 + i, 0, 0, 0);
+	tri_tileset_define(FIELDS_TILESET, FIELDS_VRAM, 1 + FIELDS_N * FIELDS_N);
+	tri_tilemap_define(FIELDS_TILEMAP, FIELDS_MAP_VRAM, 5, 5);
+	tri_vram_upload(TRI_VDP2, FIELDS_MAP_VRAM, map, sizeof map);
+	tri_layer_set(1, FIELDS_TILESET, FIELDS_TILEMAP, FIELDS_PAL, TRI_LAYER_BELOW);
+	tri_layer_enable(1, false);
+	// the banners' palette, and the haze's cell
+	uint8_t haze[64];
+	memset(haze, 9, sizeof haze);
+	tri_palette_set(TRI_VDP1, BANNER_PAL, 0, banner_pal, (int)(sizeof banner_pal / sizeof banner_pal[0]));
+	tri_vram_upload(TRI_VDP1, HAZE_VRAM, haze, sizeof haze);
+	tri_sheet_define(HAZE_SHEET, HAZE_VRAM, 8, 8);
+}
+// The camera's flight: forward up the map in gentle S-turns, the far hills
+// turning with it, and haze where the fields meet them
+static void title_scene(void) {
+	int a = 90 * tri_sin((int)t * 5) / 256;
+	int32_t camx = FX(128) - 28 * tri_cos((int)t * 5);
+	int32_t camy = FX(200) - (int32_t)(t % 4096) * 400;          // (4096 frames: 25 times round the map, seamless)
+	tri_layer_mode7(1, HORIZON + 2, H, camx, camy, a & 4095, 34 + (tri_sin((int)t * 3) * 3 >> 8), HORIZON, 180);
+	tri_layer_scroll(0, TOI(scroll) / 8 + a / 4, 0);
+	for (int k = 0; k < 3; k++)                                  // haze: 3 bands halved over each other, thicker near the horizon
+		tri_sprite_draw_matrix(W() / 2, HORIZON - 1 + (24 >> k) / 2, HAZE_SHEET, 0, 0, 8, 8, BANNER_PAL, TRI_SPRITE_BLEND_HALF, 4, 0, 0, 8 * 256 / (24 >> k));
+}
+static void logo_draw(void) {
+	const spr_t *s = &SPR[SPR_LOGO];
+	int tt = (int)t, rest = 28 + s->h / 2, cy = rest, yaw, pitch, scale = 256;
+	if (tt < 90) {                                               // flies in from afar, spinning, and comes to rest
+		int q = 256 - tt * 256 / 90, e = 256 - q * q / 256 * q / 256;
+		yaw = 2 * 4096 * (256 - e) / 256;
+		pitch = 240 * (256 - e) / 256;
+		scale = 24 + 232 * e / 256;
+		cy = 120 + (rest - 120) * e / 256;
+	} else {                                                     // then sways, and now and then turns once more
+		int k = (tt - 90) % 720;
+		yaw = 150 * tri_sin(tt * 9) / 256;
+		pitch = 70 * tri_sin(tt * 6 + 1024) / 256;
+		if (k >= 600 && k < 660) yaw += 4096 * ((256 - tri_cos((k - 600) * 2048 / 60)) / 2) / 256;
+	}
+	tri_sprite_draw_3d(W() / 2, cy, s->sheet, s->x, s->y, s->w, s->h, s->pal, TRI_SPRITE_BACK_YAW, yaw, pitch, 0, scale);
+}
+// The armoured train comes round a bend: until it reaches its place it is
+// a plane turned away about its front end (the track at eye level, so its
+// wheels stay on the rails), straightening as it comes
+static void train_draw(const ent_t *e, unsigned fl) {
+	const spr_t *s = &SPR[SPR_TRAIN];
+	int x = TOI(e->x), y = TOI(e->y), from = W() - s->w - 24 + 12;   // (it sways 12 either side of its place)
+	if (x <= from) { spr(x, y, SPR_TRAIN, fl); return; }
+	int a = clampi((x - from) * 1000 / (W() + 64 - from), 0, 1000);
+	int z = s->w * tri_sin(a) / 256, f = 256 + z;                 // the far end's depth, and its divisor
+	int xr = x * 16 + s->w * tri_cos(a) / 16 * 256 / f;          // (1/16 pixel)
+	int hr = s->h * 16 * 256 / f, yb = (y + s->h) * 16;
+	int qx[4] = { x * 16, xr, xr, x * 16 }, qy[4] = { y * 16, yb - hr, yb, yb };
+	tri_sprite_draw_quad(qx, qy, s->sheet, s->x, s->y, s->w, s->h, s->pal, 0);
+}
+#endif
 
 // ---- level generation ----------------------------------------------------------------------------------------
 // Heights are per vertex column (16 px). A segment picks a target row; the ground
@@ -322,6 +598,9 @@ static void ent_kill(ent_t *e) {
 	default:
 		boom(x + w / 2, y + h / 2, e->type == E_TANK || e->type == E_BUNKER || e->type == E_FLAK);
 	}
+#ifdef TRI_FPC3D
+	if (!e->ground) wreck_add(ent_spr[e->type], x + w / 2, y + h / 2, e->vx / 2, false);
+#endif
 	e->type = E_NONE;
 }
 static bool ent_hit(ent_t *e, int dmg, int hx, int hy) {
@@ -348,6 +627,9 @@ static void player_hit(int dmg) {
 	if (P.hp <= 0) {
 		P.alive = false; gs = GS_DEAD; gs_t = 0;
 		boom(TOI(P.x) + 22, TOI(P.y) + 11, true);
+#ifdef TRI_FPC3D
+		wreck_add(SPR_P47, TOI(P.x) + SPR[SPR_P47].w / 2, TOI(P.y) + SPR[SPR_P47].h / 2, FX(1) + P.vx / 2, true);
+#endif
 		tri_sfx_stop(V_ENGINE);
 	}
 }
@@ -615,7 +897,13 @@ static void start_mission(int lv) {
 	next_col = MAP_W;
 	player_reset();
 	gs = GS_PLAY; gs_t = 0;
-	static char m[32]; snprintf(m, sizeof m, "MISSION %d", lv); say(m);
+	static char m[32]; snprintf(m, sizeof m, "MISSION %d", lv);
+#ifdef TRI_FPC3D
+	memset(wreck, 0, sizeof wreck); memset(wsmoke, 0, sizeof wsmoke);
+	banner_show(BN_START, m, "DESTROY THE ARMOURED TRAIN");
+#else
+	say(m);
+#endif
 	tri_music_play(&song);
 }
 
@@ -626,6 +914,9 @@ static void load(void) {
 	tri_layer_enable(1, false);                                                                    // (treeline strip, off for now)
 	tri_layer_set(2, ASSET_TILES_TILESET, ASSET_LEVEL_TILEMAP, ASSET_TILES_PAL, TRI_LAYER_BELOW);   // the ground
 	tri_text_init(3, TRI_LAYER_ABOVE);
+#ifdef TRI_FPC3D
+	make_fields();                                                                                 // layer 1: the title's fields
+#endif
 	tri_fm_patch_set(0, &pat_bass);
 	tri_fm_patch_set(1, &pat_snare);
 	tri_fm_patch_set(2, &pat_lead);
@@ -642,6 +933,9 @@ static void init(void) {
 	score = 0; lives = 3; level = 1; t = 0;
 	song_sort();
 	gs = GS_TITLE; gs_t = 0; msg_t = 0;
+#ifdef TRI_FPC3D
+	banner = BN_NONE; memset(wreck, 0, sizeof wreck); memset(wsmoke, 0, sizeof wsmoke);
+#endif
 	gen_level(1);
 	scroll = 0;
 	for (int c = 0; c < MAP_W; c++) stream_column(c);
@@ -652,6 +946,9 @@ static void init(void) {
 static void update(void) {
 	t++;
 	if (msg_t > 0) msg_t--;
+#ifdef TRI_FPC3D
+	banner_t++;
+#endif
 	if (gs == GS_TITLE) {
 		scroll += SCROLL_SPEED / 2;
 		if (TOI(scroll) > 3000) { scroll = 0; for (int c = 0; c < MAP_W; c++) stream_column(c); next_col = MAP_W; }   // attract loop over the first stretch
@@ -662,6 +959,9 @@ static void update(void) {
 	if (gs == GS_OVER) {
 		if (++gs_t > 90 && (tri_pad_pressed() & (TRI_PAD_A | TRI_PAD_B))) { init(); }
 		fx_update();
+#ifdef TRI_FPC3D
+		wreck_update();
+#endif
 		return;
 	}
 	// the world keeps moving while the player is dead, on the clear screen and in play
@@ -675,14 +975,24 @@ static void update(void) {
 	ents_update();
 	shots_update();
 	fx_update();
+#ifdef TRI_FPC3D
+	wreck_update();
+#endif
 	if (gs == GS_DEAD) {
 		if (++gs_t == 100) {
-			if (--lives <= 0) { gs = GS_OVER; gs_t = 0; if (score > hi_score) hi_score = score; tri_music_stop(); }
+			if (--lives <= 0) { gs = GS_OVER; gs_t = 0; if (score > hi_score) hi_score = score; tri_music_stop();
+#ifdef TRI_FPC3D
+				banner_show(BN_OVER, "MISSION FAILED", "PRESS A");
+#endif
+			}
 			else { player_reset(); gs = GS_PLAY; }
 		}
 	} else if (gs == GS_CLEAR) {
 		gs_t++;                                         // (FPC: TRI's never counted, so the next mission never came)
 		if (P.alive && P.inv < 60) P.inv = 60;          // untouchable while the train burns
+#ifdef TRI_FPC3D
+		if (gs_t == 61) { static char m[32]; snprintf(m, sizeof m, "MISSION %d COMPLETE", level); banner_show(BN_CLEAR, m, "TARGET DESTROYED"); }
+#endif
 		if (gs_t == 240) { score += 1000 * level; tri_text_clear(); start_mission(level + 1); }
 	}
 }
@@ -691,7 +1001,11 @@ static void draw_hud(void) {
 	static int last = -1;
 	int cols = tri_text_columns();
 	if (gs == GS_TITLE) {
+#ifdef TRI_FPC3D
+		if (t % 4 == 0 && t >= 90) {                         // (once the logo has landed)
+#else
 		if (t % 4 == 0) {
+#endif
 			tri_text_color(TRI_RGB555(31, 31, 31));
 #ifndef SPR_LOGO_OK
 			tri_text_center(6, "T H U N D E R B O L T");
@@ -702,6 +1016,10 @@ static void draw_hud(void) {
 			if ((t / 30) & 1) tri_text_center(20, "PRESS A TO SCRAMBLE"); else tri_text_center(20, "                   ");
 			if (hi_score) tri_text_center(24, "HIGH %06d", hi_score);
 		}
+#ifdef TRI_FPC3D
+		uint32_t shown = t - t % 4;                         // the frame the text layer was last written in
+		if (shown >= 90 && (shown / 30) & 1) tri_rect_fill(W() / 2 - 82, 158, 164, 12, TRI_RGB555(2, 3, 7));   // (over the haze)
+#endif
 		return;
 	}
 	if (t % 3 == 0 || last != score) {
@@ -711,8 +1029,10 @@ static void draw_hud(void) {
 		tri_text_print(cols / 2 - 6, 0, "P-47 x%d  LV%d", lives, level);
 		tri_text_print(cols - 24, 0, "CAN %3d  RKT %2d  BMB %2d", cannon, rockets, bombs);
 		if (msg_t > 0) tri_text_center(3, "%s", msg); else if (msg_t == 0) { tri_text_print(0, 3, "%*s", cols, ""); msg_t = -1; }
+#ifndef TRI_FPC3D
 		if (gs == GS_OVER) { tri_text_center(12, "MISSION FAILED"); tri_text_center(14, "PRESS A"); }
 		if (gs == GS_CLEAR && gs_t > 60) { tri_text_center(12, "TARGET DESTROYED"); tri_text_center(14, "MISSION %d COMPLETE", level); }
+#endif
 	}
 	if (boss_spawned && !boss_dead && boss_hp_max > 0) {
 		int w = 160 * boss_hp / boss_hp_max; if (w < 0) w = 0;
@@ -723,24 +1043,42 @@ static void draw_hud(void) {
 	tri_rect_fill(0, 0, W(), 10, TRI_RGB555(2, 3, 7));
 	for (int i = 0; i < 4; i++) tri_rect_fill(108 + i * 8, 2, 6, 5, i < P.hp && P.alive ? TRI_RGB555(8, 30, 8) : TRI_RGB555(7, 7, 9));
 	if (msg_t > 0) { int n = (int)strlen(msg); tri_rect_fill(W() / 2 - n * 4 - 6, 22, n * 8 + 12, 12, TRI_RGB555(2, 3, 7)); }
+#ifndef TRI_FPC3D
 	if (gs == GS_OVER || (gs == GS_CLEAR && gs_t > 60)) tri_rect_fill(W() / 2 - 80, 94, 160, 28, TRI_RGB555(2, 3, 7));
+#endif
 }
 
 static void draw(void) {
 	tri_layer_scroll(0, TOI(scroll) / 8, 0);
 	tri_layer_scroll(2, TOI(scroll), 0);
+#ifdef TRI_FPC3D
+	tri_layer_enable(1, gs == GS_TITLE);                         // the title flies over fields, the game over its ground
+	tri_layer_enable(2, gs != GS_TITLE);
+	if (gs == GS_TITLE) title_scene();
+#endif
 	// ground targets first, then aircraft, so a low pass over a tank looks right
 	for (int pass = 1; pass >= 0; pass--)
 		for (int i = 0; i < N_ENT; i++) if (ent[i].type && ent[i].ground == pass) {
 			ent_t *e = &ent[i];
 			unsigned fl = e->flash & 2 ? TRI_SPRITE_BLEND_ADD : 0;
+#ifdef TRI_FPC3D
+			if (e->type == E_TRAIN) train_draw(e, fl);
+#else
 			if (e->type == E_TRAIN) spr(TOI(e->x), TOI(e->y), SPR_TRAIN, fl);
+#endif
 			else if (e->type == E_STUKA && e->state == 1) spr_rot(TOI(e->x) + SPR[SPR_STUKA].w / 2, TOI(e->y) + 12, SPR_STUKA, fl, 4096 - 500, 256);
 			else if (e->type == E_STUKA && e->state == 2) spr_rot(TOI(e->x) + SPR[SPR_STUKA].w / 2, TOI(e->y) + 12, SPR_STUKA, fl, 300, 256);
 			else spr(TOI(e->x), TOI(e->y), ent_spr[e->type], fl);
 		}
+#ifdef TRI_FPC3D
+	wreck_draw();
+#endif
 #ifdef SPR_LOGO_OK
+#ifdef TRI_FPC3D
+	if (gs == GS_TITLE) logo_draw();
+#else
 	if (gs == GS_TITLE) spr(W() / 2 - SPR[SPR_LOGO].w / 2, 28, SPR_LOGO, 0);
+#endif
 #endif
 	if (P.alive && !(P.inv & 2 && P.inv < 100)) {
 		int w = SPR[SPR_P47].w, h = SPR[SPR_P47].h;
@@ -775,6 +1113,9 @@ static void draw(void) {
 		}
 	}
 	draw_hud();
+#ifdef TRI_FPC3D
+	banner_draw();
+#endif
 }
 
 TRI_GAME("Thunderbolt", TRI_VIDEO_SQUARE, load, init, update, draw);

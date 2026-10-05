@@ -7,8 +7,10 @@
 
 include $(APPDIR)/Make.defs
 
-# Thunderbolt, TRI's WW2 side-scroller, on the FPC: TRI's game.c as it is,
-# on the game SDK's TRI runtime (apps/graphics/fpcgame/tri). The assets
+# Thunderbolt, TRI's WW2 side-scroller, on the FPC: TRI's game.c, on the
+# game SDK's TRI runtime (apps/graphics/fpcgame/tri), with 3D effects from
+# the FPC's extension of TRI's SDK where it has one (tri_fpc3d.h,
+# TRI_FPC3D: it still builds on stock TRI without them). The assets
 # (assets/: PNG sheets and tiles, Tiled CSV maps, WAV samples) become
 # assets.c / assets.h at build time, through TRI's own tools/mkassets.py.
 
