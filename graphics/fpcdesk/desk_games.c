@@ -14,6 +14,7 @@
 
 #include <errno.h>
 #include <sched.h>
+#include <spawn.h>
 #include <syslog.h>
 
 #include <nuttx/lib/builtin.h>
@@ -24,20 +25,36 @@
  * Private Functions
  ****************************************************************************/
 
-/* Start the program NAME: false if it is not in this system or cannot */
+/* Start the program NAME: built in, or (a game built as a loadable
+ * module, =m) the module of that name on the PATH (/mnt/sd0/bin, as
+ * desk_program.c's programs); false if it is not there or cannot start
+ */
 
 static bool game_start(const char *name, const char *title)
 {
   const struct builtin_s *b;
   int index;
   pid_t pid;
+  int ret;
 
   index = builtin_isavail(name);
   b     = index >= 0 ? builtin_for_index(index) : NULL;
   if (b == NULL)
     {
-      syslog(LOG_WARNING, "desk: %s: no program %s\n", title, name);
-      return false;
+      FAR char *argv[2];
+
+      argv[0] = (FAR char *)name;
+      argv[1] = NULL;
+      ret = posix_spawnp(&pid, name, NULL, NULL, argv, NULL);
+      if (ret != 0)
+        {
+          syslog(LOG_WARNING, "desk: %s: no program %s: %d\n", title, name,
+                 ret);
+          return false;
+        }
+
+      syslog(LOG_INFO, "desk: %s (%d): %s\n", title, pid, name);
+      return true;
     }
 
   pid = task_create(title, b->priority, b->stacksize, b->main, NULL);
