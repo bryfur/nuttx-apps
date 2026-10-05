@@ -18,6 +18,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <stdlib.h>
+#include <errno.h>
+
+#include <nuttx/kmalloc.h>
 
 #ifdef CONFIG_FPC_GPU
 
@@ -66,6 +70,10 @@ int  fpc_link_send(uint8_t type, const uint32_t *payload, size_t nwords);
 void fpc_link_flush(void);
 int  fpc_gpu_hwstats(uint32_t *st);
 int  fpc_link_timing(int setup, int cycles);
+int  fpc_gpu_read_bulk(int x, int y, int w, int h, uint32_t *buf);
+int  fpc_gpu_bulk_timing(int n, int half);
+void fpc_gpu_bulk_stats(uint32_t *reads, uint32_t *words, uint32_t *errors,
+                        uint32_t *timeouts);
 
 #define LINK_TYPE_TEST   3            /* the GPU counts and drops it */
 #define LINK_MAX_WORDS   512
@@ -444,6 +452,182 @@ int desk_linktest(int mb, int setup, int cycles, bool rb)
     }
 
   return st1[ST_LINK_CRC] != st0[ST_LINK_CRC] || g_rbbad != 0;
+}
+
+/* READ_BULK's soak (protocol v11, the link turned around): a 512 x 32
+ * pattern in the space's last lines (rows 0-7 every data line toggling
+ * each byte, the rest pseudo-random), read back by READ_BULK until MB
+ * megabytes have come, every word compared; between reads one row of the
+ * pattern PUT again (the link back in write mode after each read), the
+ * GPU's CRC error count from STATS before and after.  N, HALF (> 0): the
+ * reply's timing first (fpc_gpu_bulk_timing(): N GPU cycles a byte, the
+ * strobe HALF half cycles after the byte); PSRAM: into the user heap
+ * (the PSRAM) instead of the kernel's (SRAM); COPY: by fpc_gpu_read()
+ * (through its SRAM bounce buffer, then copied) instead of straight in.  0 if every read came back
+ * right and the CRC count did not move.
+ */
+
+#define RL_W     512
+#define RL_H     32
+#define RL_Y     (2048 - RL_H)
+#define RL_US()  (*(volatile uint32_t *)(0x400b0000 + 0x28))   /* RP2350 TIMER0 TIMERAWL */
+
+static uint16_t rl_px(int i, int j)
+{
+  uint32_t v;
+
+  if (j < 8)
+    {
+      return 0x55aa;                      /* bytes aa 55 aa 55 ... */
+    }
+
+  v = (uint32_t)(i + 1) * 2654435761u ^ (uint32_t)(j + 7) * 40503u;
+  v ^= v >> 15;
+  v *= 0x2c1b3c6du;
+  v ^= v >> 12;
+  return (uint16_t)v;
+}
+
+static void rl_put_row(int j)
+{
+  static uint16_t row[RL_W];
+  int i;
+
+  for (i = 0; i < RL_W; i++)
+    {
+      row[i] = rl_px(i, j);
+    }
+
+  fpc_gpu_put(0, RL_Y + j, RL_W, 1, row, sizeof(row));
+}
+
+int desk_rlinktest(int mb, int n, int half, bool psram, bool copy)
+{
+  static uint32_t st0[ST_WORDS];
+  static uint32_t st1[ST_WORDS];
+  size_t words = RL_W / 2 * RL_H + 2;
+  FAR uint32_t *buf;
+  struct timespec t0;
+  struct timespec t1;
+  uint32_t r0, w0, e0, to0, r1, w1, e1, to1;
+  long reads = (long)mb * 1024 * 1024 / ((RL_W / 2) * RL_H * 4);
+  long bad_words = 0;
+  long bad_reads = 0;
+  uint64_t rd_us = 0;
+  uint32_t u0;
+  long timeouts = 0;
+  long k;
+  long ms;
+  int i;
+  int j;
+  int ret;
+
+  if (n > 0 && fpc_gpu_bulk_timing(n, half) < 0)
+    {
+      printf("rlink: no timing %d / %d\n", n, half);
+      return 1;
+    }
+
+  buf = psram ? malloc(words * 4) : kmm_malloc(words * 4);
+  if (buf == NULL)
+    {
+      printf("rlink: no memory\n");
+      return 1;
+    }
+
+  for (j = 0; j < RL_H; j++)
+    {
+      rl_put_row(j);
+    }
+
+  fpc_gpu_flush();
+  if (fpc_gpu_hwstats(st0) < 0)
+    {
+      printf("rlink: no STATS\n");
+      goto fail;
+    }
+
+  fpc_gpu_bulk_stats(&r0, &w0, &e0, &to0);
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+  for (k = 0; k < reads; k++)
+    {
+      u0 = RL_US();
+      ret = copy ? fpc_gpu_read(0, RL_Y, RL_W, RL_H, (FAR uint16_t *)(buf + 1),
+                                RL_W * 2) :
+                   fpc_gpu_read_bulk(0, RL_Y, RL_W, RL_H, buf);
+      rd_us += RL_US() - u0;
+      if (ret == -ENOSYS)
+        {
+          printf("rlink: the GPU has no READ_BULK (not v11, or the 3D GPU)\n");
+          goto fail;
+        }
+
+      if (ret < 0)
+        {
+          bad_reads++;
+          if (ret == -ETIMEDOUT)
+            {
+              timeouts++;
+            }
+        }
+      else
+        {
+          int bad = 0;
+
+          for (j = 0; j < RL_H; j++)
+            {
+              for (i = 0; i < RL_W; i += 2)
+                {
+                  uint32_t want = rl_px(i, j) | (uint32_t)rl_px(i + 1, j) << 16;
+                  uint32_t got = buf[1 + j * (RL_W / 2) + i / 2];
+
+                  if (got != want)
+                    {
+                      if (bad_words + bad < 4)
+                        {
+                          printf("rlink: read %ld (%d,%d): %08" PRIx32
+                                 " want %08" PRIx32 "\n", k, i, j, got, want);
+                        }
+
+                      bad++;
+                    }
+                }
+            }
+
+          bad_words += bad;
+        }
+
+      rl_put_row((int)(k % RL_H));        /* (a write between reads) */
+      fpc_gpu_flush();
+    }
+
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+  fpc_gpu_bulk_stats(&r1, &w1, &e1, &to1);
+  if (fpc_gpu_hwstats(st1) < 0)
+    {
+      printf("rlink: no STATS after\n");
+      goto fail;
+    }
+
+  ms = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+  printf("rlink: %ld reads of %d KB into %s%s: %ld ms in all, %" PRIu32
+         " ms reading (%" PRIu32 " KB/s, each read from the request to the "
+         "checked reply), %ld words wrong, %ld reads failed (%ld timed out); "
+         "driver: %" PRIu32 " good, %" PRIu32 " corrupt, %" PRIu32
+         " timeouts; GPU CRC errors +%" PRIu32 "\n",
+         reads, (int)(words * 4 / 1024), psram ? "PSRAM" : "SRAM",
+         copy ? " (bounced)" : "", ms,
+         (uint32_t)(rd_us / 1000),
+         rd_us ? (uint32_t)((uint64_t)reads * (words - 2) * 4 * 1000000 /
+                            rd_us / 1024) : 0,
+         bad_words, bad_reads, timeouts, r1 - r0, e1 - e0, to1 - to0,
+         st1[ST_LINK_CRC] - st0[ST_LINK_CRC]);
+  psram ? free(buf) : kmm_free(buf);
+  return bad_words != 0 || bad_reads != 0 || st1[ST_LINK_CRC] != st0[ST_LINK_CRC];
+
+fail:
+  psram ? free(buf) : kmm_free(buf);
+  return 1;
 }
 
 #endif

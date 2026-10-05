@@ -33,6 +33,16 @@
  *                                 not move.  SETUP CYCLES: the link's
  *                                 timing first (0 0: as it is); rb: READs
  *                                 beside it
+ *   deskctl rlink [MB [N HALF]] [psram|copy]
+ *                                 READ_BULK's soak (v11, the link turned
+ *                                 around): MB (16) megabytes read back and
+ *                                 compared, a write between reads, the
+ *                                 GPU's CRC errors must not move.  N HALF:
+ *                                 the reply's timing first (GPU cycles a
+ *                                 byte, the strobe's delay in half
+ *                                 cycles); psram: into the PSRAM, not SRAM;
+ *                                 copy: into the PSRAM by fpc_gpu_read()
+ *                                 (its SRAM bounce buffer, then copied)
  *   deskctl stats [clear|N]       GPU commands and pixels since the last
  *                                 clear, with the GPU time they take (the
  *                                 costs in docs/desktop.md); N: per N steps
@@ -97,6 +107,7 @@ int fpc_simgpu_screenshot(FAR const char *path);
 #endif
 int desk_gputest(void);
 int desk_linktest(int mb, int setup, int cycles, bool rb);
+int desk_rlinktest(int mb, int n, int half, bool psram, bool copy);
 
 /****************************************************************************
  * Private Functions
@@ -551,6 +562,7 @@ static void deskctl_usage(void)
           "usage: deskctl m X Y [BUTTONS] | c X Y | d X0 Y0 X1 Y1 [N] |\n"
           "               k TEXT | key [+|-]NAME|@MS... | shot FILE |\n"
           "               stats [clear|N] | mode [N] | redraw | test | link [MB [S C [rb]]] |\n"
+          "               rlink [MB [N HALF]] [psram|copy] |\n"
           "               freeze [SECONDS|off] | dock APP [r] | wins |\n"
           "               fx hold PERMILLE|off | fx on|off\n");
 }
@@ -582,6 +594,18 @@ int main(int argc, FAR char *argv[])
                            argc >= 5 ? atoi(argv[3]) : 0,
                            argc >= 5 ? atoi(argv[4]) : 0,
                            argc >= 6 && strcmp(argv[5], "rb") == 0) ?
+             EXIT_FAILURE : EXIT_SUCCESS;
+    }
+
+  if (strcmp(argv[1], "rlink") == 0)
+    {
+      bool copy = strcmp(argv[argc - 1], "copy") == 0;
+      bool psram = copy || strcmp(argv[argc - 1], "psram") == 0;
+      int na = argc - (psram ? 1 : 0);
+
+      return desk_rlinktest(na >= 3 ? atoi(argv[2]) : 16,
+                            na >= 5 ? atoi(argv[3]) : 0,
+                            na >= 5 ? atoi(argv[4]) : 0, psram, copy) ?
              EXIT_FAILURE : EXIT_SUCCESS;
     }
 
