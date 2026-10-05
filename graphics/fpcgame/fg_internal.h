@@ -76,6 +76,12 @@ void fg_affine(int cx, int cy, int cw, int ch, int bx, int by, int bw,
                uint32_t flags);
 
 void fg_blit_wrap(FAR const struct fg_rect_s *surf, int scrollx, int scrolly);
+
+/* fg_mode7() from a rectangle of the space (a layer's surface) */
+
+void fg_mode7_rect(FAR const struct fg_rect_s *r, int top, int bottom,
+                   int32_t camx, int32_t camy, int angle, int height,
+                   int horizon, int focal, uint32_t flags);
 uint16_t fg_rgb555(uint16_t c);           /* TRI's colours: never FG_KEY */
 
 /* Input (fg_core.c), sound (fg_audio.c), layers and text (fg_gfx.c) */

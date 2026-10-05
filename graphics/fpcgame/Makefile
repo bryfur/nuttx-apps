@@ -39,6 +39,10 @@ fg_audio_engine.c_CFLAGS += -Wno-unused-function
 tri/tri_gfx.c_CFLAGS += -Wno-shadow
 tri/tri_text.c_CFLAGS += -Wno-shadow
 
+# The 3D effects' rows from floats: the same on the board as in the
+# simulator (no fused multiply-adds, which x86-64 has not), pixel for pixel
+fg_3d.c_CFLAGS += -ffp-contract=off
+
 # TRI's SDK files start fresh with each game (tri/tri_sdk.h, TRI_STATE): their
 # statics in one section each, in the files' order
 TRI_FRESH = -fno-data-sections -fno-toplevel-reorder

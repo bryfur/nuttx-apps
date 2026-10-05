@@ -151,6 +151,7 @@ int  fg_image_from8(int w, int h, FAR const uint8_t *px, size_t stride,
 #define FG_HALF      0x04                 /*   50 % over what is there */
 #define FG_ADD       0x08                 /*   added on (saturating) */
 #define FG_OPAQUE    0x10                 /*   FG_KEY pixels drawn too */
+#define FG_WRAP      0x20                 /* fg_mode7(): the image repeats */
 #define FG_ALPHA(a)  ((uint32_t)((a) & 0xff) << 8)   /* Translucent: 1..254 (0: opaque) */
 
 void fg_clear(uint16_t colour);
@@ -178,7 +179,8 @@ void fg_sprite_matrix(int img, int sx, int sy, int w, int h, int cx, int cy,
 /* 3D effects (fg_3d.c: the GPU's textured rows).  The w x h rectangle at
  * (sx, sy) of an image drawn as any convex quadrilateral, in perspective:
  * its corner k (0 top-left, 1 top-right, 2 bottom-right, 3 bottom-left)
- * at (x[k], y[k]) of the canvas, 12.4 (1/16 pixel).  Flags: FG_OPAQUE
+ * at (x[k], y[k]) of the canvas, 12.4 (1/16 pixel).  Flags: FG_OPAQUE,
+ * FG_HFLIP and FG_VFLIP (the image mirrored within its corners)
  */
 
 void fg_quad(int img, int sx, int sy, int w, int h,
@@ -195,11 +197,23 @@ void fg_quad(int img, int sx, int sy, int w, int h,
 bool fg_quad3d(int img, int sx, int sy, int w, int h, int cx, int cy,
                uint32_t flags, int yaw, int pitch, int roll, int scale);
 
+/* ... only the corners that would be drawn at, for fg_quad() (a sprite
+ * with two sides: its back is the same corners, mirrored, or flipped as
+ * well); *back says whether its back faces the viewer.  False (no
+ * corners) when it reaches the viewer
+ */
+
+bool fg_quad3d_corners(int w, int h, int cx, int cy, int yaw, int pitch,
+                       int roll, int scale, FAR int32_t x[4],
+                       FAR int32_t y[4], FAR bool *back);
+
 /* A floor in perspective (Mode 7) on canvas rows top..bottom - 1 below
  * the horizon row: the image's plane seen from (camx, camy) of it (8.8
  * pixels), facing angle (0 up the image, clockwise, 0..4095 a turn), from
  * height pixels above it with a lens of focal pixels.  Only the part
- * showing the image is drawn.  Flags: FG_OPAQUE
+ * showing the image is drawn, or with FG_WRAP the image repeated over the
+ * whole plane (a layer's map, which wraps round).  Flags: FG_OPAQUE,
+ * FG_WRAP
  */
 
 void fg_mode7(int img, int top, int bottom, int32_t camx, int32_t camy,
