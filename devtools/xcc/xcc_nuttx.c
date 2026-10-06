@@ -13,6 +13,7 @@
 #include "xcc_nuttx.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <setjmp.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -30,8 +31,9 @@
  */
 
 #define CHUNK  (64 * 1024)
-#define BIG    (16 * 1024)
+#define SMALL  256             /* Larger: the heap's, freed when freed */
 #define ALIGN  8
+#define MAGIC  0x58434342      /* "XCCB" */
 
 struct chunk_s
 {
@@ -41,61 +43,113 @@ struct chunk_s
   char *last;              /* The most recent allocation (its header) */
 };
 
+/* A larger allocation: from the heap, listed by the run that made it (all
+ * given back at its end) */
+
+struct big_s
+{
+  struct big_s *next;
+  struct big_s *prev;
+  uint32_t magic;
+  uint32_t level;
+  size_t pad;
+  size_t word;             /* (size << 1) | 1: right before the memory */
+};
+
+/* An arena allocation's header: its word, (size << 1), right before it */
+
 #define HDR  ((sizeof(size_t) + ALIGN - 1) & ~(ALIGN - 1))
 #define CHDR ((sizeof(struct chunk_s) + ALIGN - 1) & ~(ALIGN - 1))
+#define WORD(p) (((size_t *)(p))[-1])
+
+#define MAX_DEPTH  4
 
 static struct chunk_s *g_chunks;       /* All, newest first */
 static struct chunk_s *g_cur;          /* Where small allocations go */
+static struct big_s *g_big[MAX_DEPTH + 1];
 static size_t g_arena_bytes;           /* Bytes of blocks held */
+static size_t g_heap_bytes;            /* Bytes of larger allocations */
 static size_t g_arena_peak;
+static int g_depth;                    /* Runs nested (xcc_run) */
 
-static struct chunk_s *chunk_of(void *p)
+static void note_peak(void)
 {
-  struct chunk_s *c;
-
-  if (g_cur != NULL && (char *)p > (char *)g_cur && (char *)p < g_cur->end)
+  if (g_arena_bytes + g_heap_bytes > g_arena_peak)
     {
-      return g_cur;
+      g_arena_peak = g_arena_bytes + g_heap_bytes;
     }
-
-  for (c = g_chunks; c != NULL; c = c->next)
-    {
-      if ((char *)p > (char *)c && (char *)p < c->end)
-        {
-          return c;
-        }
-    }
-
-  return NULL;
 }
 
-static struct chunk_s *chunk_new(size_t need)
+static struct chunk_s *chunk_new(void)
 {
-  size_t size = need + CHDR > CHUNK ? need + CHDR : CHUNK;
-  struct chunk_s *c = malloc(size);
+  struct chunk_s *c = malloc(CHUNK);
 
   if (c == NULL)
     {
       return NULL;
     }
 
-  c->end = (char *)c + size;
+  c->end = (char *)c + CHUNK;
   c->top = (char *)c + CHDR;
   c->last = NULL;
   c->next = g_chunks;
   g_chunks = c;
-  g_arena_bytes += size;
-  if (g_arena_bytes > g_arena_peak)
-    {
-      g_arena_peak = g_arena_bytes;
-    }
-
-  if (need <= BIG)
-    {
-      g_cur = c;
-    }
-
+  g_cur = c;
+  g_arena_bytes += CHUNK;
+  note_peak();
   return c;
+}
+
+static void *big_alloc(size_t size)
+{
+  struct big_s *b = malloc(sizeof(*b) + size);
+  int level = g_depth;
+
+  if (b == NULL)
+    {
+      return NULL;
+    }
+
+  b->magic = MAGIC;
+  b->level = level;
+  b->word = (size << 1) | 1;
+  b->prev = NULL;
+  b->next = g_big[level];
+  if (b->next != NULL)
+    {
+      b->next->prev = b;
+    }
+
+  g_big[level] = b;
+  g_heap_bytes += size;
+  note_peak();
+  return b + 1;
+}
+
+static void big_unlink(struct big_s *b)
+{
+  if (b->prev != NULL)
+    {
+      b->prev->next = b->next;
+    }
+  else
+    {
+      g_big[b->level] = b->next;
+    }
+
+  if (b->next != NULL)
+    {
+      b->next->prev = b->prev;
+    }
+
+  g_heap_bytes -= b->word >> 1;
+}
+
+static struct big_s *big_of(void *p)
+{
+  struct big_s *b = (struct big_s *)p - 1;
+
+  return (WORD(p) & 1) && b->magic == MAGIC ? b : NULL;
 }
 
 void *xcc_malloc(size_t size)
@@ -104,9 +158,14 @@ void *xcc_malloc(size_t size)
   struct chunk_s *c = g_cur;
   char *h;
 
-  if (size > BIG || c == NULL || (size_t)(c->end - c->top) < need)
+  if (size > SMALL)
     {
-      c = chunk_new(need);
+      return big_alloc(size);
+    }
+
+  if (c == NULL || (size_t)(c->end - c->top) < need)
+    {
+      c = chunk_new();
       if (c == NULL)
         {
           return NULL;
@@ -116,7 +175,7 @@ void *xcc_malloc(size_t size)
   h = c->top;
   c->top += need;
   c->last = h;
-  *(size_t *)h = size;
+  WORD(h + HDR) = size << 1;
   return h + HDR;
 }
 
@@ -134,29 +193,40 @@ void *xcc_calloc(size_t n, size_t size)
 
 void xcc_free(void *p)
 {
-  struct chunk_s *c;
+  struct big_s *b;
 
   if (p == NULL)
     {
       return;
     }
 
-  c = chunk_of(p);
-  if (c == NULL)
+  if (WORD(p) & 1)
     {
-      free(p);                         /* The C library's (getcwd...) */
+      b = big_of(p);
+      if (b != NULL)
+        {
+          big_unlink(b);
+          b->magic = 0;
+          free(b);
+        }
+      else
+        {
+          free(p);                     /* The C library's (open_memstream) */
+        }
     }
-  else if (c->last == (char *)p - HDR)
+  else if (g_cur != NULL && g_cur->last == (char *)p - HDR)
     {
-      c->top = c->last;                /* The most recent: given back */
-      c->last = NULL;
+      g_cur->top = g_cur->last;        /* The most recent: given back */
+      g_cur->last = NULL;
     }
+
+  /* Any other small one stays till the end of the run */
 }
 
 void *xcc_realloc(void *p, size_t size)
 {
-  struct chunk_s *c;
   size_t old;
+  struct big_s *b;
   void *q;
 
   if (p == NULL)
@@ -164,22 +234,67 @@ void *xcc_realloc(void *p, size_t size)
       return xcc_malloc(size);
     }
 
-  c = chunk_of(p);
-  if (c == NULL)
+  if (WORD(p) & 1)
     {
-      return realloc(p, size);
-    }
-
-  old = *(size_t *)((char *)p - HDR);
-  if (c->last == (char *)p - HDR)
-    {
-      size_t need = HDR + ((size + ALIGN - 1) & ~(size_t)(ALIGN - 1));
-
-      if ((size_t)(c->end - c->last) >= need)
+      b = big_of(p);
+      if (b == NULL)
         {
-          c->top = c->last + need;
-          *(size_t *)c->last = size;
-          return p;
+          return realloc(p, size);     /* The C library's */
+        }
+
+      if (size > SMALL)
+        {
+          struct big_s *n;
+
+          big_unlink(b);
+          n = realloc(b, sizeof(*b) + size);
+          if (n == NULL)
+            {
+              /* Still there: listed again */
+
+              n = b;
+              size = n->word >> 1;
+              q = NULL;
+            }
+          else
+            {
+              q = n + 1;
+            }
+
+          n->word = (size << 1) | 1;
+          n->prev = NULL;
+          n->next = g_big[n->level];
+          if (n->next != NULL)
+            {
+              n->next->prev = n;
+            }
+
+          g_big[n->level] = n;
+          g_heap_bytes += size;
+          note_peak();
+          return q;
+        }
+
+      old = b->word >> 1;
+    }
+  else
+    {
+      old = WORD(p) >> 1;
+      if (size <= SMALL && g_cur != NULL && g_cur->last == (char *)p - HDR)
+        {
+          size_t need = HDR + ((size + ALIGN - 1) & ~(size_t)(ALIGN - 1));
+
+          if ((size_t)(g_cur->end - g_cur->last) >= need)
+            {
+              g_cur->top = g_cur->last + need;
+              WORD(p) = size << 1;
+              return p;
+            }
+        }
+
+      if (size <= old)
+        {
+          return p;                    /* Smaller: stays where it is */
         }
     }
 
@@ -191,6 +306,23 @@ void *xcc_realloc(void *p, size_t size)
     }
 
   return q;
+}
+
+char *xcc_getcwd(char *buf, size_t size)
+{
+  char tmp[PATH_MAX];
+
+  if (buf != NULL)
+    {
+      return getcwd(buf, size);
+    }
+
+  if (getcwd(tmp, sizeof(tmp)) == NULL)
+    {
+      return NULL;
+    }
+
+  return xcc_strdup(tmp);
 }
 
 char *xcc_strdup(const char *s)
@@ -258,6 +390,20 @@ ssize_t xcc_getline(char **lineptr, size_t *n, FILE *fp)
     }
 
   (*lineptr)[len] = '\0';
+
+  /* The line kept as long as it is (the preprocessor keeps most) */
+
+  if (len + 1 < *n)
+    {
+      char *l = xcc_realloc(*lineptr, len + 1);
+
+      if (l != NULL)
+        {
+          *lineptr = l;
+          *n = len + 1;
+        }
+    }
+
   return len > 0 ? (ssize_t)len : -1;
 }
 
@@ -282,9 +428,10 @@ static void arena_mark(struct arena_mark_s *m)
   m->last = g_cur != NULL ? g_cur->last : NULL;
 }
 
-/* Everything allocated since the mark given back */
+/* Everything allocated since the mark given back: the blocks newer than
+ * it, and the larger allocations of the run at `level` */
 
-static void arena_release_to(const struct arena_mark_s *m)
+static void arena_release_to(const struct arena_mark_s *m, int level)
 {
   while (g_chunks != m->chunks)
     {
@@ -300,6 +447,15 @@ static void arena_release_to(const struct arena_mark_s *m)
     {
       g_cur->top = m->top;
       g_cur->last = m->last;
+    }
+
+  while (g_big[level] != NULL)
+    {
+      struct big_s *b = g_big[level];
+
+      big_unlink(b);
+      b->magic = 0;
+      free(b);
     }
 }
 
@@ -613,7 +769,6 @@ static void memfiles_release(void)
  */
 
 #define MAX_ATEXIT 8
-#define MAX_DEPTH  4
 
 struct level_s
 {
@@ -625,7 +780,6 @@ struct level_s
 };
 
 static struct level_s g_levels[MAX_DEPTH];
-static int g_depth;
 
 void xcc_exit(int status)
 {
@@ -700,7 +854,7 @@ int xcc_run(struct xcc_blob_s *blob, int (*mainfn)(int, char **), int argc,
 
   if (g_depth == 0)
     {
-      g_arena_peak = g_arena_bytes;
+      g_arena_peak = g_arena_bytes + g_heap_bytes;
     }
 
   l = &g_levels[g_depth];
@@ -725,7 +879,7 @@ int xcc_run(struct xcc_blob_s *blob, int (*mainfn)(int, char **), int argc,
   --g_depth;
   fflush(stdout);
   fflush(stderr);
-  arena_release_to(&l->mark);
+  arena_release_to(&l->mark, g_depth + 1);
   if (g_depth == 0)
     {
       memfiles_release();

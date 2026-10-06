@@ -87,13 +87,30 @@ def main():
             files.add(os.path.relpath(path, incdir))
     if os.path.isdir(outdir):
         shutil.rmtree(outdir)
+    texts = {}
     for rel in sorted(files):
+        with open(os.path.join(incdir, rel), errors='replace') as f:
+            texts[rel] = strip(f.read())
+    # nuttx/config.h: only the options the headers test (a thousand macros
+    # less for the board's preprocessor to keep)
+    cfg = os.path.join('nuttx', 'config.h')
+    if cfg in texts:
+        used = set()
+        for rel, text in texts.items():
+            if rel != cfg:
+                used.update(re.findall(r'CONFIG_[A-Za-z0-9_]+', text))
+        lines = []
+        for line in texts[cfg].split('\n'):
+            m = re.match(r'#define (CONFIG_[A-Za-z0-9_]+)', line)
+            if m and m.group(1) not in used:
+                continue
+            lines.append(line)
+        texts[cfg] = '\n'.join(lines)
+    for rel, text in texts.items():
         dst = os.path.join(outdir, rel)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
-        with open(os.path.join(incdir, rel), errors='replace') as f:
-            text = f.read()
         with open(dst, 'w') as f:
-            f.write(strip(text))
+            f.write(text)
     print('mkheaders: %d headers' % len(files))
 
 

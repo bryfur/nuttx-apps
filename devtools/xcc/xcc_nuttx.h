@@ -88,6 +88,8 @@ struct xcc_blob_s
 int xcc_run(struct xcc_blob_s *blob, int (*mainfn)(int, char **), int argc,
             char **argv);
 
+char *xcc_getcwd(char *buf, size_t size);
+
 /* The arena's high-water mark (bytes): XCC_STATS=1 prints it at the end */
 
 size_t xcc_arena_peak(void);
@@ -100,6 +102,7 @@ size_t xcc_arena_peak(void);
 #  define strdup(s)        xcc_strdup(s)
 #  define strndup(s, n)    xcc_strndup(s, n)
 #  define getline(l, n, f) xcc_getline(l, n, f)
+#  define getcwd(b, n)     xcc_getcwd(b, n)
 #  define exit(s)          xcc_exit(s)
 #  define atexit(f)        xcc_atexit(f)
 #  define fopen(p, m)      xcc_fopen(p, m)
