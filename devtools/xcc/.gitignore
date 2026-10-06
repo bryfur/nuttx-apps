@@ -1,2 +1,5 @@
 /host
 /sysroot
+# What xcc s tests leave
+/xcc/tests/tmp_*
+/xcc/tests/*.ppm

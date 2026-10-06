@@ -32,6 +32,41 @@ PREDEFINED = [
 ]
 
 
+def strip(text):
+    """The comments and blank lines out: a third the size, and less for
+    the board's preprocessor to read"""
+    out = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == '/' and text.startswith('/*', i):
+            j = text.find('*/', i + 2)
+            j = n if j < 0 else j + 2
+            out.append('\n' * text.count('\n', i, j) or ' ')
+            i = j
+        elif c == '/' and text.startswith('//', i):
+            j = text.find('\n', i)
+            i = n if j < 0 else j
+        elif c in '"\'':
+            j = i + 1
+            while j < n and text[j] != c and text[j] != '\n':
+                j += 2 if text[j] == '\\' else 1
+            out.append(text[i:j + 1])
+            i = j + 1
+        else:
+            out.append(c)
+            i += 1
+    lines = [l.rstrip() for l in ''.join(out).split('\n')]
+    res = []
+    for l in lines:
+        if l == '':
+            continue
+        if res and res[-1].endswith('\\') and l.strip() == '':
+            continue
+        res.append(l)
+    return '\n'.join(res) + '\n'
+
+
 def main():
     cpp, incdir, overlay, listfile, outdir = sys.argv[1:6]
     incdir = os.path.normpath(incdir)
@@ -55,7 +90,10 @@ def main():
     for rel in sorted(files):
         dst = os.path.join(outdir, rel)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.copyfile(os.path.join(incdir, rel), dst)
+        with open(os.path.join(incdir, rel), errors='replace') as f:
+            text = f.read()
+        with open(dst, 'w') as f:
+            f.write(strip(text))
     print('mkheaders: %d headers' % len(files))
 
 
