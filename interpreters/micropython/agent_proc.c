@@ -8,7 +8,8 @@
  *   p = Proc(cmd)                 NSH (the sh builtin) runs cmd: its
  *                                 stdout and stderr into a pipe, its
  *                                 stdin /dev/null; the environment (and
- *                                 so the current directory) this task's
+ *                                 so the current directory) this task's,
+ *                                 less secrets (*API_KEY*, *TOKEN* ...)
  *   p.read(wait_ms=-1)            the output so far: bytes (b"" when
  *                                 wait_ms passed with nothing), None at
  *                                 the end (everything that writes to it
@@ -36,6 +37,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 
 #include <nuttx/lib/builtin.h>
@@ -156,6 +158,61 @@ static void proc_end(proc_obj_t *o, bool force)
     }
 }
 
+/* The environment for the shell: this task's, less the secrets (API keys,
+ * tokens: the agent's key must not reach a command's output, the screen
+ * and the model)
+ */
+
+static bool secret(const char *e)
+{
+  const char *eq = strchr(e, '=');
+  size_t n = eq != NULL ? (size_t)(eq - e) : strlen(e);
+  static const char *const words[] =
+  {
+    "API_KEY", "TOKEN", "SECRET", "PASSWORD"
+  };
+
+  for (size_t w = 0; w < sizeof(words) / sizeof(words[0]); w++)
+    {
+      size_t k = strlen(words[w]);
+
+      for (size_t i = 0; i + k <= n; i++)
+        {
+          if (strncasecmp(e + i, words[w], k) == 0)
+            {
+              return true;
+            }
+        }
+    }
+
+  return false;
+}
+
+static char **proc_env(void)
+{
+  char **env = environ;
+  char **out;
+  size_t n = 0;
+  size_t k = 0;
+
+  while (env != NULL && env[n] != NULL)
+    {
+      n++;
+    }
+
+  out = m_new(char *, n + 1);
+  for (size_t i = 0; i < n; i++)
+    {
+      if (!secret(env[i]))
+        {
+          out[k++] = env[i];
+        }
+    }
+
+  out[k] = NULL;
+  return out;
+}
+
 /* Proc(cmd) */
 
 static mp_obj_t proc_make_new(const mp_obj_type_t *type, size_t n_args,
@@ -220,7 +277,7 @@ static mp_obj_t proc_make_new(const mp_obj_type_t *type, size_t n_args,
   argv[1] = (char *)cmd;
   argv[2] = addr;
   argv[3] = NULL;
-  ret = task_spawn("sh", proc_entry, &fa, &attr, argv, NULL);
+  ret = task_spawn("sh", proc_entry, &fa, &attr, argv, proc_env());
   posix_spawn_file_actions_destroy(&fa);
   posix_spawnattr_destroy(&attr);
   close(fds[1]);
