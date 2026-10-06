@@ -14,6 +14,8 @@
 #                              interpreter and the expected results
 #   make fuzz N=200            random modules (wasm-tools smith), JIT
 #                              against the interpreter
+#   make progs                 whole programs (progs/*.c, CoreMark; xcc's
+#                              tests by its wcc): JIT against interpreter
 #   make kill                  loops that never end (kill/*.wat), stopped
 #                              as the board's watchdog does: terminated,
 #                              the compiled loops interrupted
@@ -146,10 +148,12 @@ SPEC_SKIP =
 
 spec: $(OUT)/jitrun
 	@mkdir -p $(OUT)/spec
+	python3 $(CURDIR)/genbig.py $(OUT)/spec/jit-big.wast
 	python3 $(CURDIR)/spec.py --wast2json $(WAST2JSON) \
 	  --jitrun "$(QEMU) $(OUT)/jitrun" --out $(OUT)/spec \
 	  $(filter-out $(patsubst %,$(TESTSUITE)/%.wast,$(SPEC_SKIP)),\
-	    $(wildcard $(TESTSUITE)/*.wast)) $(wildcard $(CURDIR)/wast/*.wast)
+	    $(wildcard $(TESTSUITE)/*.wast)) $(wildcard $(CURDIR)/wast/*.wast) \
+	  $(OUT)/spec/jit-big.wast
 
 N ?= 100
 fuzz: $(OUT)/jitrun
@@ -158,6 +162,14 @@ fuzz: $(OUT)/jitrun
 	  --jitrun "$(QEMU) $(OUT)/jitrun" --out $(OUT)/fuzz -n $(N)
 
 WAT2WASM ?= $(TOOLS)/wabt-1.0.42/bin/wat2wasm
+WASI_SDK ?= $(HOME)/tools/wasm/wasi-sdk-34.0-x86_64-linux
+WCC      ?= $(HOME)/fpcwork/xcc/hroot/wcc
+CMSRC    ?= $(firstword $(wildcard $(CURDIR)/../../../../benchmarks/coremark/coremark) \
+                        $(HOME)/fpcwork/wasmbench/coremark-main)
+
+progs: $(OUT)/jitrun
+	CC="$(WASI_SDK)/bin/clang --target=wasm32-wasip1 --sysroot=$(WASI_SDK)/share/wasi-sysroot -O2" \
+	WCC="$(WCC)" CM="$(CMSRC)" $(CURDIR)/progs.sh $(OUT)/progs $(QEMU) $(OUT)/jitrun
 
 kill: $(OUT)/jitrun
 	@mkdir -p $(OUT)/kill
@@ -173,4 +185,4 @@ kill: $(OUT)/jitrun
 clean:
 	rm -rf $(OUT)/obj $(OUT)/jobj $(OUT)/jitrun
 
-.PHONY: all spec fuzz kill clean
+.PHONY: all spec fuzz kill progs clean

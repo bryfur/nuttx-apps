@@ -1025,8 +1025,9 @@ static int cmd_run(int argc, char **argv)
         }
 
       clock_gettime(CLOCK_MONOTONIC, &t0);
-      if (!interp && !wasm_jit_attach(inst, WASM_JIT_VERBOSE, err,
-                                      sizeof(err)))
+      if (!interp && !wasm_jit_attach(inst, WASM_JIT_VERBOSE |
+                                      (getenv("JITRUN_MAP") != NULL ?
+                                       WASM_JIT_MAP : 0), err, sizeof(err)))
         {
           fprintf(stderr, "jitrun: JIT: %s\n", err);
         }
