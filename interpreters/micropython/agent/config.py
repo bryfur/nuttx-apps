@@ -46,6 +46,13 @@ DEFAULTS = {
 }
 
 
+# The file's keys in this order (MicroPython's dicts keep none)
+ORDER = ['provider', 'anthropic', 'openai', 'model', 'base_url', 'api_key', 'api_key_env',
+         'max_tokens', 'max_tokens_param', 'effort', 'thinking', 'cache', 'eager_tools',
+         'stream_usage', 'auto_approve', 'allow', 'compact_tokens', 'max_history_kb',
+         'timeout', 'shell_timeout', 'verify_tls', 'color']
+
+
 def path():
     return util.join(util.home(), '.agent.json')
 
@@ -94,11 +101,8 @@ def pretty(v, ind=''):
         if not v:
             return '{}'
         keys = list(v.keys())
-        order = [k for k in DEFAULTS if k in v] + \
-            [k for k in DEFAULTS['anthropic'] if k in v] + \
-            [k for k in DEFAULTS['openai'] if k in v]
         seen = []
-        for k in order + sorted(keys):
+        for k in ORDER + sorted(keys):
             if k in v and k not in seen:
                 seen.append(k)
         inner = ind + '  '

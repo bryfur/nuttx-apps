@@ -145,16 +145,16 @@ def banner(s, cfg):
 
 def config_text(cfg):
     lines = ['%s:' % config.path()]
-    for k in config.DEFAULTS:
-        if k in ('anthropic', 'openai'):
+    for k in config.ORDER:
+        if k in ('anthropic', 'openai') or k not in config.DEFAULTS:
             continue
         lines.append('  %s: %s' % (k, json.dumps(cfg.get(k))))
     for name in ('anthropic', 'openai'):
         s = cfg[name]
         mark = ' (in use)' if cfg['provider'] == name else ''
         lines.append('  %s%s:' % (name, mark))
-        for k in s:
-            if k == 'api_key':
+        for k in config.ORDER:
+            if k == 'api_key' or k not in s:
                 continue
             lines.append('    %s: %s' % (k, json.dumps(s[k])))
         lines.append('    api key: %s' % config.key_source(cfg, name))
@@ -320,6 +320,9 @@ def run_tool(s, name, words):
         return 2
     try:
         text, summary = s.tools.run(name, a)
+    except KeyboardInterrupt:
+        print('interrupted')
+        return 1
     except Exception as e:
         print('error: %s' % (e.args[-1] if isinstance(e, OSError) and e.args else e))
         return 1

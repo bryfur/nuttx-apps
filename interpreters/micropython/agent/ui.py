@@ -428,5 +428,5 @@ def ask_line(prompt, default='', mask=False):
             raise EOFError
         out((('*' * len(ln)) if mask else ln) + '\n')
         return ln or default
-    s = _agent.readline(prompt, None, mask=mask, text='' if mask else default)
+    s = _agent.readline(prompt, None, mask=mask)
     return s.strip() or default
