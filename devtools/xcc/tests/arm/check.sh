@@ -9,3 +9,4 @@ $TESTS_ARM/stage2.sh 2>&1 | tail -4
 $TESTS_ARM/difftest.sh
 $TESTS_ARM/pchtest.sh
 $TESTS_ARM/asan.sh | tail -6
+$TESTS_ARM/fuzz.sh 1 ${XCC_FUZZ:-100} | tail -4

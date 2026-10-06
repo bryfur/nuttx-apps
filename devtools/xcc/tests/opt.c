@@ -694,6 +694,22 @@ static void t_ldrd(void)
   out("mul64c", (uint32_t)(h ^ (h >> 32)));
 }
 
+/* (a & 1) ^ (b & 1) with b made after a's AND (found by tests/arm/fuzz.sh:
+ * the XOR was put where a's AND was, before b) */
+
+static uint32_t bitx(uint32_t x, uint32_t n)
+{
+  uint32_t s = 0;
+  for (uint32_t i = 2; i < n; i++)
+    s = s * 3u + (((x - i) & 1u) ^ (((i * 7u) >> 2) & 1u));
+  return s;
+}
+
+static void t_bitx(int k)
+{
+  out("bitx", bitx((uint32_t)k, 35) * 1000 + bitx((uint32_t)k + 1, 20));
+}
+
 int main(int argc, char *argv[])
 {
   (void)argv;
@@ -715,6 +731,7 @@ int main(int argc, char *argv[])
   t_narrowloop();
   t_fall();
   t_ldrd();
+  t_bitx(argc + 1);
   printf("total %u\n", (unsigned)g_sum);
   return 0;
 }
