@@ -48,7 +48,8 @@ class Gen:
                 return '(uint32_t)%s[(%s) %% %du]' % (a, self.expr(d + 2), ln)
             return self.const()
         op = r.choice(['+', '-', '*', '&', '|', '^', '<<', '>>', '/', '%', 'cmp', 'cond', 'not',
-                       'neg', 'cast', 'call', 'range', 'land'])
+                       'neg', 'cast', 'call', 'range', 'land', 'wide', 'sdiv', 'sar', 'bf',
+                       'logic', 'mulhi', 'rot'])
         a, b = self.expr(d + 1), self.expr(d + 1)
         if op in ('<<', '>>'):
             return '((%s) %s ((%s) & 31u))' % (a, op, b)
@@ -74,6 +75,30 @@ class Gen:
             return '(uint32_t)((%s) >= %du && (%s) <= %du)' % (a, lo, a, lo + r.randrange(0, 60))
         if op == 'land':
             return '(uint32_t)(((%s) & 1u) %s ((%s) & 1u))' % (a, r.choice(['^', '|', '&']), b)
+        if op == 'wide':
+            o = r.choice(['*', '+', '-', '/', '%', '>>', '<<'])
+            w = '(((uint64_t)(%s) << 32) | (uint64_t)(%s))' % (a, b)
+            if o in ('/', '%'):
+                return '(uint32_t)(%s %s ((uint64_t)(%s) | 1u))' % (w, o, self.expr(d + 1))
+            if o in ('>>', '<<'):
+                return '(uint32_t)(%s %s ((%s) & 63u))' % (w, o, self.expr(d + 1))
+            return '(uint32_t)((%s %s (uint64_t)(%s)) >> %d)' % (w, o, self.expr(d + 1), r.randrange(0, 40))
+        if op == 'sdiv':
+            return '(uint32_t)((int32_t)(%s) %s ((int32_t)((%s) & 0x7fffu) | 1))' % (a, r.choice(['/', '%']), b)
+        if op == 'sar':
+            t = r.choice(['int32_t', 'int16_t', 'int8_t', 'int64_t'])
+            return '(uint32_t)((%s)(%s) >> ((%s) & %du))' % (t, a, b, 7 if t == 'int8_t' else 15 if t == 'int16_t' else 31)
+        if op == 'bf':
+            return '(uint32_t)bf.%s' % r.choice(['a', 'b', 'c', 'd'])
+        if op == 'logic':
+            return '(uint32_t)((%s) %s (%s))' % (a, r.choice(['&&', '||']), b)
+        if op == 'mulhi':
+            s = r.choice(['uint64_t', 'int64_t'])
+            return '(uint32_t)(((%s)(int32_t)(%s) * (%s)(int32_t)(%s)) >> 32)' % (s, a, s, b) if s == 'int64_t' else \
+                   '(uint32_t)(((uint64_t)(%s) * (uint64_t)(%s)) >> 32)' % (a, b)
+        if op == 'rot':
+            k = r.randrange(1, 32)
+            return '(((%s) << %d) | ((%s) >> %d))' % (a, k, a, 32 - k)
         return '((%s) %s (%s))' % (a, op, b)
 
     def assign(self):
@@ -85,6 +110,8 @@ class Gen:
         if self.arrays and r.random() < 0.25:
             a, at, ln = r.choice(self.arrays)
             return '%s[(%s) %% %du] = (%s)(%s);' % (a, self.expr(2), ln, at, self.expr())
+        if r.random() < 0.1:
+            return 'bf.%s = %s;' % (r.choice(['a', 'b', 'c', 'd']), self.expr())
         op = r.choice(['=', '=', '+=', '^=', '|=', '&='])
         if op == '=':
             return '%s = (%s)(%s);' % (v, t, self.expr())
@@ -109,6 +136,8 @@ class Gen:
             self.vars.append((i, t))
             self.readonly.add(i)
             out += self.block(d + 1)
+            if r.random() < 0.3:
+                out += ['if (%s) %s;' % (self.expr(2), r.choice(['break', 'continue']))] + self.block(d + 1)
             self.vars.pop()
             self.readonly.discard(i)
             return out + ['}']
@@ -154,7 +183,8 @@ class Gen:
     def program(self):
         r = self.r
         lines = ['#include <stdint.h>', '#include <stdio.h>', '',
-                 'static uint32_t acc;', '']
+                 'static uint32_t acc;',
+                 'static struct { unsigned a : 3; signed b : 5; unsigned c : 12; signed d : 9; } bf;', '']
         for f in range(r.randrange(0, 3)):
             fn = self.name('f')
             self.vars = [('x', 'uint32_t'), ('y', 'uint32_t')]
@@ -177,6 +207,7 @@ class Gen:
             lines += self.stmt()
         for v, t in self.vars:
             lines.append('acc = acc * 31u + (uint32_t)%s;' % v)
+        lines.append('acc = acc * 31u + bf.a + (uint32_t)bf.b * 8u + bf.c * 256u + (uint32_t)bf.d * 65536u;')
         for a, t, ln in self.arrays:
             lines.append('for (int j = 0; j < %d; j++) acc = acc * 7u + (uint32_t)%s[j];' % (ln, a))
         lines += ['}', '', 'int main(void) {',
