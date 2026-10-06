@@ -17,3 +17,9 @@ MODULE    = $(CONFIG_NETUTILS_NCTOOLS)
 MAINSRC   = wifi.c ifconfig.c curl.c wget.c ssh.c ntpdate.c host.c nc.c bt.c
 
 include $(APPDIR)/Application.mk
+
+# As modules they take the library from the firmware (its symbol table),
+# never libapps' objects, which are not built for a module's long calls
+# (a module in the PSRAM is out of a branch's reach of the flash)
+
+LDLIBS = $(COMPILER_RT_LIB)
