@@ -5,11 +5,15 @@
  *
  * Doom full screen on the FPC's GPU (CONFIG_GAMES_NXDOOM_FULLSCREEN;
  * drivers/gpu, protocol v8): the game takes the display and the keyboard
- * from the desktop as the game SDK's games do, the 1280 x 800 mode at
- * 4 x 4 shows its 320 x 200 frame exactly, and each frame goes to the GPU
- * as one PUT whose pixels are looked up in the palette's RGB565 table on
- * the way into the link's batch (fpc_gpu_put8()): two canvases, drawn in
- * turn and FLIPped to.  The desktop's window path (8-bit frames scaled by
+ * from the desktop as the game SDK's games do, in the desktop's own
+ * display mode, and shows its 320 x 200 frame at 4:3, as on the CRTs it
+ * was drawn for: 240 rows (every fifth row twice), scaled the most whole
+ * times that fit (3 x 3, 960 x 720, in 1280 x 800, 1280 x 720 and
+ * 1024 x 768; 2 x 2 in 800 x 600), in the middle with black around.  The
+ * rows go to the GPU as PUTs whose pixels are looked up in the palette's
+ * RGB565 table on the way into the link's batch (fpc_gpu_put8()), two a
+ * group of five rows, straight from the game's frame: two canvases, drawn
+ * in turn and FLIPped to.  The desktop's window path (8-bit frames scaled by
  * the desktop and the NX server) took as much CPU as Doom itself.  The
  * display and the keyboard go back to the desktop when the game ends
  * (Quit Game, an error, the window closed).
@@ -29,15 +33,19 @@
 #include "d_loop.h"
 #include "m_argv.h"
 
-#define FS_W        320
+#define FS_W        320                  /* The game's frame */
 #define FS_H        200
-#define FS_MODE     FPC_GPU_MODE_1280x800
-#define FS_SCALE    4
+#define FS_H43      240                  /* Its rows at 4:3 */
 
 static struct
 {
   bool     on;
   int      back;                         /* The canvas drawn next */
+  int      scale;                        /* The display's, both ways */
+  int      cw;                           /* A canvas: the display / scale */
+  int      ch;
+  int      ox;                           /* The frame in it */
+  int      oy;
   int      x[2];                         /* The canvases in the space */
   int      y[2];
   uint16_t lut[256];                     /* The palette, RGB565 */
@@ -56,9 +64,31 @@ static struct
 
 bool fpcscreen_open(void)
 {
+  int w;
+  int h;
+  int s;
   int k;
 
   if (fpc_gpu_version() < 8)
+    {
+      return false;
+    }
+
+  /* The desktop's mode, the frame at 4:3 as large as it fits whole */
+
+  if (fpc_gpu_modesize(fpc_gpu_mode(), &w, &h) < 0)
+    {
+      return false;
+    }
+
+  s = w / FS_W < h / FS_H43 ? w / FS_W : h / FS_H43;
+  s = s < 1 ? 1 : s > 4 ? 4 : s;
+  g_fs.scale = s;
+  g_fs.cw    = (w + s - 1) / s;
+  g_fs.ch    = (h + s - 1) / s;
+  g_fs.ox    = ((g_fs.cw - FS_W) / 2) & ~1;  /* (PUT8: x even) */
+  g_fs.oy    = (g_fs.ch - FS_H43) / 2;
+  if (g_fs.ox < 0 || g_fs.oy < 0)
     {
       return false;
     }
@@ -70,19 +100,18 @@ bool fpcscreen_open(void)
 
   for (k = 0; k < 2; k++)
     {
-      if (fpc_gpu_game_alloc(FS_W, FS_H, &g_fs.x[k], &g_fs.y[k]) < 0)
+      if (fpc_gpu_game_alloc(g_fs.cw, g_fs.ch, &g_fs.x[k], &g_fs.y[k]) < 0)
         {
           fpc_gpu_game_free_all();
           fpc_gpu_game_display(false);
           return false;
         }
 
-      fpc_gpu_fill(g_fs.x[k], g_fs.y[k], FS_W, FS_H, 0);
+      fpc_gpu_fill(g_fs.x[k], g_fs.y[k], g_fs.cw, g_fs.ch, 0);
     }
 
   fpc_gpu_game_keys(true);
-  fpc_gpu_game_mode(FS_MODE);
-  fpc_gpu_set_scale(FS_SCALE, FS_SCALE);
+  fpc_gpu_set_scale(s, s);
   fpc_gpu_game_flip(g_fs.x[0], g_fs.y[0]);
   fpc_gpu_flush();
   g_fs.back = 1;
@@ -91,9 +120,9 @@ bool fpcscreen_open(void)
   g_fs.hashed = 0;
   g_fs.nhashed = 0;
   g_fs.on = true;
-  syslog(LOG_INFO, "nxdoom: full screen, 320 x 200 at 4 x 4, canvases at "
-         "(%d, %d) and (%d, %d)\n", g_fs.x[0], g_fs.y[0], g_fs.x[1],
-         g_fs.y[1]);
+  syslog(LOG_INFO, "nxdoom: full screen, 320 x 200 at 4:3 (320 x 240) at "
+         "%d x %d in %d x %d, canvases at (%d, %d) and (%d, %d)\n", s, s, w,
+         h, g_fs.x[0], g_fs.y[0], g_fs.x[1], g_fs.y[1]);
   return true;
 }
 
@@ -104,6 +133,7 @@ bool fpcscreen_open(void)
 void fpcscreen_frame(const uint8_t *pixels, const uint8_t *rgbpal)
 {
   int k = g_fs.back;
+  int g;
   uint32_t t0;
 
   if (!g_fs.on)
@@ -153,7 +183,20 @@ void fpcscreen_frame(const uint8_t *pixels, const uint8_t *rgbpal)
     }
 
   t0 = fpc_gpu_game_us();
-  fpc_gpu_put8(g_fs.x[k], g_fs.y[k], FS_W, FS_H, pixels, FS_W, g_fs.lut);
+  /* 200 rows as 240: each group of five rows as six, its middle one
+   * twice (rows 0-2 and 2-4 of the group, one PUT each)
+   */
+
+  for (g = 0; g < FS_H / 5; g++)
+    {
+      const uint8_t *src = pixels + g * 5 * FS_W;
+      int y = g_fs.y[k] + g_fs.oy + g * 6;
+
+      fpc_gpu_put8(g_fs.x[k] + g_fs.ox, y, FS_W, 3, src, FS_W, g_fs.lut);
+      fpc_gpu_put8(g_fs.x[k] + g_fs.ox, y + 3, FS_W, 3, src + 2 * FS_W,
+                   FS_W, g_fs.lut);
+    }
+
   fpc_gpu_game_flip(g_fs.x[k], g_fs.y[k]);
   fpc_gpu_flush();
   t0 = fpc_gpu_game_us() - t0;
