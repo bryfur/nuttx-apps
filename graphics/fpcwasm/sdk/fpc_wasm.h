@@ -45,7 +45,8 @@
  *   clang --target=wasm32-wasip1 -O2 -o app.wasm app.c \
  *         -Wl,-z,stack-size=32768 -Wl,--strip-all
  *   wamrc --target=thumbv8m.main --target-abi=gnueabihf --cpu=cortex-m33 \
- *         --disable-simd --enable-multi-thread -o app.aot app.wasm
+ *         --disable-simd --bounds-checks=1 --stack-bounds-checks=1 \
+ *         --enable-multi-thread -o app.aot app.wasm
  ****************************************************************************/
 
 #ifndef FPC_WASM_H

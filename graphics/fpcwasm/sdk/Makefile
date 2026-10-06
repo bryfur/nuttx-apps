@@ -24,16 +24,34 @@ CFLAGS   = --target=wasm32-wasip1 --sysroot=$(WASI_SDK)/share/wasi-sysroot \
 LDFLAGS  = -Wl,-z,stack-size=32768 -Wl,--strip-all
 
 # The board: what the firmware is built for (Toolchain.defs: cortex-m33,
-# -mfpu=fpv5-sp-d16 -mfloat-abi=hard).  --enable-multi-thread: the code
-# checks at every loop and call whether it is to stop (the watchdog,
-# Ctrl-C); no SIMD (the CPU has none)
+# -mfpu=fpv5-sp-d16 -mfloat-abi=hard).  --bounds-checks=1 and
+# --stack-bounds-checks=1: the sandbox (the runtime has no guard pages:
+# every access is checked by the code itself; wamrc leaves them out for
+# 64-bit targets unless asked); --enable-multi-thread: the code checks at
+# every loop and call whether it is to stop (the watchdog, Ctrl-C); no
+# SIMD (the CPU has none)
 
+WAMRC_SAFE  = --bounds-checks=1 --stack-bounds-checks=1 --enable-multi-thread
 WAMRC_FLAGS = --target=thumbv8m.main --target-abi=gnueabihf \
-              --cpu=cortex-m33 --disable-simd --enable-multi-thread
+              --cpu=cortex-m33 --disable-simd $(WAMRC_SAFE)
 
 APPS = hello rocks fgdemo crash apitest
 
-all: $(addprefix apps/,$(APPS))
+# The simulators' x86-64 (tests/desk/wasm.test runs these as AOT there:
+# the loader, AOT code calling the host, its traps); --size-level=0: the
+# simulator's heap is not within 2 GB of its code
+
+SIM_AOT_APPS = rocks crash
+SIM_WAMRC_FLAGS = --target=x86_64 --size-level=0 --disable-simd \
+                  $(WAMRC_SAFE)
+
+all: $(addprefix apps/,$(APPS)) $(SIM_AOT_APPS:%=apps/%/app-sim.aot)
+
+apps/%/app-sim.aot: apps/%
+	@if [ -n "$(WAMRC)" ]; then \
+	  echo "$(WAMRC) $(SIM_WAMRC_FLAGS) -o $@ apps/$*/app.wasm"; \
+	  $(WAMRC) $(SIM_WAMRC_FLAGS) -o $@ apps/$*/app.wasm >/dev/null; \
+	fi
 
 apps/%: examples/%/*.c examples/%/manifest fpc_wasm.h
 	@mkdir -p $@
