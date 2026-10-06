@@ -14,10 +14,16 @@
 #
 # Inputs: CoreMark (EEMBC's sources: apps/benchmarks/coremark/coremark when
 # the NuttX app has downloaded them, else its archive; xcc's port,
-# apps/devtools/xcc/bench/coremark), clang -O2 from wasi-sdk:
-#   coremark.wasm / .aot     2000 iterations (AOT, JIT: ~6 s)
+# apps/devtools/xcc/bench/coremark, as apps/devtools/xcc/tests/bench.sh
+# builds it), clang -O2 from wasi-sdk:
+#   coremark.wasm / .aot     2000 iterations (AOT, JIT: ~4 s)
 #   coremark-i.wasm          200 iterations (the interpreter: ~10 s)
 #   kernels.wasm / .aot      small kernels, each timed (kernels.c)
+# and by xcc's wcc when a pc build has it (BUILD, default ~/git/fpc: its
+# apps/devtools/xcc/host/wcc and sysroot, as xcc's bench.sh uses them):
+#   coremark-wcc.wasm        1000 iterations (the JIT: ~4 s)
+#   coremark-wcc-i.wasm      100 iterations (the interpreter)
+#   kernels-wcc.wasm
 # Rocks is the SDK's app (sdk/apps/rocks: app.wasm, app.aot by `make
 # apps/rocks`), installed on the board as /mnt/sd0/apps/rocks.
 
@@ -26,6 +32,9 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 SDK=$(dirname "$HERE")
 APPS=$(cd "$SDK/../../.." && pwd)
 OUT=${1:-$HOME/fpcwork/wasmbench}
+BUILD=${BUILD:-$HOME/git/fpc}
+WCC=${WCC:-$BUILD/apps/devtools/xcc/host/wcc}
+WCCSYS=$BUILD/apps/devtools/xcc/sysroot
 WASI_SDK=${WASI_SDK:-$HOME/tools/wasm/wasi-sdk-34.0-x86_64-linux}
 WAMRC=${WAMRC:-$HOME/tools/wasm/wamrc}
 CC="$WASI_SDK/bin/clang --target=wasm32-wasip1 --sysroot=$WASI_SDK/share/wasi-sysroot -O2"
@@ -55,6 +64,15 @@ for it in 2000 200; do
       -DFLAGS_STR="\"clang -O2\"" $CMSRC -Wl,--strip-all -o "$OUT/$name.wasm"
 done
 $CC -Wl,--strip-all -o "$OUT/kernels.wasm" "$HERE/kernels.c"
+if [ -x "$WCC" ] && [ -d "$WCCSYS/include" ]; then
+  WF="-nostdinc -isystem $WCCSYS/include -L$WCCSYS/lib"
+  for it in 1000 100; do
+    name=coremark-wcc; [ $it = 100 ] && name=coremark-wcc-i
+    $WCC $WF -I"$PORT" -I"$CM" -DITERATIONS=$it -DPERFORMANCE_RUN=1 \
+         -DFLAGS_STR="\"wcc\"" $CMSRC -o "$OUT/$name.wasm"
+  done
+  $WCC $WF -o "$OUT/kernels-wcc.wasm" "$HERE/kernels.c"
+fi
 if [ -x "$WAMRC" ]; then
   $WAMRC $WAMRC_FLAGS -o "$OUT/coremark.aot" "$OUT/coremark.wasm" > /dev/null
   $WAMRC $WAMRC_FLAGS -o "$OUT/kernels.aot" "$OUT/kernels.wasm" > /dev/null
@@ -70,6 +88,8 @@ console free):
 
   tools/fpcput.py $OUT/coremark.wasm $OUT/coremark.aot $OUT/coremark-i.wasm \\
                   $OUT/kernels.wasm $OUT/kernels.aot -d /mnt/sd0/home
+  tools/fpcput.py $OUT/coremark-wcc.wasm $OUT/coremark-wcc-i.wasm \\
+                  $OUT/kernels-wcc.wasm -d /mnt/sd0/home      (if wcc made them)
   tools/fpcput.py $SDK/apps/rocks/app.wasm $SDK/apps/rocks/app.aot -d /mnt/sd0/apps/rocks
 
 then at NSH (each line one measurement; Rocks prints "us a frame",
@@ -91,6 +111,10 @@ CoreMark "Iterations/Sec", the kernels microseconds each):
   wasm run -a kernels.aot
   wasm run -j -v kernels.wasm
   wasm run -i kernels.wasm
+  wasm run -j coremark-wcc.wasm        (wcc's code: 1000 iterations)
+  wasm run -i coremark-wcc-i.wasm      (100)
+  wasm run -j kernels-wcc.wasm
+  wasm run -i kernels-wcc.wasm
   coremark                  (NuttX's native CoreMark: gcc -Os, 2 threads:
                              it/s on both cores together)
 EOF
