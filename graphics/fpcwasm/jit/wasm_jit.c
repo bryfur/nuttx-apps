@@ -116,6 +116,8 @@ typedef struct ctrl_s
   uint32_t height;                /* Its stack's bottom (the parameters') */
   int label;                      /* Branches go here (end, loop start) */
   int else_label;
+  int8_t rreg;                    /* Its one i32 result's register, -1: its
+                                   * results go through their slots */
 } ctrl_t;
 
 /* Labels and the branches waiting for them */
@@ -205,6 +207,9 @@ typedef struct jc_s
   int8_t *lreg2;                  /* An i64 local's high word's register */
   uint32_t *loff;
   uint32_t *lweight;
+  uint8_t *lfirst;                /* 0 untouched, 1 read (or set inside a
+                                   * block) first, 2 set first at the top
+                                   * level: no starting value needed */
   uint32_t out_words;             /* Outgoing stack argument words */
   uint32_t nslots;                /* Value stack slots used */
   uint32_t local_base;
@@ -2181,12 +2186,92 @@ static uint32_t br_arity(ctrl_t *ct)
   return ct->kind == CK_LOOP ? ct->np : ct->nr;
 }
 
+/* A block's one i32 result in a register (rreg): chosen at its start,
+ * a free temporary; every branch to its end (and the fall through) puts
+ * the result there, what else is in it spilled first
+ */
+
+static void res_free(jc_t *c, ctrl_t *ct)
+{
+  uint32_t i;
+
+  for (i = 0; i + 1 < c->vsp; i++)
+    {
+      val_t *v = &c->vs[i];
+
+      if (v->kind == V_REG && v->type != T_F32 &&
+          (v->r == ct->rreg || (IS64(v->type) && v->r2 == ct->rreg)))
+        {
+          spill_at(c, i);
+        }
+    }
+}
+
+static void res_move(jc_t *c, ctrl_t *ct)
+{
+  val_t *v = &c->vs[c->vsp - 1];
+
+  if (v->kind == V_REG && v->r == ct->rreg)
+    {
+      return;
+    }
+
+  res_free(c, ct);
+  word_to(c, ct->rreg, v, 0);
+  c->kvalid &= ~(1u << ct->rreg);
+}
+
+static void res_choose(jc_t *c, ctrl_t *ct)
+{
+  static const int8_t order[] =
+  {
+    3, 2, 1, 0, 14, 8, 7, 6, 5, 4
+  };
+
+  uint32_t i;
+
+  ct->rreg = -1;
+  if ((ct->kind != CK_BLOCK && ct->kind != CK_IF) || ct->nr != 1 ||
+      ct->np != 0 || jtype(ct->rt[0]) != T_I32)
+    {
+      return;
+    }
+
+  for (i = 0; i < sizeof(order); i++)
+    {
+      int r = order[i];
+
+      if (c->ctemp & c->cfree & (1u << r))
+        {
+          ct->rreg = (int8_t)r;
+          if (r >= 4 && r <= 8)
+            {
+              c->cused |= 1u << r;          /* (the prologue saves it) */
+            }
+
+          if (r == R_LR)
+            {
+              c->lr_used = true;
+            }
+
+          return;
+        }
+    }
+}
+
 /* Whether a branch to ct must move values */
 
 static bool br_needs_moves(jc_t *c, ctrl_t *ct)
 {
   uint32_t n = br_arity(ct);
   uint32_t i;
+
+  if (ct->rreg >= 0 && ct->kind != CK_LOOP)
+    {
+      val_t *v = &c->vs[c->vsp - 1];
+
+      return v->kind != V_REG || v->r != ct->rreg;
+    }
 
   for (i = 0; i < n; i++)
     {
@@ -2207,6 +2292,12 @@ static void br_moves(jc_t *c, ctrl_t *ct)
 {
   uint32_t n = br_arity(ct);
   uint32_t i;
+
+  if (ct->rreg >= 0 && ct->kind != CK_LOOP)
+    {
+      res_move(c, ct);
+      return;
+    }
 
   for (i = 0; i < n; i++)
     {
@@ -2286,6 +2377,11 @@ static void br_cond(jc_t *c, uint32_t depth, int cond)
       return;
     }
 
+  if (ct->kind != CK_FUNC && ct->rreg >= 0)
+    {
+      res_free(c, ct);            /* (both ways on: stores keep the flags) */
+    }
+
   skip = new_label(c);
   bcc_to(c, CC_INV(cond), skip);
   if (ct->kind == CK_FUNC)
@@ -2328,6 +2424,7 @@ static void push_ctrl(jc_t *c, int kind, const uint8_t **pp)
   ct->kind = (uint8_t)kind;
   ct->label = -1;
   ct->else_label = -1;
+  ct->rreg = -1;
   ct->rt = &ct->rt1;
 
   if (*p == 0x40)
@@ -2368,6 +2465,12 @@ static void reset_stack(jc_t *c, ctrl_t *ct, bool results)
       val_t v = pop(c);
 
       free_val(c, &v);
+    }
+
+  if (results && ct->rreg >= 0 && ct->kind != CK_LOOP)
+    {
+      push_reg(c, T_I32, take_core(c, ct->rreg), -1);
+      return;
     }
 
   for (i = 0; i < n; i++)
@@ -4303,6 +4406,7 @@ static void op_if(jc_t *c, const uint8_t **pp, int cond, val_t *condv)
       cond = CC_NE;
     }
 
+  res_choose(c, ct);
   bcc_to(c, CC_INV(cond), ct->else_label);
 }
 
@@ -4551,6 +4655,15 @@ static bool prescan(jc_t *c)
           if (l < c->nlocals)
             {
               c->lweight[l] += w;
+              if (c->lfirst[l] == 0)
+                {
+                  /* Set at the function's top level before anything
+                   * reads it: that set comes first on every path
+                   */
+
+                  c->lfirst[l] = op != WASM_OP_GET_LOCAL && depth == 0 ?
+                                 2 : 1;
+                }
             }
         }
       else if (ld > 0 && (op == WASM_OP_I32_CONST || op == WASM_OP_F32_CONST))
@@ -5016,9 +5129,9 @@ static uint32_t emit_prologue(jc_t *c, uint32_t push)
     {
       uint8_t wt = c->func->local_types[i - c->nparams];
 
-      if (c->lkind[i] == L_NONE)
+      if (c->lkind[i] == L_NONE || c->lfirst[i] == 2)
         {
-          continue;
+          continue;                 /* (set before it is read) */
         }
 
       if (wt == VALUE_TYPE_FUNCREF || wt == VALUE_TYPE_EXTERNREF)
@@ -5689,6 +5802,7 @@ static void compile_body(jc_t *c)
             push_ctrl(c, CK_BLOCK, &p);
             spill_from(c, c->cs[c->csp - 1].height);
             c->cs[c->csp - 1].label = new_label(c);
+            res_choose(c, &c->cs[c->csp - 1]);
             break;
 
           case WASM_OP_LOOP:
@@ -6263,6 +6377,8 @@ static bool compile_function1(jc_t *c, uint32_t fidx)
   jit_free(c->lreg2);
   jit_free(c->loff);
   jit_free(c->lweight);
+  jit_free(c->lfirst);
+  c->lfirst  = jit_zalloc(n);
   c->lreg2   = jit_zalloc(n);
   c->ltype   = jit_zalloc(n);
   c->lkind   = jit_zalloc(n);
@@ -6271,7 +6387,7 @@ static bool compile_function1(jc_t *c, uint32_t fidx)
   c->lweight = jit_zalloc(n * sizeof(uint32_t));
   if (c->ltype == NULL || c->lkind == NULL || c->lreg == NULL ||
       c->lreg2 == NULL ||
-      c->loff == NULL || c->lweight == NULL)
+      c->loff == NULL || c->lweight == NULL || c->lfirst == NULL)
     {
       fail(c, "out of memory", 0);
       return false;
@@ -6764,6 +6880,7 @@ static void jc_free(jc_t *c)
   jit_free(c->lreg2);
   jit_free(c->loff);
   jit_free(c->lweight);
+  jit_free(c->lfirst);
   jit_free(c->vs);
   jit_free(c->cs);
   jit_free(c->labels);

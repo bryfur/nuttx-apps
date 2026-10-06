@@ -81,7 +81,7 @@ CoreMark "Iterations/Sec", the kernels microseconds each):
   wasm run -a rocks -b 400
   wasm run -j rocks -b 100
   wasm run -j rocks -b 400
-  wasm run -j --sram rocks -b 400
+  wasm run -j --psram rocks -b 400
   wasm run -i rocks -b 100
   wasm run -i rocks -b 400
   cd /mnt/sd0/home

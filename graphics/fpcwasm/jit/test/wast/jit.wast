@@ -238,3 +238,25 @@
 (assert_return (invoke "big-off" (i32.const 4)) (i32.const 23))
 (assert_return (invoke "big-off64" (i32.const 0)) (i64.const 0x0000000500000003))
 (assert_trap (invoke "big-off" (i32.const 63236)) "out of bounds memory access")
+
+;; Locals set at the function's top level before anything reads them get
+;; no starting value; the others still start at 0 (or null), however
+;; they are reached (a set inside a block may be skipped)
+
+(module
+  (func $g (param i32) (result i32) (local.get 0))
+  (func (export "lfirst") (param i32) (result i32)
+    (local i32 i32 i32 funcref)
+    (local.set 1 (i32.const 5))
+    (block
+      (br_if 0 (local.get 0))
+      (local.set 2 (i32.const 7)))
+    (loop
+      (local.set 3 (i32.add (local.get 3) (i32.const 1)))
+      (br_if 0 (i32.lt_u (local.get 3) (i32.const 3))))
+    (i32.add
+      (i32.add (local.get 1) (local.get 2))
+      (i32.add (call $g (local.get 3)) (ref.is_null (local.get 4)))))
+)
+(assert_return (invoke "lfirst" (i32.const 0)) (i32.const 16))
+(assert_return (invoke "lfirst" (i32.const 1)) (i32.const 9))
