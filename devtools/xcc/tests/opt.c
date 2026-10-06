@@ -437,6 +437,35 @@ static void t_fuse(void)
   out("ubfx", bits);
 }
 
+/* Shifted operands (narrow results too), -(x & 1), (float)(int)f, constants
+ * of a loop in registers */
+
+static void t_shift(void)
+{
+  uint32_t s = 0;
+  uint8_t b8 = 0;
+  int16_t h = 0;
+  float f = 0.3f, acc = 0;
+  for (int i = 0; i < 300; i++)
+    {
+      uint32_t x = (uint32_t)i * 2654435761u;
+      s += x >> 7;
+      s ^= (x << 3) | (s >> 29);
+      s -= (uint32_t)((int32_t)x >> 5);
+      b8 = (uint8_t)(b8 | (i << 4));
+      h = (int16_t)(h + (i << 9));
+      s += (uint32_t)(-(int32_t)(x & 1)) & 0x1234567u;
+      s ^= 0xedb88320u & -(s & 1);
+      acc += f * 1.5f - (float)(int)(f * 7.25f);
+      f = f * 1.0001f + 0.37f;
+      if (f > 100.0f)
+        f -= 99.5f;
+    }
+  out("shift", s);
+  out("narrow", b8 * 65536u + (uint16_t)h);
+  out("float", (uint32_t)(int32_t)(acc * 100.0f));
+}
+
 int main(int argc, char *argv[])
 {
   (void)argv;
@@ -451,6 +480,7 @@ int main(int argc, char *argv[])
   t_thread();
   t_loads();
   t_fuse();
+  t_shift();
   printf("total %u\n", (unsigned)g_sum);
   return 0;
 }
