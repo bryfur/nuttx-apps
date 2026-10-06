@@ -3732,42 +3732,153 @@ static void op_i64_bin(jc_t *c, uint8_t op)
       }
     }
 
-  vreg64(c, &a, &alo, &ahi);
-  vreg64(c, &b, &blo, &bhi);
-  switch (op)
-    {
-      case WASM_OP_I64_ADD:
-        t_dp_reg(&c->fb, DP_ADD, 1, alo, alo, blo, SH_LSL, 0);
-        t_dp_reg(&c->fb, DP_ADC, 0, ahi, ahi, bhi, SH_LSL, 0);
-        break;
+  /* a: a local's registers read as they are (the result into a new
+   * pair), or its own pair (the result there); b: read only, a local's
+   * registers, a constant's halves (immediates where the instruction has
+   * them, else registers that keep them known), or a pair of its own
+   */
 
-      case WASM_OP_I64_SUB:
-        t_dp_reg(&c->fb, DP_SUB, 1, alo, alo, blo, SH_LSL, 0);
-        t_dp_reg(&c->fb, DP_SBC, 0, ahi, ahi, bhi, SH_LSL, 0);
-        break;
+  {
+    bool ro = a.kind == V_LOCAL && c->lkind[a.local] == L_CORE;
+    int dp = op == WASM_OP_I64_ADD ? DP_ADD : op == WASM_OP_I64_SUB ? DP_SUB :
+             op == WASM_OP_I64_AND ? DP_AND : op == WASM_OP_I64_OR ? DP_ORR :
+             op == WASM_OP_I64_XOR ? DP_EOR : -1;
+    int dp2 = op == WASM_OP_I64_ADD ? DP_ADC : op == WASM_OP_I64_SUB ? DP_SBC :
+              dp;
+    int elo = -1;
+    int ehi = -1;
+    int dlo;
+    int dhi;
+    uint32_t avoid;
 
-      case WASM_OP_I64_MUL:
-        t_mul(&c->fb, R_IP, alo, bhi);
-        t_mla(&c->fb, R_IP, ahi, blo, R_IP);
-        t_umull(&c->fb, alo, ahi, alo, blo);
-        t_dp_reg(&c->fb, DP_ADD, 0, ahi, ahi, R_IP, SH_LSL, 0);
-        break;
+    if (ro)
+      {
+        alo = c->lreg[a.local];
+        ahi = c->lreg2[a.local];
+      }
+    else
+      {
+        vreg64(c, &a, &alo, &ahi);
+      }
 
-      case WASM_OP_I64_AND:
-      case WASM_OP_I64_OR:
-      case WASM_OP_I64_XOR:
-        {
-          int dp = op == WASM_OP_I64_AND ? DP_AND :
-                   op == WASM_OP_I64_OR ? DP_ORR : DP_EOR;
+    if (b.kind == V_LOCAL && c->lkind[b.local] == L_CORE)
+      {
+        blo = c->lreg[b.local];
+        bhi = c->lreg2[b.local];
+      }
+    else if (b.kind != V_CONST)
+      {
+        vreg64(c, &b, &blo, &bhi);
+      }
 
-          t_dp_reg(&c->fb, dp, 0, alo, alo, blo, SH_LSL, 0);
-          t_dp_reg(&c->fb, dp, 0, ahi, ahi, bhi, SH_LSL, 0);
-        }
-        break;
-    }
+    if (ro)
+      {
+        dlo = alloc_core(c);
+        dhi = alloc_core(c);
+      }
+    else
+      {
+        dlo = alo;
+        dhi = ahi;
+      }
 
-  free_val(c, &b);
-  push_reg(c, T_I64, alo, ahi);
+    if (b.kind == V_CONST)
+      {
+        uint32_t klo = (uint32_t)b.c;
+        uint32_t khi = (uint32_t)(b.c >> 32);
+
+        avoid = 1u << alo | 1u << ahi | 1u << dlo | 1u << dhi;
+        if (dp >= 0)
+          {
+            elo = t_modimm(klo);
+            ehi = t_modimm(khi);
+          }
+
+        if ((dp == DP_ADD || dp == DP_SUB) && (elo < 0 || ehi < 0))
+          {
+            elo = -1;               /* (the carry: both, or neither) */
+            ehi = -1;
+          }
+
+        blo = elo >= 0 ? -1 : const_reg(c, klo, avoid);
+        if (blo >= 0)
+          {
+            avoid |= 1u << blo;
+          }
+
+        bhi = ehi >= 0 ? -1 : const_reg(c, khi, avoid);
+        if (op == WASM_OP_I64_MUL && (blo == R_IP || bhi == R_IP))
+          {
+            /* (ip is the multiplication's own: the constant elsewhere) */
+
+            int t = alloc_core(c);
+
+            t_mov(&c->fb, t, R_IP);
+            if (blo == R_IP)
+              {
+                blo = t;
+              }
+            else
+              {
+                bhi = t;
+              }
+
+            b.kind = V_REG;             /* (freed below) */
+            b.type = T_I32;
+            b.r = (int8_t)t;
+          }
+        else if (blo == R_IP && bhi == R_IP)
+          {
+            fail(c, "out of registers", 0);
+            c->regs_out = true;
+          }
+      }
+
+    switch (op)
+      {
+        case WASM_OP_I64_ADD:
+        case WASM_OP_I64_SUB:
+        case WASM_OP_I64_AND:
+        case WASM_OP_I64_OR:
+        case WASM_OP_I64_XOR:
+          {
+            int s = dp == DP_ADD || dp == DP_SUB;
+
+            if (elo >= 0)
+              {
+                t_dp_imm(&c->fb, dp, s, dlo, alo, elo);
+              }
+            else
+              {
+                t_dp_reg(&c->fb, dp, s, dlo, alo, blo, SH_LSL, 0);
+              }
+
+            if (ehi >= 0)
+              {
+                t_dp_imm(&c->fb, dp2, 0, dhi, ahi, ehi);
+              }
+            else
+              {
+                t_dp_reg(&c->fb, dp2, 0, dhi, ahi, bhi, SH_LSL, 0);
+              }
+          }
+          break;
+
+        case WASM_OP_I64_MUL:
+          t_mul(&c->fb, R_IP, alo, bhi);
+          t_mla(&c->fb, R_IP, ahi, blo, R_IP);
+          t_umull(&c->fb, dlo, dhi, alo, blo);
+          t_dp_reg(&c->fb, DP_ADD, 0, dhi, dhi, R_IP, SH_LSL, 0);
+          break;
+      }
+
+    if (b.kind == V_REG)
+      {
+        free_val(c, &b);
+      }
+
+    push_reg(c, T_I64, dlo, dhi);
+  }
 }
 
 static void op_i64_div(jc_t *c, uint8_t op)
@@ -5593,6 +5704,17 @@ static void op_local_set(jc_t *c, uint32_t l, bool tee)
           t->c  = v.c;
           return;
         }
+    }
+
+  if (tee && k == L_CORE && IS64(c->ltype[l]) && v.kind == V_REG)
+    {
+      /* The pair it came in stays the tee's value: what uses it next
+       * (in place: i64 operations write their first operand) copies
+       * nothing
+       */
+
+      push_reg(c, v.type, v.r, v.r2);
+      return;
     }
 
   free_val(c, &v);
