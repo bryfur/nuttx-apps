@@ -34,6 +34,7 @@
 #define SMALL  256             /* Larger: the heap's, freed when freed */
 #define ALIGN  8
 #define MAGIC  0x58434342      /* "XCCB" */
+#define XCC_FILE_BUFFER 4096
 
 struct chunk_s
 {
@@ -355,9 +356,8 @@ char *xcc_strndup(const char *s, size_t n)
 ssize_t xcc_getline(char **lineptr, size_t *n, FILE *fp)
 {
   size_t len = 0;
-  int ch;
 
-  if (*lineptr == NULL || *n == 0)
+  if (*lineptr == NULL || *n < 2)
     {
       *n = 128;
       *lineptr = xcc_realloc(*lineptr, *n);
@@ -367,9 +367,22 @@ ssize_t xcc_getline(char **lineptr, size_t *n, FILE *fp)
         }
     }
 
-  while ((ch = getc(fp)) != EOF)
+  /* fgets: a lock and a copy a line (getc took them a character) */
+
+  for (; ; )
     {
-      if (len + 2 > *n)
+      if (fgets(*lineptr + len, *n - len, fp) == NULL)
+        {
+          break;
+        }
+
+      len += strlen(*lineptr + len);
+      if (len > 0 && (*lineptr)[len - 1] == '\n')
+        {
+          break;
+        }
+
+      if (len + 1 >= *n)
         {
           char *l = xcc_realloc(*lineptr, *n * 2);
 
@@ -380,12 +393,6 @@ ssize_t xcc_getline(char **lineptr, size_t *n, FILE *fp)
 
           *lineptr = l;
           *n *= 2;
-        }
-
-      (*lineptr)[len++] = ch;
-      if (ch == '\n')
-        {
-          break;
         }
     }
 
@@ -626,6 +633,11 @@ static FILE *memfile_open(struct memfile_s *mf, const char *mode)
   ms->mf = mf;
   ms->pos = mode[0] == 'a' ? mf->len : 0;
   fp = fopencookie(ms, mode, io);
+  if (fp != NULL)
+    {
+      setvbuf(fp, NULL, _IOFBF, XCC_FILE_BUFFER);  /* Not line by line */
+    }
+
   if (fp == NULL)
     {
       free(ms);
@@ -671,13 +683,24 @@ FILE *xcc_memfile(const char *name)
 FILE *xcc_fopen(const char *path, const char *mode)
 {
   struct memfile_s *mf = memfile_find(path);
+  FILE *fp;
 
   if (mf != NULL)
     {
       return memfile_open(mf, mode);
     }
 
-  return fopen(path, mode);
+  fp = fopen(path, mode);
+  if (fp != NULL)
+    {
+      /* A larger buffer than the C library's (CONFIG_STDIO_BUFFER_SIZE):
+       * fewer reads of the SD card, fewer calls through its layers
+       */
+
+      setvbuf(fp, NULL, _IOFBF, XCC_FILE_BUFFER);
+    }
+
+  return fp;
 }
 
 FILE *xcc_tmpfile(void)
