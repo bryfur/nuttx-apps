@@ -41,3 +41,11 @@ VPATH    += :sdk:sdk/examples/rocks
 endif
 
 include $(APPDIR)/Application.mk
+
+# The module links the runtime from libapps: built there, the JIT and
+# WAMR's patches change it without a source of its own changing
+#
+ifeq ($(CONFIG_GRAPHICS_FPCWASM),m)
+$(PROGLIST): $(wildcard jit/*.c jit/*.h) \
+             $(wildcard $(APPDIR)/interpreters/wamr/*.patch)
+endif

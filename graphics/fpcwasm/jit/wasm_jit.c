@@ -194,6 +194,7 @@ typedef struct jc_s
   uint8_t *ltype;                 /* T_* of each local */
   uint8_t *lkind;                 /* L_* */
   int8_t *lreg;
+  int8_t *lreg2;                  /* An i64 local's high word's register */
   uint32_t *loff;
   uint32_t *lweight;
   uint32_t out_words;             /* Outgoing stack argument words */
@@ -224,7 +225,25 @@ typedef struct jc_s
   uint32_t ncold;
   uint32_t coldcap;
   int hint;                       /* local.set/tee follows: its local, or -1 */
+  int shint;                      /* ... of an f32 local in an S register */
   bool hint_used;
+
+  /* Constants used in loops, kept in registers (loaded by the prologue) */
+
+  struct
+  {
+    uint32_t v;
+    uint32_t w;
+    uint8_t f32;
+  } kc[48];
+  uint32_t nkc;
+  struct
+  {
+    uint32_t v;
+    int8_t r;
+    uint8_t f32;
+  } pin[16];
+  uint32_t npin;
 
   /* Registers */
 
@@ -820,6 +839,7 @@ static void reload_mem(jc_t *c, jbuf_t *b)
  ****************************************************************************/
 
 static void spill_at(jc_t *c, uint32_t i);
+static int pinned(jc_t *c, uint32_t v, bool f32);
 
 static int take_core(jc_t *c, int r)
 {
@@ -1055,6 +1075,11 @@ static void store_slot(jc_t *c, val_t *v, uint32_t off)
   if (v->kind == V_LOCAL && c->lkind[v->local] == L_CORE)
     {
       st_sp(c, c->lreg[v->local], off);
+      if (IS64(v->type))
+        {
+          st_sp(c, c->lreg2[v->local], off + 4);
+        }
+
       return;
     }
 
@@ -1162,7 +1187,20 @@ static void local_changing(jc_t *c, uint32_t l)
           continue;
         }
 
-      if (c->lkind[l] == L_CORE && (c->cfree & c->ctemp) != 0)
+      if (c->lkind[l] == L_CORE && IS64(c->ltype[l]) &&
+          __builtin_popcount(c->cfree & c->ctemp) >= 2)
+        {
+          int r = alloc_core(c);
+          int r2 = alloc_core(c);
+
+          t_mov(&c->fb, r, c->lreg[l]);
+          t_mov(&c->fb, r2, c->lreg2[l]);
+          v->kind = V_REG;
+          v->r = (int8_t)r;
+          v->r2 = (int8_t)r2;
+        }
+      else if (c->lkind[l] == L_CORE && !IS64(c->ltype[l]) &&
+               (c->cfree & c->ctemp) != 0)
         {
           int r = alloc_core(c);
 
@@ -1190,6 +1228,18 @@ static void local_changing(jc_t *c, uint32_t l)
  * temporary
  */
 
+static int alloc_sdest(jc_t *c)
+{
+  if (c->shint >= 0 && !c->hint_used)
+    {
+      local_changing(c, (uint32_t)c->shint);
+      c->hint_used = true;
+      return c->lreg[c->shint];
+    }
+
+  return alloc_s(c);
+}
+
 static int alloc_dest(jc_t *c)
 {
   if (c->hint >= 0 && !c->hint_used)
@@ -1209,6 +1259,7 @@ static int alloc_dest(jc_t *c)
 static void set_hint(jc_t *c, const uint8_t *next)
 {
   c->hint = -1;
+  c->shint = -1;
   c->hint_used = false;
   if (next < c->code_end &&
       (*next == WASM_OP_SET_LOCAL || *next == WASM_OP_TEE_LOCAL))
@@ -1219,6 +1270,10 @@ static void set_hint(jc_t *c, const uint8_t *next)
       if (l < c->nlocals && c->lkind[l] == L_CORE)
         {
           c->hint = (int)l;
+        }
+      else if (l < c->nlocals && c->lkind[l] == L_SREG)
+        {
+          c->shint = (int)l;
         }
     }
 }
@@ -1238,13 +1293,16 @@ static const uint8_t *finish_hint(jc_t *c, const uint8_t *p)
           fail(c, "hint", 0);
         }
 
+      (void)v;
+
       if (op == WASM_OP_TEE_LOCAL)
         {
-          vpush(c, V_LOCAL, T_I32)->local = l;
+          vpush(c, V_LOCAL, c->ltype[l])->local = l;
         }
     }
 
   c->hint = -1;
+  c->shint = -1;
   c->hint_used = false;
   return p;
 }
@@ -1277,6 +1335,12 @@ static int vreg(jc_t *c, val_t *v)
         break;
 
       case V_CONST:
+        r = pinned(c, (uint32_t)v->c, false);
+        if (r >= 0)
+          {
+            return r;           /* (read only, like a local's) */
+          }
+
         r = alloc_core(c);
         t_movi(&c->fb, r, (uint32_t)v->c);
         break;
@@ -1297,6 +1361,15 @@ static int vreg(jc_t *c, val_t *v)
 static int vreg_own(jc_t *c, val_t *v)
 {
   int r;
+
+  if (v->kind == V_CONST)
+    {
+      r = alloc_core(c);
+      t_movi(&c->fb, r, (uint32_t)v->c);
+      v->kind = V_REG;
+      v->r = (int8_t)r;
+      return r;
+    }
 
   if (v->kind == V_LOCAL && c->lkind[v->local] == L_CORE)
     {
@@ -1325,6 +1398,11 @@ static void vreg64(jc_t *c, val_t *v, int *lo, int *hi)
         {
           t_movi(&c->fb, a, (uint32_t)v->c);
           t_movi(&c->fb, b, (uint32_t)(v->c >> 32));
+        }
+      else if (v->kind == V_LOCAL && c->lkind[v->local] == L_CORE)
+        {
+          t_mov(&c->fb, a, c->lreg[v->local]);
+          t_mov(&c->fb, b, c->lreg2[v->local]);
         }
       else
         {
@@ -1366,6 +1444,12 @@ static int vsreg(jc_t *c, val_t *v)
         break;
 
       case V_CONST:
+        s = pinned(c, (uint32_t)v->c, true);
+        if (s >= 0)
+          {
+            return s;
+          }
+
         s = alloc_s(c);
         t_movi(&c->fb, R_IP, (uint32_t)v->c);
         t_vmov_sr(&c->fb, s, R_IP);
@@ -1406,7 +1490,8 @@ static void word_to(jc_t *c, int dst, val_t *v, int half)
       case V_LOCAL:
         if (c->lkind[v->local] == L_CORE)
           {
-            t_mov(&c->fb, dst, c->lreg[v->local]);
+            t_mov(&c->fb, dst, half ? c->lreg2[v->local] :
+                  c->lreg[v->local]);
           }
         else if (c->lkind[v->local] == L_SREG)
           {
@@ -1435,7 +1520,7 @@ static int word_reg(jc_t *c, val_t *v, int half)
 
   if (v->kind == V_LOCAL && c->lkind[v->local] == L_CORE)
     {
-      return c->lreg[v->local];
+      return half ? c->lreg2[v->local] : c->lreg[v->local];
     }
 
   return -1;
@@ -2476,6 +2561,12 @@ static void cmp_imm(jc_t *c, int ra, uint32_t k)
       return;
     }
 
+  if (pinned(c, k, false) >= 0)
+    {
+      t_cmp(&c->fb, ra, pinned(c, k, false));
+      return;
+    }
+
   t_movi(&c->fb, R_IP, k);
   t_cmp(&c->fb, ra, R_IP);
 }
@@ -2760,11 +2851,15 @@ static void op_i32_bin(jc_t *c, uint8_t op)
             break;
         }
 
-      /* The constant in ip */
+      /* The constant in a register: its own, or ip */
 
       rd = alloc_dest(c);
-      t_movi(&c->fb, R_IP, k);
-      rb = R_IP;
+      rb = pinned(c, k, false);
+      if (rb < 0)
+        {
+          t_movi(&c->fb, R_IP, k);
+          rb = R_IP;
+        }
     }
   else if (a.kind == V_CONST && op == WASM_OP_I32_SUB &&
            t_modimm((uint32_t)a.c) >= 0)
@@ -2871,29 +2966,101 @@ static void op_i32_div(jc_t *c, uint8_t op)
       return;
     }
 
-  ra = vreg(c, &a);
-  rb = vreg(c, &b);
-  if (b.kind != V_CONST)        /* (vreg made it a register: check it) */
+  /* A constant divisor: no checks it makes needless; powers of two */
+
+  if (b.kind == V_CONST && (uint32_t)b.c != 0)
     {
+      uint32_t k = (uint32_t)b.c;
+      bool pow2 = (k & (k - 1)) == 0;
+      int sh = __builtin_ctz(k);
+
+      if (pow2 && (!sgn || (k > 1 && k < 0x80000000u)))
+        {
+          ra = vreg(c, &a);
+          free_val(c, &a);
+          rd = alloc_dest(c);
+          if (k == 1)
+            {
+              if (rem)
+                {
+                  t_movi(&c->fb, rd, 0);
+                }
+              else
+                {
+                  t_mov(&c->fb, rd, ra);
+                }
+            }
+          else if (!sgn)
+            {
+              if (rem && t_modimm(k - 1) >= 0)
+                {
+                  t_dp_imm(&c->fb, DP_AND, 0, rd, ra, t_modimm(k - 1));
+                }
+              else if (rem)
+                {
+                  /* (k - 1 not an immediate: two shifts) */
+
+                  t_shi(&c->fb, SH_LSL, rd, ra, 32 - sh);
+                  t_shi(&c->fb, SH_LSR, rd, rd, 32 - sh);
+                }
+              else
+                {
+                  t_shi(&c->fb, SH_LSR, rd, ra, sh);
+                }
+            }
+          else
+            {
+              /* ip = a + (a < 0 ? k - 1 : 0) */
+
+              t_shi(&c->fb, SH_ASR, R_IP, ra, 31);
+              t_dp_reg(&c->fb, DP_ADD, 0, R_IP, ra, R_IP, SH_LSR, 32 - sh);
+              if (rem)
+                {
+                  t_shi(&c->fb, SH_LSR, R_IP, R_IP, sh);
+                  t_dp_reg(&c->fb, DP_SUB, 0, rd, ra, R_IP, SH_LSL, sh);
+                }
+              else
+                {
+                  t_shi(&c->fb, SH_ASR, rd, R_IP, sh);
+                }
+            }
+
+          push_reg(c, T_I32, rd, -1);
+          return;
+        }
+
+      ra = vreg(c, &a);
+      rb = vreg(c, &b);
+      rd = alloc_dest(c);
+      if (sgn && !rem && k == 0xffffffffu)
+        {
+          cmp_imm(c, ra, 0x80000000u);
+          trap_if(c, CC_EQ, JT_OVERFLOW);
+        }
+    }
+  else
+    {
+      ra = vreg(c, &a);
+      rb = vreg(c, &b);
+
+      /* b == 0; INT_MIN / -1 */
+
+      t_cmpi_enc(&c->fb, rb, 0);
+      trap_if(c, CC_EQ, JT_DIV0);
+      if (sgn && !rem)
+        {
+          int ok = new_label(c);
+
+          t_cmni_enc(&c->fb, rb, 1);
+          bcc_to(c, CC_NE, ok);
+          cmp_imm(c, ra, 0x80000000u);
+          trap_if(c, CC_EQ, JT_OVERFLOW);
+          lbind(c, ok);
+        }
+
+      rd = alloc_dest(c);
     }
 
-  /* b == 0 */
-
-  t_cmpi_enc(&c->fb, rb, 0);
-  trap_if(c, CC_EQ, JT_DIV0);
-
-  if (sgn && !rem)
-    {
-      int ok = new_label(c);
-
-      t_cmni_enc(&c->fb, rb, 1);
-      bcc_to(c, CC_NE, ok);
-      cmp_imm(c, ra, 0x80000000u);
-      trap_if(c, CC_EQ, JT_OVERFLOW);
-      lbind(c, ok);
-    }
-
-  rd = alloc_dest(c);
   if (rem)
     {
       if (sgn)
@@ -3297,7 +3464,7 @@ static void op_f32_bin(jc_t *c, uint8_t op)
 
   free_val(c, &a);
   free_val(c, &b);
-  sd = alloc_s(c);
+  sd = alloc_sdest(c);
   t_vop3(&c->fb, op == WASM_OP_F32_ADD ? VOP_ADD : op == WASM_OP_F32_SUB ?
          VOP_SUB : op == WASM_OP_F32_MUL ? VOP_MUL : VOP_DIV, sd, sa, sb);
   push_reg(c, T_F32, sd, -1);
@@ -3315,7 +3482,7 @@ static void op_f32_unary(jc_t *c, uint8_t op)
   int sd;
 
   free_val(c, &a);
-  sd = alloc_s(c);
+  sd = alloc_sdest(c);
   t_vop2(&c->fb, vop[op - WASM_OP_F32_ABS], sd, sa);
   push_reg(c, T_F32, sd, -1);
 }
@@ -3536,7 +3703,7 @@ static void op_convert(jc_t *c, uint8_t op)
       case WASM_OP_F32_CONVERT_U_I32:
         ra = vreg(c, &a);
         free_val(c, &a);
-        sd = alloc_s(c);
+        sd = alloc_sdest(c);
         t_vmov_sr(&c->fb, sd, ra);
         t_vop2(&c->fb, op == WASM_OP_F32_CONVERT_S_I32 ? VOP_CVT_F32_S32 :
                VOP_CVT_F32_U32, sd, sd);
@@ -3810,9 +3977,55 @@ static void op_if(jc_t *c, const uint8_t **pp, int cond, val_t *condv)
  * Functions
  ****************************************************************************/
 
-/* Count the uses of each local (weighted by loop depth), find the
- * largest outgoing area; false if the function uses what the compiler
- * does not support
+/* Whether an i32 constant costs nothing much as an operand */
+
+static bool cheap_imm(uint32_t v)
+{
+  return v < 4096 || -v < 4096 || t_modimm(v) >= 0 || t_modimm(~v) >= 0;
+}
+
+static void count_const(jc_t *c, uint32_t v, bool f32, uint32_t w)
+{
+  uint32_t i;
+
+  for (i = 0; i < c->nkc; i++)
+    {
+      if (c->kc[i].v == v && c->kc[i].f32 == f32)
+        {
+          c->kc[i].w += w;
+          return;
+        }
+    }
+
+  if (c->nkc < sizeof(c->kc) / sizeof(c->kc[0]))
+    {
+      c->kc[c->nkc].v = v;
+      c->kc[c->nkc].w = w;
+      c->kc[c->nkc].f32 = f32;
+      c->nkc++;
+    }
+}
+
+/* A constant's register, or -1 */
+
+static int pinned(jc_t *c, uint32_t v, bool f32)
+{
+  uint32_t i;
+
+  for (i = 0; i < c->npin; i++)
+    {
+      if (c->pin[i].v == v && c->pin[i].f32 == f32)
+        {
+          return c->pin[i].r;
+        }
+    }
+
+  return -1;
+}
+
+/* Count the uses of each local (weighted by loop depth) and of the
+ * constants in loops, find the largest outgoing area; false if the
+ * function uses what the compiler does not support
  */
 
 static bool prescan(jc_t *c)
@@ -3854,6 +4067,16 @@ static bool prescan(jc_t *c)
           if (l < c->nlocals)
             {
               c->lweight[l] += w;
+            }
+        }
+      else if (ld > 0 && (op == WASM_OP_I32_CONST || op == WASM_OP_F32_CONST))
+        {
+          uint32_t v = op == WASM_OP_I32_CONST ? (uint32_t)rd_s64(&q, 32) :
+                       rd_le32(&q);
+
+          if (op == WASM_OP_F32_CONST || !cheap_imm(v))
+            {
+              count_const(c, v, op == WASM_OP_F32_CONST, w);
             }
         }
       else if (op == WASM_OP_CALL || op == WASM_OP_CALL_INDIRECT)
@@ -3937,6 +4160,7 @@ static void assign_locals(jc_t *c)
         {
           if (c->lkind[i] == L_FRAME && c->lweight[i] > best &&
               ((c->ltype[i] == T_I32 && ncore < 5) ||
+               (c->ltype[i] == T_I64 && ncore < 4) ||
                (c->ltype[i] == T_F32 && ns < 16)))
             {
               best = c->lweight[i];
@@ -3955,11 +4179,60 @@ static void assign_locals(jc_t *c)
           c->lreg[bi] = (int8_t)(4 + ncore++);
           c->cused |= 1u << c->lreg[bi];
         }
+      else if (c->ltype[bi] == T_I64)
+        {
+          c->lkind[bi] = L_CORE;
+          c->lreg[bi] = (int8_t)(4 + ncore++);
+          c->lreg2[bi] = (int8_t)(4 + ncore++);
+          c->cused |= 1u << c->lreg[bi] | 1u << c->lreg2[bi];
+        }
       else
         {
           c->lkind[bi] = L_SREG;
           c->lreg[bi] = (int8_t)(16 + ns++);
         }
+    }
+
+  /* The heaviest constants of loops into what is left of r4-r8 and
+   * s16-s31 (a constant used twice in a loop, or once in a nested one)
+   */
+
+  c->npin = 0;
+  for (;;)
+    {
+      uint32_t best = 7;
+      int bi = -1;
+
+      for (i = 0; i < c->nkc; i++)
+        {
+          if (c->kc[i].w > best &&
+              (c->kc[i].f32 ? ns < 16 : ncore < 5) &&
+              c->npin < sizeof(c->pin) / sizeof(c->pin[0]))
+            {
+              best = c->kc[i].w;
+              bi = (int)i;
+            }
+        }
+
+      if (bi < 0)
+        {
+          break;
+        }
+
+      c->pin[c->npin].v = c->kc[bi].v;
+      c->pin[c->npin].f32 = c->kc[bi].f32;
+      if (c->kc[bi].f32)
+        {
+          c->pin[c->npin].r = (int8_t)(16 + ns++);
+        }
+      else
+        {
+          c->pin[c->npin].r = (int8_t)(4 + ncore++);
+          c->cused |= 1u << c->pin[c->npin].r;
+        }
+
+      c->kc[bi].w = 0;
+      c->npin++;
     }
 
   c->sused = ns;
@@ -4048,14 +4321,15 @@ static uint32_t emit_prologue(jc_t *c, uint32_t push)
 
           if (c->lkind[i] == L_CORE)
             {
+              int dst = k ? c->lreg2[i] : c->lreg[i];
+
               if (src >= 0)
                 {
-                  t_mov(b, c->lreg[i], src);
+                  t_mov(b, dst, src);
                 }
               else
                 {
-                  t_ldst(b, LS_LDR, c->lreg[i], R_SP,
-                         in_base + 4 * (w - 4));
+                  t_ldst(b, LS_LDR, dst, R_SP, in_base + 4 * (w - 4));
                 }
             }
           else if (c->lkind[i] == L_SREG)
@@ -4112,6 +4386,10 @@ static uint32_t emit_prologue(jc_t *c, uint32_t push)
       if (c->lkind[i] == L_CORE)
         {
           t_movi(b, c->lreg[i], 0);
+          if (IS64(c->ltype[i]))
+            {
+              t_movi(b, c->lreg2[i], 0);
+            }
         }
       else if (c->lkind[i] == L_SREG)
         {
@@ -4124,6 +4402,21 @@ static uint32_t emit_prologue(jc_t *c, uint32_t push)
             {
               t_ldst(b, LS_STR, R_LR, R_SP, c->loff[i] + 4);
             }
+        }
+    }
+
+  /* The constants kept in registers */
+
+  for (i = 0; i < c->npin; i++)
+    {
+      if (c->pin[i].f32)
+        {
+          t_movi(b, R_LR, c->pin[i].v);
+          t_vmov_sr(b, c->pin[i].r, R_LR);
+        }
+      else
+        {
+          t_movi(b, c->pin[i].r, c->pin[i].v);
         }
     }
 
@@ -4178,7 +4471,26 @@ static void op_local_set(jc_t *c, uint32_t l, bool tee)
   int k = c->lkind[l];
 
   local_changing(c, l);
-  if (k == L_CORE)
+  if (k == L_CORE && IS64(c->ltype[l]))
+    {
+      int w;
+
+      for (w = 0; w < 2; w++)
+        {
+          int dst = w ? c->lreg2[l] : c->lreg[l];
+          int src = word_reg(c, &v, w);
+
+          if (src >= 0)
+            {
+              t_mov(&c->fb, dst, src);
+            }
+          else
+            {
+              word_to(c, dst, &v, w);
+            }
+        }
+    }
+  else if (k == L_CORE)
     {
       int dst = c->lreg[l];
 
@@ -4635,10 +4947,13 @@ static void compile_body(jc_t *c)
         }
 
       c->hint = -1;
+      c->shint = -1;
       c->hint_used = false;
       if ((op >= WASM_OP_I32_EQZ && op <= WASM_OP_I32_GE_U) ||
           (op >= WASM_OP_I32_CLZ && op <= WASM_OP_I32_ROTR) ||
-          op == WASM_OP_I32_EXTEND8_S || op == WASM_OP_I32_EXTEND16_S)
+          op == WASM_OP_I32_EXTEND8_S || op == WASM_OP_I32_EXTEND16_S ||
+          (op >= WASM_OP_F32_ABS && op <= WASM_OP_F32_DIV) ||
+          op == WASM_OP_F32_CONVERT_S_I32 || op == WASM_OP_F32_CONVERT_U_I32)
         {
           set_hint(c, p);
         }
@@ -5120,14 +5435,17 @@ static bool compile_function(jc_t *c, uint32_t fidx)
   jit_free(c->ltype);
   jit_free(c->lkind);
   jit_free(c->lreg);
+  jit_free(c->lreg2);
   jit_free(c->loff);
   jit_free(c->lweight);
+  c->lreg2   = jit_zalloc(n);
   c->ltype   = jit_zalloc(n);
   c->lkind   = jit_zalloc(n);
   c->lreg    = jit_zalloc(n);
   c->loff    = jit_zalloc(n * sizeof(uint32_t));
   c->lweight = jit_zalloc(n * sizeof(uint32_t));
   if (c->ltype == NULL || c->lkind == NULL || c->lreg == NULL ||
+      c->lreg2 == NULL ||
       c->loff == NULL || c->lweight == NULL)
     {
       fail(c, "out of memory", 0);
@@ -5158,6 +5476,7 @@ static bool compile_function(jc_t *c, uint32_t fidx)
 
   c->out_words = 0;
   c->makes_calls = false;
+  c->nkc = 0;
   if (!prescan(c))
     {
       return false;
@@ -5543,6 +5862,7 @@ static void jc_free(jc_t *c)
   jit_free(c->ltype);
   jit_free(c->lkind);
   jit_free(c->lreg);
+  jit_free(c->lreg2);
   jit_free(c->loff);
   jit_free(c->lweight);
   jit_free(c->vs);
