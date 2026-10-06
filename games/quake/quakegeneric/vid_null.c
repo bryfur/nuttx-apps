@@ -56,7 +56,7 @@ void	VID_Init (unsigned char *palette)
 	vid.height = vid.conheight = h;
 	vid.maxwarpwidth = WARP_WIDTH;	/* (r_warpbuffer's: underwater) */
 	vid.maxwarpheight = WARP_HEIGHT;
-	vid.aspect = 1.0;
+	vid.aspect = fpcq_vid_aspect ();	/* FPC: the frame shown at 4:3 */
 	vid.numpages = 1;
 	vid.colormap = host_colormap;
 	vid.fullbright = 256 - LittleLong (*((int *)vid.colormap + 2048));

@@ -49,6 +49,7 @@ const char *fpcq_basedir(void);
  */
 
 void fpcq_vid_size(int *w, int *h);
+float fpcq_vid_aspect(void);
 size_t fpcq_surfcache_size(void);
 
 /* The game ends: the display, the keyboard and the memory given back */

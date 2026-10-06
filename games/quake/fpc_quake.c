@@ -542,6 +542,27 @@ void fpcq_vid_size(int *w, int *h)
   *h = g_fs.h;
 }
 
+/* The 3D view's pixel aspect (vid.aspect): the software renderer's frame
+ * is shown at 4:3 (QG_Init()), so its pixels are h / w * 4 / 3 as tall as
+ * wide (0.833 for 320 x 200, as on DOS Quake's 4:3 screens; 1 for -res's
+ * square pixels); -gpu3d and -gl show 320 x 200 at 16:10, square
+ */
+
+float fpcq_vid_aspect(void)
+{
+  int k;
+
+  for (k = 1; k < g_argc; k++)
+    {
+      if (strcmp(g_argv[k], "-gpu3d") == 0 || strcmp(g_argv[k], "-gl") == 0)
+        {
+          return 1.0f;
+        }
+    }
+
+  return (float)g_fs.h / (float)g_fs.w * 4.0f / 3.0f;
+}
+
 size_t fpcq_surfcache_size(void)
 {
   return g_surfcache;
