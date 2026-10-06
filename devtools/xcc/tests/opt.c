@@ -560,6 +560,38 @@ static void t_loopload(void)
   out("findnone", find(&g_nodes[0], &k) == NULL);
 }
 
+/* Addresses stepped by pointers of their own (loop strength reduction,
+ * post-indexed accesses): steps up and down, scaled, stores too, an access
+ * after the step (not reduced) */
+
+static int16_t g_sr16[64];
+static uint8_t g_sr8[200];
+static int32_t g_sr32[64];
+
+static void t_loopsr(int n)
+{
+  uint32_t s = 0;
+  for (int i = 0; i < 64; i++)
+    g_sr16[i] = (int16_t)(i * 37 - 900);
+  for (int i = 0; i < n; i++)
+    s += (uint32_t)g_sr16[i] * 3u;
+  for (int i = n - 1; i >= 0; i--)
+    s = s * 5 + (uint32_t)g_sr16[i];
+  for (int i = 0; i < n / 3; i++)
+    g_sr8[i * 3 + 1] = (uint8_t)(i ^ s);
+  for (int i = 0; i < n; i++)
+    {
+      g_sr32[i] = g_sr16[63 - i] + i;
+      s ^= g_sr8[i * 3 + 1];
+    }
+  for (int i = 0; i < n; )
+    {
+      i += 2;
+      s += (uint32_t)g_sr32[i - 1];  /* after the step */
+    }
+  out("loopsr", s);
+}
+
 int main(int argc, char *argv[])
 {
   (void)argv;
@@ -577,6 +609,7 @@ int main(int argc, char *argv[])
   t_shift();
   t_thread2();
   t_loopload();
+  t_loopsr(argc + 59);
   printf("total %u\n", (unsigned)g_sum);
   return 0;
 }
