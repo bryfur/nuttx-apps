@@ -616,6 +616,41 @@ static void t_narrowloop(void)
   out("narrowloop", s);
 }
 
+/* A value loaded again after a test given by a move: made straight into
+ * the variable only if the test's other way doesn't want its old value */
+
+static int fall_old(const uint8_t *p)
+{
+  int last = -1, n = 0;
+  for (;;)
+    {
+      int t = *p;
+      if (t == 0)
+        return last * 100 + n;  /* the old value of last */
+      last = *p;
+      p++;
+      n++;
+    }
+}
+
+static int fall_new(const uint8_t *p)
+{
+  int cur = 0, n = 0;
+  while (*p != 0)
+    {
+      cur = *p;
+      n += cur & 3;
+      p++;
+    }
+  return cur * 1000 + n;
+}
+
+static void t_fall(void)
+{
+  static const uint8_t s1[] = {5, 9, 13, 0}, s2[] = {0};
+  out("fall", fall_old(s1) * 7 + fall_old(s2) + fall_new(s1) * 3 + fall_new(s2));
+}
+
 int main(int argc, char *argv[])
 {
   (void)argv;
@@ -635,6 +670,7 @@ int main(int argc, char *argv[])
   t_loopload();
   t_loopsr(argc + 59);
   t_narrowloop();
+  t_fall();
   printf("total %u\n", (unsigned)g_sum);
   return 0;
 }
