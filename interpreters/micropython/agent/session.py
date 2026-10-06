@@ -313,7 +313,10 @@ class Session:
     def maybe_compact(self):
         if len(self.messages) < 2:
             return
-        if self.last_input > self.cfg.get('compact_tokens', 100000) or \
+        gc.collect()
+        used = gc.mem_alloc()
+        heap_low = used > (used + gc.mem_free()) * 6 // 10
+        if heap_low or self.last_input > self.cfg.get('compact_tokens', 100000) or \
                 self.provider.last_body > self.cfg.get('max_history_kb', 384) * 1024:
             ui.note('(The conversation is long: compacting it.)')
             self.compact()
