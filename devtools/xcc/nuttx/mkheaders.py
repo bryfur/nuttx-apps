@@ -23,7 +23,7 @@ import tempfile
 PREDEFINED = [
     '-D__XCC', '-D__ILP32__', '-D__arm__', '-D__thumb__', '-D__thumb2__',
     '-D__ARMEL__', '-D__ARM_EABI__', '-D__ARM_ARCH=8', '-D__ARM_ARCH_8M_MAIN__',
-    '-D__ARM_PCS_VFP', '-D__VFP_FP__', '-D__ARM_FP=4', '-D__SOFTFP_DOUBLE__',
+    '-D__ARM_PCS_VFP', '-D__VFP_FP__', '-D__ARM_FP=4', '-D__SOFTFP_DOUBLE__', '-D__CHAR_UNSIGNED__',
     '-D__STDC__', '-D__STDC_VERSION__=199901L',
     '-D__SIZEOF_POINTER__=4', '-D__SIZEOF_INT__=4', '-D__SIZEOF_LONG__=4',
     '-D__SIZEOF_LONG_LONG__=8', '-D__SIZEOF_SIZE_T__=4',
