@@ -18,10 +18,13 @@
 
 #include "xcc_nuttx.h"
 
+#include <dirent.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <time.h>
 
 int xcc_cpp_main(int argc, char *argv[]);
 int xcc_cc1_main(int argc, char *argv[]);
@@ -32,6 +35,8 @@ XCC_BLOB(cpp);
 XCC_BLOB(cc1);
 XCC_BLOB(as);
 XCC_BLOB(ld);
+
+#define XCC_EXIT_PRUNED  3  /* cc1: an error in pruned input (lexer.h) */
 
 /* This driver is a program of its own too (xccd: xcc_entry.c runs it) */
 
@@ -70,6 +75,7 @@ enum stage_e
 };
 
 static bool g_verbose;
+static bool g_time;
 
 static int run(struct xcc_blob_s *blob, int (*mainfn)(int, char **), struct args_s *a)
 {
@@ -80,7 +86,22 @@ static int run(struct xcc_blob_s *blob, int (*mainfn)(int, char **), struct args
       fprintf(stderr, "\n");
     }
 
-  return xcc_run(blob, mainfn, a->argc, a->argv);
+  /* A copy: a program may change its argv (cpp takes -o out of it) */
+
+  char *argv[MAX_ARGS + 1];
+  memcpy(argv, a->argv, (a->argc + 1) * sizeof(*argv));
+
+  struct timespec t0, t1;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+  int rc = xcc_run(blob, mainfn, a->argc, argv);
+  if (g_time)
+    {
+      clock_gettime(CLOCK_MONOTONIC, &t1);
+      long ms = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+      fprintf(stderr, "xcc: %s %ld ms\n", a->argv[0], ms);
+    }
+
+  return rc;
 }
 
 static char *path_join(const char *a, const char *b)
@@ -122,6 +143,47 @@ static char *tmpname(const char *ext)
   return strdup(buf);
 }
 
+/* At most PCH_MAX files in the cache of precompiled headers: the oldest
+ * go (a readdir each compile, the times only when there are more)
+ */
+
+#define PCH_MAX 32
+
+static void pch_evict(const char *pchdir)
+{
+  DIR *dir = opendir(pchdir);
+  if (dir == NULL)
+    return;
+  char *names[PCH_MAX * 2];
+  int n = 0;
+  struct dirent *e;
+  while ((e = readdir(dir)) != NULL && n < PCH_MAX * 2)
+    {
+      size_t len = strlen(e->d_name);
+      if (len > 4 && strcmp(e->d_name + len - 4, ".pch") == 0)
+        names[n++] = path_join(pchdir, e->d_name);
+    }
+
+  closedir(dir);
+  while (n > PCH_MAX)
+    {
+      int oldest = 0;
+      time_t t = 0;
+      for (int i = 0; i < n; ++i)
+        {
+          struct stat st;
+          if (stat(names[i], &st) == 0 && (i == 0 || st.st_mtime < t))
+            {
+              oldest = i;
+              t = st.st_mtime;
+            }
+        }
+
+      remove(names[oldest]);
+      names[oldest] = names[--n];
+    }
+}
+
 static void usage(FILE *fp)
 {
   fprintf(fp,
@@ -132,7 +194,8 @@ static void usage(FILE *fp)
     "  -L DIR, -lNAME     libraries (libNAME.a)\n"
     "  --stack=BYTES      the module's stack (default 8192)\n"
     "  --priority=N       its priority\n"
-    "  -v                 the steps\n");
+    "  -fno-pch           no precompiled headers (XCC_CACHE: their directory)\n"
+    "  -v                 the steps (XCC_TIME=1: their times)\n");
 }
 
 int main(int argc, char *argv[])
@@ -148,6 +211,8 @@ int main(int argc, char *argv[])
   const char *priority = NULL;
   bool nostdlib = false;
   bool nostdinc = false;
+  bool pch = true;
+  g_time = getenv("XCC_TIME") != NULL;
   struct args_s cppopts = {0}, ccopts = {0}, ldopts = {0}, sources = {0};
 
   for (int i = 1; i < argc; ++i)
@@ -175,6 +240,8 @@ int main(int argc, char *argv[])
         {
           arg(&cppopts, a);
         }
+      else if (strcmp(a, "-fno-pch") == 0)
+        pch = false;
       else if (strncmp(a, "-W", 2) == 0 || strncmp(a, "-f", 2) == 0 ||
                strncmp(a, "-O", 2) == 0)
         {
@@ -225,6 +292,35 @@ int main(int argc, char *argv[])
       return 1;
     }
 
+  /* Precompiled headers (cpp/pch.c): the preprocessed prefixes of the
+   * sources (their #includes) in XCC_CACHE, ROOT/cache by default
+   */
+
+  const char *pchdir = NULL;
+  char pchkey[40] = "";
+  if (pch)
+    {
+      /* The headers' version, from their installation: they are not
+       * checked one by one (a stat of each costs)
+       */
+
+      FILE *fp = fopen(path_join(armroot, "stamp"), "r");
+      if (fp != NULL)
+        {
+          if (fgets(pchkey, sizeof(pchkey), fp) == NULL)
+            pchkey[0] = '\0';
+          pchkey[strcspn(pchkey, "\r\n")] = '\0';
+          fclose(fp);
+        }
+
+      const char *env = getenv("XCC_CACHE");
+      pchdir = env != NULL ? env : path_join(root, "cache");
+      struct stat st;
+      if (*pchdir == '\0' ||
+          (stat(pchdir, &st) != 0 && mkdir(pchdir, 0777) != 0))
+        pchdir = NULL;
+    }
+
   struct args_s objs = {0};
   for (int s = 0; s < sources.argc; ++s)
     {
@@ -242,14 +338,26 @@ int main(int argc, char *argv[])
             arg(&a, cppopts.argv[k]);
           if (!nostdinc)
             {
-              arg(&a, "-I");
+              arg(&a, "-isystem");
               arg(&a, path_join(armroot, "include"));
-              arg(&a, "-I");
+              arg(&a, "-isystem");
               arg(&a, path_join(armroot, "nuttx"));
+            }
+
+          if (pchdir != NULL)
+            {
+              arg(&a, "--pch");
+              arg(&a, pchdir);
+              if (pchkey[0] != '\0' && !nostdinc)
+                {
+                  arg(&a, "--pch-key");
+                  arg(&a, pchkey);
+                }
             }
 
           if (stage == STAGE_PP)
             {
+              arg(&a, "--no-prune");
               if (ofn != NULL)
                 {
                   arg(&a, "-o");
@@ -265,6 +373,7 @@ int main(int argc, char *argv[])
           char *ifile = tmpname("i");
           arg(&a, "-o");
           arg(&a, ifile);
+          int srcarg = a.argc;
           arg(&a, src);
           if (run(&cpp_blob, xcc_cpp_main, &a) != 0)
             return 1;
@@ -279,6 +388,19 @@ int main(int argc, char *argv[])
           arg(&c, asmfile);
           arg(&c, ifile);
           int rc = run(&cc1_blob, xcc_cc1_main, &c);
+          if (rc == XCC_EXIT_PRUNED)
+            {
+              /* cpp left out declarations of the headers, and cc1 found
+               * an error: again with all of them
+               */
+
+              a.argv[srcarg] = "--no-prune";
+              arg(&a, src);
+              if (run(&cpp_blob, xcc_cpp_main, &a) != 0)
+                return 1;
+              rc = run(&cc1_blob, xcc_cc1_main, &c);
+            }
+
           remove(ifile);
           if (rc != 0)
             return 1;
@@ -311,6 +433,9 @@ int main(int argc, char *argv[])
         return 1;
       arg(&objs, objfile);
     }
+
+  if (pchdir != NULL)
+    pch_evict(pchdir);
 
   if (stage != STAGE_LINK)
     return 0;

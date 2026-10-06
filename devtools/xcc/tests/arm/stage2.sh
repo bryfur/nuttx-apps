@@ -32,6 +32,15 @@ for f in $CC1SRC $T/valtest.c $T/fvaltest.c $XCCDIR/bench/bench.c; do
   $Q $S/as -o $b.q.o $b.h.s 2>/dev/null
   cmp -s $b.h.o $b.q.o || { echo "DIFF as $f"; bad=$((bad+1)); }
 done
+# The precompiled prefixes (cpp/pch.c): made, then used, the same by both
+mkdir -p $S/pch.h $S/pch.q
+for f in $T/valtest.c $XCCDIR/bench/bench.c $X/cc/cc1.c; do
+  for r in 1 2; do
+    $A/cpp $D $F --pch $S/pch.h -isystem $X/../include $f > $S/p.h.i 2>/dev/null
+    $Q $S/cpp $D $F --pch $S/pch.q -isystem $X/../include $f > $S/p.q.i 2>/dev/null
+    cmp -s $S/p.h.i $S/p.q.i || { echo "DIFF cpp pch $r $f"; bad=$((bad+1)); }
+  done
+done
 K=$(echo $CC1SRC | wc -w)
 OBJS=$(for i in $(seq 1 $K); do echo $S/o/$i.h.o; done)
 $A/ld -e main -o $S/h.mod $OBJS || echo ld-failed

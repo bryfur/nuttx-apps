@@ -53,7 +53,7 @@ endif
 UTIL_SRCS = $(X)/util/util.c $(X)/util/table.c
 
 wcc_SRCS  = $(wildcard $(X)/wcc/*.c) $(wildcard $(X)/cc/frontend/*.c)
-wcc_SRCS += $(X)/cpp/preprocessor.c $(X)/cpp/pp_parser.c $(X)/cpp/macro.c
+wcc_SRCS += $(X)/cpp/preprocessor.c $(X)/cpp/pp_parser.c $(X)/cpp/macro.c $(X)/cpp/pch.c
 wcc_SRCS += $(UTIL_SRCS) $(X)/util/archive.c
 wcc_FLAGS = -I$(X)/util -I$(X)/cc/frontend -I$(X)/cpp -DXCC_TARGET_ARCH=XCC_ARCH_WASM
 wcc_MAIN  = $(X)/wcc/wcc.c
@@ -239,6 +239,15 @@ $(SYSROOT)/arm/.nuttx: nuttx/headers.list nuttx/mkheaders.py $(HOSTDIR)/cpp \
 
 SYSROOT_TARGETS += $(SYSROOT)/arm/.nuttx
 endif
+
+# The headers' version (a sum of them all): the precompiled headers made
+# with others are not used (cpp/pch.c, --pch-key)
+
+$(SYSROOT)/arm/stamp: $(filter-out $(SYSROOT)/arm/stamp,$(SYSROOT_TARGETS))
+	$(Q) (cd $(SYSROOT)/arm && find include nuttx -type f 2>/dev/null | LC_ALL=C sort | \
+		xargs cat | md5sum | cut -c1-16) > $@
+
+SYSROOT_TARGETS += $(SYSROOT)/arm/stamp
 endif
 
 sysroot: $(SYSROOT_TARGETS)

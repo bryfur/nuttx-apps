@@ -6,6 +6,8 @@ if [ "$XAS" = gnu ]; then ASM="arm-none-eabi-as -mcpu=cortex-m33 -mfpu=fpv5-sp-d
 X=$XCCDIR/xcc
 D="-D__XCC -D__ILP32__ -D__arm__ -D__thumb__ -D__thumb2__ -D__ARMEL__ -D__ARM_EABI__ -D__ARM_ARCH=8 -D__ARM_PCS_VFP -D__VFP_FP__ -D__CHAR_UNSIGNED__ -D__linux__ -D__unix__ -D__STDC__ -D__STDC_VERSION__=199901L -D__SIZEOF_POINTER__=4 -D__SIZEOF_INT__=4 -D__SIZEOF_LONG__=4 -D__SIZEOF_LONG_LONG__=8 -D__SIZEOF_SIZE_T__=4"
 mode=link; out=; cppargs=; ccargs=; files=; objs=; tmp=$(mktemp -d)
+# Precompiled headers (cpp/pch.c) in $A/pch unless XCC_PCH=0
+PCH=; [ "${XCC_PCH:-1}" = 1 ] && { mkdir -p $A/pch; PCH="--pch $A/pch"; }
 while [ $# -gt 0 ]; do
   case "$1" in
     -c) mode=obj;; -S) mode=asm;; -E) mode=pp;;
@@ -29,10 +31,17 @@ for f in $files; do
   b=$(basename $f); b=${b%.*}; [ "$f" = - ] && b=stdin
   case $f in
     *.c|-)
-      if [ $mode = pp ]; then $A/cpp $D $cppargs -I $X/include $f > ${out:-/dev/stdout}; exit $?; fi
-      $A/cpp $D $cppargs -I $X/include $f > $tmp/$b.i || { rc=1; break; }
-      if [ $mode = asm ]; then $A/cc1 $ccargs $tmp/$b.i > ${out:-$b.s} || rc=1; continue; fi
-      $A/cc1 $ccargs $tmp/$b.i > $tmp/$b.s || { rc=1; break; }
+      if [ $mode = pp ]; then $A/cpp $D $cppargs $PCH --no-prune -isystem $X/include $f > ${out:-/dev/stdout}; exit $?; fi
+      $A/cpp $D $cppargs $PCH -isystem $X/include $f > $tmp/$b.i || { rc=1; break; }
+      cc1out=$tmp/$b.s; [ $mode = asm ] && cc1out=${out:-$b.s}
+      $A/cc1 $ccargs $tmp/$b.i > $cc1out; r=$?
+      if [ $r = 3 ]; then  # an error with pruned headers (cpp/pch.c): again with all
+        $A/cpp $D $cppargs $PCH --no-prune -isystem $X/include $f > $tmp/$b.i || { rc=1; break; }
+        $A/cc1 $ccargs $tmp/$b.i > $cc1out; r=$?
+        [ -n "$PCH_LOG" ] && { echo "retry $f: $r"; [ $r = 0 ] && cat $f; } >> $PCH_LOG
+      fi
+      if [ $mode = asm ]; then [ $r = 0 ] || rc=1; continue; fi
+      [ $r = 0 ] || { rc=1; break; }
       o=$tmp/$b.o; [ $mode = obj ] && o=${out:-$b.o}
       $ASM -o $o $tmp/$b.s || { rc=1; break; }
       objs="$objs $o";;
