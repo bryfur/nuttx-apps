@@ -94,7 +94,8 @@ struct wasm_opts_s
   bool interp;                            /* -i: interpreted */
   bool jit;                               /* -j: compiled here (no .aot) */
   bool aot;                               /* -a: the .aot or nothing */
-  bool sram;                              /* --sram: AOT code in SRAM */
+  int sram;                               /* Code in SRAM: --sram 1, --psram
+                                           * 0, -1 when it fits */
   bool verbose;                           /* -v */
   bool jitmap;                            /* --jitmap */
   int maxmem_kb;                          /* -m */
@@ -517,6 +518,7 @@ static FAR void *watchdog(FAR void *arg)
         {
           g_wapp.killed = true;
           wasm_runtime_terminate(g_wapp.inst);
+          wasm_jit_interrupt(g_wapp.inst);
         }
 
       if (limit > 0 && g_wapp.in_callback && g_wapp.beat == last)
@@ -527,6 +529,7 @@ static FAR void *watchdog(FAR void *arg)
                      "terminated\n", g_wapp.name, limit / 10);
               g_wapp.killed = true;
               wasm_runtime_terminate(g_wapp.inst);
+              wasm_jit_interrupt(g_wapp.inst);
             }
         }
       else
@@ -595,7 +598,10 @@ static int run_found(FAR struct wasm_found_s *f,
       if (package_check(buf, size, &aot) == OK)
         {
 #ifdef CONFIG_ARCH_USE_TEXT_HEAP
-          g_wamr_text_section = o->sram ? ".time_critical.wasm" : ".text";
+          g_wamr_text_section = o->sram > 0 ||
+                                (o->sram < 0 && aot &&
+                                 wasm_jit_sram_fits(size)) ?
+                                ".time_critical.wasm" : ".text";
 #endif
           module = wasm_runtime_load(buf, size, err, sizeof(err));
           if (module != NULL)
@@ -679,7 +685,8 @@ static int run_found(FAR struct wasm_found_s *f,
   if (!aot && !o->interp && wasm_jit_supported() &&
       (o->jit || strcmp(f->run, "interp") != 0))
     {
-      jit = wasm_jit_attach(g_wapp.inst, (o->sram ? WASM_JIT_SRAM : 0) |
+      jit = wasm_jit_attach(g_wapp.inst, (o->sram > 0 ? WASM_JIT_SRAM : 0) |
+                            (o->sram == 0 ? WASM_JIT_PSRAM : 0) |
                             (o->verbose ? WASM_JIT_VERBOSE : 0) |
                             (o->jitmap ? WASM_JIT_MAP : 0), err,
                             sizeof(err));
@@ -842,7 +849,7 @@ static int usage(void)
 {
   fprintf(stderr,
           "usage: wasm run [-i|-j|-a] [-s SCRIPT] [-m KB] [-w S] [--dir DIR] "
-          "[--sram] [-v] APP [ARGS...]\n"
+          "[--sram|--psram] [-v] APP [ARGS...]\n"
           "       wasm info [APP]\n"
           "       wasm list\n"
           "APP: a .wasm or .aot file, an app's directory, or an app's name "
@@ -852,7 +859,9 @@ static int usage(void)
           "  -s  a game's input script (fpcgame)  -m  linear memory limit, "
           "KB (%d)\n"
           "  -w  watchdog: a frame's limit, s (%d; 0 off)\n"
-          "  --dir DIR  WASI access to DIR      --sram  AOT/JIT code in SRAM\n",
+          "  --dir DIR  WASI access to DIR\n"
+          "  --sram, --psram  AOT/JIT code in the SRAM (default: when it "
+          "fits), in the PSRAM\n",
           CONFIG_FPCWASM_APPDIR, WASM_DEF_MAXMEM_KB, WASM_WATCHDOG_S);
   return 2;
 }
@@ -867,6 +876,7 @@ static int cmd_run(int argc, FAR char **argv)
   memset(&o, 0, sizeof(o));
   o.maxmem_kb  = WASM_DEF_MAXMEM_KB;
   o.watchdog_s = WASM_WATCHDOG_S;
+  o.sram       = -1;
 
   for (i = 0; i < argc && argv[i][0] == '-'; i++)
     {
@@ -890,7 +900,11 @@ static int cmd_run(int argc, FAR char **argv)
         }
       else if (strcmp(a, "--sram") == 0)
         {
-          o.sram = true;
+          o.sram = 1;
+        }
+      else if (strcmp(a, "--psram") == 0)
+        {
+          o.sram = 0;
         }
       else if (strcmp(a, "--jitmap") == 0)
         {

@@ -14,6 +14,9 @@
 #                              interpreter and the expected results
 #   make fuzz N=200            random modules (wasm-tools smith), JIT
 #                              against the interpreter
+#   make kill                  loops that never end (kill/*.wat), stopped
+#                              as the board's watchdog does: terminated,
+#                              the compiled loops interrupted
 #
 # Tools (on the build host): an arm-none-linux-gnueabihf GCC (ARM's
 # toolchain), qemu-arm, wabt's wast2json, wasm-tools, WebAssembly's spec
@@ -154,7 +157,20 @@ fuzz: $(OUT)/jitrun
 	python3 $(CURDIR)/fuzz.py --wasm-tools $(WASMTOOLS) \
 	  --jitrun "$(QEMU) $(OUT)/jitrun" --out $(OUT)/fuzz -n $(N)
 
+WAT2WASM ?= $(TOOLS)/wabt-1.0.42/bin/wat2wasm
+
+kill: $(OUT)/jitrun
+	@mkdir -p $(OUT)/kill
+	@bad=0; for w in $(CURDIR)/kill/*.wat; do \
+	  n=$$(basename $$w .wat); \
+	  $(WAT2WASM) -o $(OUT)/kill/$$n.wasm $$w || exit 1; \
+	  out=$$(timeout 20 $(QEMU) $(OUT)/jitrun run -k 300 $(OUT)/kill/$$n.wasm 2>&1); \
+	  if echo "$$out" | grep -q "jitrun: Exception: terminated by user" && \
+	     echo "$$out" | grep -q "JIT: status 1"; then echo "kill $$n: ok"; \
+	  else echo "kill $$n: FAILED"; echo "$$out" | tail -3; bad=1; fi; \
+	done; exit $$bad
+
 clean:
 	rm -rf $(OUT)/obj $(OUT)/jobj $(OUT)/jitrun
 
-.PHONY: all spec fuzz clean
+.PHONY: all spec fuzz kill clean

@@ -14,11 +14,13 @@
  *                                  random arguments, interpreted and
  *                                  compiled: results, traps, memory, globals
  *                                  compared
- *   jitrun run [-i] [-t N] FILE.wasm [ARGS]   a WASI command (compiled
+ *   jitrun run [-i] [-t N] [-k MS] FILE.wasm [ARGS]   a WASI command (compiled
  *                                  unless -i), its time
  ****************************************************************************/
 
 #include <ctype.h>
+#include <pthread.h>
+#include <unistd.h>
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -935,10 +937,31 @@ done:
  * run
  ****************************************************************************/
 
+/* -k: terminated after MS ms, as the board's watchdog does */
+
+struct killer_s
+{
+  wasm_module_inst_t inst;
+  int ms;
+};
+
+static void *killer(void *arg)
+{
+  struct killer_s *k = arg;
+
+  usleep(k->ms * 1000);
+  wasm_runtime_terminate(k->inst);
+  wasm_jit_interrupt(k->inst);
+  return NULL;
+}
+
 static int cmd_run(int argc, char **argv)
 {
   bool interp = false;
   int times = 1;
+  int kill_ms = 0;
+  pthread_t kt;
+  struct killer_s ks;
   char err[160];
   const char *dirs[1] = { "." };
   uint32_t size;
@@ -962,6 +985,10 @@ static int cmd_run(int argc, char **argv)
       else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc)
         {
           times = atoi(argv[++i]);
+        }
+      else if (strcmp(argv[i], "-k") == 0 && i + 1 < argc)
+        {
+          kill_ms = atoi(argv[++i]);
         }
 
       i++;
@@ -1016,6 +1043,13 @@ static int cmd_run(int argc, char **argv)
       bound_stack(env);
       start = wasm_runtime_lookup_function(inst, "_start");
       clock_gettime(CLOCK_MONOTONIC, &t0);
+      if (kill_ms > 0)
+        {
+          ks.inst = inst;
+          ks.ms = kill_ms;
+          pthread_create(&kt, NULL, killer, &ks);
+        }
+
       if (start == NULL || !wasm_runtime_call_wasm(env, start, 0, NULL))
         {
           const char *e = wasm_runtime_get_exception(inst);
@@ -1036,6 +1070,11 @@ static int cmd_run(int argc, char **argv)
         }
 
       clock_gettime(CLOCK_MONOTONIC, &t1);
+      if (kill_ms > 0)
+        {
+          pthread_join(kt, NULL);
+        }
+
       fprintf(stderr, "jitrun: %s: status %d, %.1f ms\n",
               interp ? "interpreted" : "JIT", status,
               (t1.tv_sec - t0.tv_sec) * 1e3 +
@@ -1089,7 +1128,7 @@ int main(int argc, char **argv)
   else
     {
       fprintf(stderr, "usage: jitrun spec FILE.cmds | fuzz FILE.wasm SEED | "
-              "run [-i] [-t N] FILE.wasm [ARGS]\n");
+              "run [-i] [-t N] [-k MS] FILE.wasm [ARGS]\n");
     }
 
   wasm_runtime_destroy();

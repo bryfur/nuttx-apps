@@ -40,6 +40,8 @@
 
 #ifdef __NuttX__
 #  include <nuttx/config.h>
+#  include <nuttx/kmalloc.h>
+#  include <malloc.h>
 #endif
 
 #include "jit_internal.h"
@@ -179,6 +181,9 @@ typedef struct jc_s
   far_t *calls;                   /* BLs to functions (mb positions) */
   uint32_t ncalls;
   uint32_t calls_cap;
+  uint32_t *mloops;               /* Loop heads (mb positions) */
+  uint32_t nmloops;
+  uint32_t mlcap;
   char *err;
   size_t errlen;
   bool failed;
@@ -226,6 +231,9 @@ typedef struct jc_s
   cold_t *cold;
   uint32_t ncold;
   uint32_t coldcap;
+  uint32_t *lheads;               /* Its loop heads (fb positions) */
+  uint32_t nlheads;
+  uint32_t lhcap;
   /* Bounds proven in this straight-line code: [reg, reg + end) is in the
    * memory for a local's register (until a label or a write to it; the
    * memory only grows)
@@ -5233,13 +5241,22 @@ static void op_else(jc_t *c)
   ct->unreach = false;
 }
 
-/* WAMR's terminate request (the watchdog, Ctrl-C): its exception set */
+/* A loop's head (word-aligned): a nop.w that wasm_jit_interrupt() makes a
+ * branch to the unwinding (WAMR's terminate request: the watchdog,
+ * Ctrl-C), so that a loop that never ends is stopped at no cost
+ * otherwise; written as one aligned word, a core running the loop sees
+ * either instruction whole
+ */
 
-static void check_exception(jc_t *c)
+static void loop_head(jc_t *c)
 {
-  ld_inst(c, LS_LDRB, R_IP, offsetof(WASMModuleInstance, cur_exception));
-  t_cmpi_enc(&c->fb, R_IP, 0);
-  far_br(c, CC_NE, c->exc_pos);
+  if (!GROW(c, c->lheads, c->nlheads, c->lhcap))
+    {
+      return;
+    }
+
+  c->lheads[c->nlheads++] = c->fb.len;
+  e32(&c->fb, 0xf3af, 0x8000);                       /* nop.w */
 }
 
 static void compile_body(jc_t *c)
@@ -5341,7 +5358,7 @@ static void compile_body(jc_t *c)
               }
 
             lbind(c, ct->label);
-            check_exception(c);
+            loop_head(c);
             break;
 
           case WASM_OP_IF:
@@ -5862,6 +5879,16 @@ static void place_body(jc_t *c)
           t_bcc_at(&c->mb, pos, f->cond, (int32_t)f->target - (int32_t)pos);
         }
     }
+
+  for (i = 0; i < c->nlheads; i++)
+    {
+      if (!GROW(c, c->mloops, c->nmloops, c->mlcap))
+        {
+          return;
+        }
+
+      c->mloops[c->nmloops++] = base + c->lheads[i];
+    }
 }
 
 static bool compile_function(jc_t *c, uint32_t fidx)
@@ -5937,6 +5964,7 @@ static bool compile_function(jc_t *c, uint32_t fidx)
   c->nfix = 0;
   c->nfars = 0;
   c->ncold = 0;
+  c->nlheads = 0;
   c->nbc = 0;
   c->cused = 0;
   assign_locals(c);
@@ -6347,6 +6375,8 @@ static void jc_free(jc_t *c)
   jit_free(c->fix);
   jit_free(c->fars);
   jit_free(c->cold);
+  jit_free(c->lheads);
+  jit_free(c->mloops);
 }
 
 bool wasm_jit_attach(wasm_module_inst_t module_inst, unsigned flags,
@@ -6485,8 +6515,10 @@ bool wasm_jit_attach(wasm_module_inst_t module_inst, unsigned flags,
   /* Into executable memory */
 
 #ifdef CONFIG_ARCH_USE_TEXT_HEAP
-  g_wamr_text_section = (flags & WASM_JIT_SRAM) ? ".time_critical.wasmjit" :
-                        ".text";
+  g_wamr_text_section = (flags & WASM_JIT_SRAM) ||
+                        (!(flags & WASM_JIT_PSRAM) &&
+                         wasm_jit_sram_fits(c.mb.len)) ?
+                        ".time_critical.wasmjit" : ".text";
 #endif
   code = os_mmap(NULL, c.mb.len, MMAP_PROT_READ | MMAP_PROT_WRITE |
                  MMAP_PROT_EXEC, 0, os_get_invalid_handle());
@@ -6519,6 +6551,10 @@ bool wasm_jit_attach(wasm_module_inst_t module_inst, unsigned flags,
 
   jm->code = code;
   jm->code_size = c.mb.len;
+  jm->loops = c.mloops;                 /* (kept: wasm_jit_interrupt()) */
+  jm->nloops = c.nmloops;
+  c.mloops = NULL;
+  jm->exc_off = c.exc_pos;
   jm->in_sram = ((uintptr_t)code >> 28) == 2;
   jm->enter  = (jit_enter_t)((uintptr_t)code + 1);     /* (at 0) */
   jm->unwind = (jit_unwind_t)((uintptr_t)code + c.unwind_pos + 1);
@@ -6588,8 +6624,49 @@ void wasm_jit_detach(wasm_module_inst_t module_inst)
   inst->e->ext_data = NULL;
   inst->ext_words[EXT_FUNCS] = 0;
   os_munmap(jm->code, jm->code_size);
+  jit_free(jm->loops);
   jit_free(jm->funcs);
   jit_free(jm);
+}
+
+void wasm_jit_interrupt(wasm_module_inst_t module_inst)
+{
+  WASMModuleInstance *inst = (WASMModuleInstance *)module_inst;
+  jit_module_t *jm;
+  uint32_t i;
+
+  if (inst == NULL || inst->module_type != Wasm_Module_Bytecode ||
+      inst->e->ext_data == NULL)
+    {
+      return;
+    }
+
+  jm = inst->e->ext_data;
+  for (i = 0; i < jm->nloops; i++)
+    {
+      uint32_t pos = jm->loops[i];
+      uint8_t hw[4];
+      jbuf_t tb;
+
+      tb.buf = hw;
+      tb.len = 4;
+      tb.cap = 4;
+      tb.oom = false;
+      t_b_at(&tb, 0, (int32_t)jm->exc_off - (int32_t)pos, false);
+
+      /* One word: the halfwords of b.w, the first at the lower address */
+
+      *(volatile uint32_t *)(jm->code + pos) =
+        hw[0] | hw[1] << 8 | hw[2] << 16 | (uint32_t)hw[3] << 24;
+    }
+
+  os_icache_flush(jm->code, jm->code_size);
+#if defined(__NuttX__)
+  __asm__ __volatile__("dsb\n\tisb" ::: "memory");
+#else
+  __builtin___clear_cache((char *)jm->code,
+                          (char *)jm->code + jm->code_size);
+#endif
 }
 
 bool wasm_jit_stats(wasm_module_inst_t module_inst,
@@ -6611,6 +6688,20 @@ bool wasm_jit_stats(wasm_module_inst_t module_inst,
 
 #endif /* JIT_HAVE */
 
+bool wasm_jit_sram_fits(uint32_t size)
+{
+#if defined(__NuttX__) && defined(CONFIG_ARCH_USE_TEXT_HEAP) && \
+    defined(CONFIG_MM_KERNEL_HEAP)
+  struct mallinfo mi = kmm_mallinfo();     /* (the kernel heap: the SRAM) */
+
+  return size <= WASM_SRAM_CODE_MAX &&
+         (uint32_t)mi.mxordblk >= size + WASM_SRAM_FLOOR;
+#else
+  (void)size;
+  return false;
+#endif
+}
+
 #if !JIT_HAVE
 
 /* No compiler for this target (the simulator): everything interpreted */
@@ -6628,6 +6719,10 @@ bool wasm_jit_attach(wasm_module_inst_t inst, unsigned flags, char *err,
 }
 
 void wasm_jit_detach(wasm_module_inst_t inst)
+{
+}
+
+void wasm_jit_interrupt(wasm_module_inst_t inst)
 {
 }
 

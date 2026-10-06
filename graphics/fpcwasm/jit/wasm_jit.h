@@ -27,6 +27,16 @@
 #define WASM_JIT_SRAM     1      /* The code in the internal SRAM if it fits */
 #define WASM_JIT_VERBOSE  2      /* What it did, on stderr */
 #define WASM_JIT_MAP      4      /* Where each function's code is, on stderr */
+#define WASM_JIT_PSRAM    8      /* The code in the PSRAM (neither flag: the
+                                  * SRAM when wasm_jit_sram_fits()) */
+
+/* Code (JIT or AOT) goes to the internal SRAM by default when it is at
+ * most WASM_SRAM_CODE_MAX bytes and the SRAM keeps a free block of
+ * WASM_SRAM_FLOOR bytes beside it
+ */
+
+#define WASM_SRAM_CODE_MAX  (160 * 1024)
+#define WASM_SRAM_FLOOR     (96 * 1024)
 
 struct wasm_jit_stats_s
 {
@@ -62,6 +72,20 @@ bool wasm_jit_attach(wasm_module_inst_t inst, unsigned flags, char *err,
  */
 
 void wasm_jit_detach(wasm_module_inst_t inst);
+
+/* After wasm_runtime_terminate() (another thread: a watchdog): the
+ * compiled code's loops go to the exception at their next iteration
+ * (their heads are patched; nothing looks at the exception otherwise).
+ * The instance cannot run its compiled code normally afterwards.
+ */
+
+void wasm_jit_interrupt(wasm_module_inst_t inst);
+
+/* Whether size bytes of code go to the SRAM by default (false where there
+ * is no such choice: the simulator, the test harness)
+ */
+
+bool wasm_jit_sram_fits(uint32_t size);
 
 /* What the compiler did for an attached instance */
 

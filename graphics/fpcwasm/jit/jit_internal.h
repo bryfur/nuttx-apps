@@ -98,6 +98,9 @@ typedef struct jit_module_s
   jit_enter_t enter;
   jit_unwind_t unwind;
   uint32_t fast_imports;          /* Imports called directly */
+  uint32_t *loops;                /* Every loop's head (a nop.w, aligned) */
+  uint32_t nloops;
+  uint32_t exc_off;               /* Unwinding with the exception set */
   struct wasm_jit_stats_s stats;
 } jit_module_t;
 
