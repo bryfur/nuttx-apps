@@ -22,6 +22,10 @@ CSRCS     = wasm_fpc.c wasm_image.c
 
 CFLAGS   += ${INCDIR_PREFIX}$(APPDIR)/interpreters/wamr/wamr/core/iwasm/include
 CFLAGS   += ${INCDIR_PREFIX}sdk
+CFLAGS   += ${INCDIR_PREFIX}jit
+
+# jit/ (the JIT) is built with WAMR (apps/interpreters/wamr/Makefile): it
+# uses the runtime's own structures, so its configuration
 
 # rocksn: the Rocks example built natively on fpc_native.c (the same C
 # source, the fpc API straight onto the game SDK), to compare with it as

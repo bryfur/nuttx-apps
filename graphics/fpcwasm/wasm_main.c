@@ -14,7 +14,10 @@
  * app.aot compiled ahead of time for this CPU by wamrc, a manifest, an
  * icon, its data).  An .aot beside the .wasm is run instead when this
  * runtime's AOT version made it and it loads (made for this CPU); else
- * the .wasm is interpreted (WAMR's fast interpreter).
+ * the .wasm is compiled as it loads (jit/: WebAssembly to Thumb-2), or
+ * interpreted (WAMR's fast interpreter) where the compiler cannot (a
+ * feature it does not have; the simulator).  -i, -j, -a or the
+ * manifest's "run" line choose.
  *
  * The runtime is WAMR (apps/interpreters/wamr), with WASI (stdio, the
  * app's own directory as ".", clocks, random numbers) and the FPC's own
@@ -34,6 +37,7 @@
  ****************************************************************************/
 
 #include "wasm_internal.h"
+#include "wasm_jit.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -87,7 +91,8 @@ extern const char *g_wamr_text_section;   /* (wamr's nuttx_platform.c) */
 struct wasm_opts_s
 {
   const char *script;                     /* -s */
-  bool interp;                            /* -i: never the .aot */
+  bool interp;                            /* -i: interpreted */
+  bool jit;                               /* -j: compiled here (no .aot) */
   bool aot;                               /* -a: the .aot or nothing */
   bool sram;                              /* --sram: AOT code in SRAM */
   bool verbose;                           /* -v */
@@ -106,6 +111,7 @@ struct wasm_found_s
   char dir[PATH_MAX];                     /* Its directory, if an app's */
   char name[32];
   char kind[8];                           /* game, app, cli */
+  char run[8];                            /* aot, jit, interp: preferred */
   int api;
   int width;                              /* A game with no _start */
   int height;
@@ -251,6 +257,10 @@ static void read_manifest(FAR struct wasm_found_s *f)
         {
           f->api = atoi(v);
         }
+      else if (strcmp(k, "run") == 0)
+        {
+          strlcpy(f->run, v, sizeof(f->run));
+        }
       else if (strcmp(k, "width") == 0)
         {
           f->width = atoi(v);
@@ -361,7 +371,12 @@ static int find_app(const char *app, FAR const struct wasm_opts_s *o,
       with_ext(f->name, sizeof(f->name), base, "");
     }
 
-  if (!o->interp && is_file(aot))
+  if (!o->interp && !o->jit && !o->aot &&
+      (strcmp(f->run, "jit") == 0 || strcmp(f->run, "interp") == 0))
+    {
+      /* The manifest prefers the .wasm (and how to run it) */
+    }
+  else if (!o->interp && !o->jit && is_file(aot))
     {
       strlcpy(f->path, aot, sizeof(f->path));
       if (!o->aot && is_file(wasm))
@@ -557,6 +572,7 @@ static int run_found(FAR struct wasm_found_s *f,
   uint32_t t0;
   uint32_t t1;
   bool aot = false;
+  bool jit = false;
   int status = 1;
   int nargs;
   int i;
@@ -657,6 +673,21 @@ static int run_found(FAR struct wasm_found_s *f,
       goto out_unload;
     }
 
+  /* Compiled here, unless asked to interpret it (or it cannot be) */
+
+  if (!aot && !o->interp && wasm_jit_supported() &&
+      (o->jit || strcmp(f->run, "interp") != 0))
+    {
+      jit = wasm_jit_attach(g_wapp.inst, (o->sram ? WASM_JIT_SRAM : 0) |
+                            (o->verbose ? WASM_JIT_VERBOSE : 0), err,
+                            sizeof(err));
+      if (!jit)
+        {
+          fprintf(stderr, "wasm: %s: not compiled (%s): interpreting\n",
+                  f->name, err);
+        }
+    }
+
   g_wapp.env = wasm_runtime_create_exec_env(g_wapp.inst, WASM_STACK_SIZE);
   if (g_wapp.env == NULL)
     {
@@ -676,14 +707,14 @@ static int run_found(FAR struct wasm_found_s *f,
 
       fprintf(stderr, "wasm: %s: %s, %u bytes, loaded in %u ms; memory "
               "%u of at most %u pages\n", f->name,
-              aot ? "AOT" : "interpreted", (unsigned)size,
+              aot ? "AOT" : jit ? "JIT" : "interpreted", (unsigned)size,
               (unsigned)((t1 - t0) * 1000 / CLOCKS_PER_SEC),
               mem ? (unsigned)wasm_memory_get_cur_page_count(mem) : 0,
               mem ? (unsigned)wasm_memory_get_max_page_count(mem) : 0);
     }
 
   syslog(LOG_INFO, "wasm %s: %s (%s)\n", f->name, f->path,
-         aot ? "AOT" : "interpreted");
+         aot ? "AOT" : jit ? "JIT" : "interpreted");
 
   /* Ctrl-C and the watchdog end it as a trap would */
 
@@ -776,6 +807,7 @@ static int run_found(FAR struct wasm_found_s *f,
   g_wapp.env = NULL;
 
 out_deinst:
+  wasm_jit_detach(g_wapp.inst);
   wasm_runtime_deinstantiate(g_wapp.inst);
   g_wapp.inst = NULL;
 
@@ -807,17 +839,18 @@ static bool one_take(void)
 static int usage(void)
 {
   fprintf(stderr,
-          "usage: wasm run [-i|-a] [-s SCRIPT] [-m KB] [-w S] [--dir DIR] "
+          "usage: wasm run [-i|-j|-a] [-s SCRIPT] [-m KB] [-w S] [--dir DIR] "
           "[--sram] [-v] APP [ARGS...]\n"
           "       wasm info [APP]\n"
           "       wasm list\n"
           "APP: a .wasm or .aot file, an app's directory, or an app's name "
           "(%s/NAME)\n"
           "  -i  interpret the .wasm (no .aot)   -a  the .aot only\n"
+          "  -j  compile the .wasm here (JIT, no .aot)\n"
           "  -s  a game's input script (fpcgame)  -m  linear memory limit, "
           "KB (%d)\n"
           "  -w  watchdog: a frame's limit, s (%d; 0 off)\n"
-          "  --dir DIR  WASI access to DIR      --sram  AOT code in SRAM\n",
+          "  --dir DIR  WASI access to DIR      --sram  AOT/JIT code in SRAM\n",
           CONFIG_FPCWASM_APPDIR, WASM_DEF_MAXMEM_KB, WASM_WATCHDOG_S);
   return 2;
 }
@@ -840,6 +873,10 @@ static int cmd_run(int argc, FAR char **argv)
       if (strcmp(a, "-i") == 0)
         {
           o.interp = true;
+        }
+      else if (strcmp(a, "-j") == 0)
+        {
+          o.jit = true;
         }
       else if (strcmp(a, "-a") == 0)
         {
@@ -877,7 +914,7 @@ static int cmd_run(int argc, FAR char **argv)
         }
     }
 
-  if (i >= argc || (o.interp && o.aot))
+  if (i >= argc || o.interp + o.aot + o.jit > 1)
     {
       return usage();
     }
@@ -933,8 +970,9 @@ static int info_locked(int argc, FAR char **argv)
     }
 
   wasm_runtime_get_version(&major, &minor, &patch);
-  printf("WAMR %u.%u.%u: fast interpreter, AOT (version %u, %s), WASI; "
-         "fpc API v%d\n", (unsigned)major, (unsigned)minor, (unsigned)patch,
+  printf("WAMR %u.%u.%u: fast interpreter, %sAOT (version %u, %s), "
+         "WASI; fpc API v%d\n", (unsigned)major, (unsigned)minor,
+         (unsigned)patch, wasm_jit_supported() ? "JIT (Thumb-2), " : "",
          (unsigned)wasm_runtime_get_current_package_version(Wasm_Module_AoT),
 #if defined(CONFIG_ARCH_SIM)
          "x86_64",

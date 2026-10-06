@@ -30,6 +30,16 @@ config FPCWASM_STACKSIZE
 		The task's (native) stack: the interpreter's frames, the game
 		SDK's, and AOT code's frames (a wasm call each).
 
+config FPCWASM_JIT
+	bool "The JIT: WebAssembly compiled to Thumb-2 as it loads"
+	default y
+	depends on ARCH_ARMV8M && ARCH_FPU
+	---help---
+		jit/: a single-pass compiler from WebAssembly to Thumb-2 for
+		the Cortex-M33 (FPv5 single precision), inside WAMR (patch
+		0005): a .wasm with no .aot runs compiled (wasm run -j, or
+		-i to interpret it).  docs/wasm.md, "The JIT".
+
 config FPCWASM_ROCKSN
 	bool "rocksn: the Rocks example as a native program"
 	default n
