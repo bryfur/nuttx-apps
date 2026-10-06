@@ -21,6 +21,10 @@
 
 #include "desk.h"
 
+#ifdef CONFIG_FPC_GPU
+void fpc_gpu_game_prepare(void);        /* (drivers/gpu: fpc_gpu.h) */
+#endif
+
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
@@ -36,6 +40,15 @@ static bool game_start(const char *name, const char *title)
   int index;
   pid_t pid;
   int ret;
+
+#ifdef CONFIG_FPC_GPU
+  /* The desktop's windows give back the CPU's memory their copies take
+   * before the game loads (and all of their memory when it takes the
+   * display)
+   */
+
+  fpc_gpu_game_prepare();
+#endif
 
   index = builtin_isavail(name);
   b     = index >= 0 ? builtin_for_index(index) : NULL;

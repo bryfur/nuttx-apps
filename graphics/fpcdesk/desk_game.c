@@ -58,6 +58,10 @@
 
 #include <graphics/deskgame.h>
 
+#ifdef CONFIG_FPC_GPU
+void fpc_gpu_game_prepare(void);        /* (drivers/gpu: fpc_gpu.h) */
+#endif
+
 #include "desk.h"
 
 #ifdef CONFIG_GAMES_NXDOOM_DESKTOP
@@ -1082,6 +1086,15 @@ static int doom_start(struct desk_win_s *w)
   pthread_mutex_lock(&g->lock);
   g->refs++;                                  /* The task's */
   pthread_mutex_unlock(&g->lock);
+
+#ifdef CONFIG_FPC_GPU
+  /* The game wants most of the CPU's memory at once (its heap): the
+   * compositor's copies of windows' pixels give it back first (until the
+   * game has had the display, or plays in its window)
+   */
+
+  fpc_gpu_game_prepare();
+#endif
 
   if (b != NULL)
     {

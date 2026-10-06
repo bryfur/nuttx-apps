@@ -745,6 +745,12 @@ int main(int argc, char *argv[])
 
   g_argc = argc;
   g_argv = argv;
+
+  /* The desktop's windows give back the memory their copies take in the
+   * CPU's (the compositor's swap) before the game takes most of it
+   */
+
+  fpc_gpu_game_prepare();
   if (heap_create() < 0)
     {
       return EXIT_FAILURE;
