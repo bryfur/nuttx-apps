@@ -172,6 +172,9 @@ enum desk_app_e
 #ifdef CONFIG_GAMES_THUNDERBOLT
   APP_THUNDERBOLT,                 /* A full-screen game (desk_games.c) */
 #endif
+#ifdef CONFIG_GAMES_QUAKE
+  APP_QUAKE,                       /* Full screen, the main GPU (desk_games.c) */
+#endif
   APP_COUNT
 };
 
@@ -492,6 +495,7 @@ extern const struct desk_app_s g_app_bench;      /* desk_bench.c */
 extern const struct desk_app_s g_app_sheet;      /* desk_sheet.c */
 #ifdef CONFIG_GAMES_THUNDERBOLT
 extern const struct desk_app_s g_app_thunderbolt; /* desk_games.c */
+extern const struct desk_app_s g_app_quake;      /* desk_games.c */
 #endif
 
 /****************************************************************************

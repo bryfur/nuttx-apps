@@ -210,6 +210,9 @@ const struct desk_app_s * const g_apps[APP_COUNT] =
 #ifdef CONFIG_GAMES_THUNDERBOLT
   [APP_THUNDERBOLT] = &g_app_thunderbolt,
 #endif
+#ifdef CONFIG_GAMES_QUAKE
+  [APP_QUAKE]    = &g_app_quake,
+#endif
 };
 
 /****************************************************************************

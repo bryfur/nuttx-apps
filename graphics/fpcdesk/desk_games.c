@@ -120,3 +120,36 @@ const struct desk_app_s g_app_thunderbolt =
 };
 
 #endif /* CONFIG_GAMES_THUNDERBOLT */
+
+#ifdef CONFIG_GAMES_QUAKE
+
+/* Quake's rust and brown, its name (the main GPU's game display: its
+ * software renderer, so the 3D GPU is not needed; -gl would want it)
+ */
+
+static void quake_icon(struct desk_ops_s *o, int x, int y, int s, uint8_t a)
+{
+  const struct desk_font_s *f = s >= 64 ? &g_desk_font_title :
+                                          &g_desk_font_uib;
+
+  icon_tile(o, x, y, s, RGB(0x6a, 0x4a, 0x2a), RGB(0x1e, 0x14, 0x0a), a);
+  ops_rrect(o, x + s / 8, y + s * 5 / 8, s * 3 / 4, s / 4, LUT_R6, 6,
+            RGB(0x0c, 0x08, 0x04), (uint8_t)(a * 120 / 255));
+  ops_text_centre(o, f, x + s / 2, y + s / 2 - text_height(f) / 2 - 2,
+                  "QUAKE", RGB(0xd8, 0xa8, 0x58), a);
+}
+
+static struct desk_win_s *quake_open(void)
+{
+  game_start("quake", "Quake");
+  return NULL;
+}
+
+const struct desk_app_s g_app_quake =
+{
+  .name = "Quake",
+  .icon = quake_icon,
+  .open = quake_open,
+};
+
+#endif /* CONFIG_GAMES_QUAKE */
