@@ -62,6 +62,15 @@
 #  define CONFIG_NETCOP_DEVPATH "/dev/ttyS0"
 #endif
 
+/* The SPI link (fpc/drivers/netcop/fpc_ncspi.c): /dev/netcop is a byte
+ * stream like the UART; the link's "baud" is the SPI clock
+ */
+
+#ifdef CONFIG_FPC_NETCOP_SPI
+#  include "fpc_ncspi.h"
+#  include "nc_spi.h"
+#endif
+
 #ifndef CONFIG_NETCOP_BAUD
 #  define CONFIG_NETCOP_BAUD 3000000
 #endif
@@ -112,7 +121,7 @@ uint32_t ncd_now(void)
   return (uint32_t)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
 }
 
-/* The port: the UART */
+/* The port: the UART, or /dev/netcop (the SPI link) */
 
 static int port_write(FAR void *arg, FAR const uint8_t *p, size_t n)
 {
@@ -126,7 +135,7 @@ static uint32_t port_now(FAR void *arg)
   return ncd_now();
 }
 
-#ifdef CONFIG_SERIAL_TERMIOS
+#if defined(CONFIG_SERIAL_TERMIOS) && !defined(CONFIG_FPC_NETCOP_SPI)
 static speed_t baud_code(uint32_t baud)
 {
   switch (baud)
@@ -144,7 +153,9 @@ static speed_t baud_code(uint32_t baud)
 
 static void port_baud(FAR void *arg, uint32_t baud)
 {
-#ifdef CONFIG_SERIAL_TERMIOS
+#ifdef CONFIG_FPC_NETCOP_SPI
+  ioctl(g_ncd->uart, NCSPIOC_SETHZ, (unsigned long)baud);
+#elif defined(CONFIG_SERIAL_TERMIOS)
   struct termios t;
 
   if (tcgetattr(g_ncd->uart, &t) == 0)
@@ -183,7 +194,7 @@ static int uart_open(void)
       return -errno;
     }
 
-#ifdef CONFIG_SERIAL_TERMIOS
+#if defined(CONFIG_SERIAL_TERMIOS) && !defined(CONFIG_FPC_NETCOP_SPI)
   struct termios t;
 
   if (tcgetattr(fd, &t) == 0)
@@ -946,6 +957,9 @@ int main(int argc, FAR char *argv[])
   cfg.boot_id     = (uint32_t)(ts.tv_nsec ^ (ts.tv_sec << 12) ^
                                (uintptr_t)g_ncd) | 1;
   cfg.baud_target = CONFIG_NETCOP_BAUD;
+#ifdef CONFIG_FPC_NETCOP_SPI
+  cfg.baud_initial = NC_SPI_HZ_INITIAL;
+#endif
 
   memset(&port, 0, sizeof(port));
   port.write    = port_write;

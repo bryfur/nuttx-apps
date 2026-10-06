@@ -9,7 +9,8 @@ config NETUTILS_NETCOP
 	depends on NET_USRSOCK && NET_USRSOCK_DEVICE
 	---help---
 		netcopd makes ordinary sockets work through the fpc's network
-		coprocessor (a XIAO ESP32-C6 on a UART, fpc/docs/netcop.md):
+		coprocessor (a XIAO ESP32-C6 or -S3 on SPI0 or a UART,
+		fpc/docs/netcop.md):
 		WiFi, TLS and SSH done by the coprocessor, its BLE keyboards,
 		mice and game pads into /dev/vinput (fpc/drivers/netcop).  The
 		library (netutils/netcop.h) gives programs TLS on a socket, SSH
@@ -18,16 +19,24 @@ config NETUTILS_NETCOP
 if NETUTILS_NETCOP
 
 config NETCOP_DEVPATH
-	string "The coprocessor's UART"
+	string "The coprocessor's UART, or its SPI link"
+	default "/dev/netcop" if FPC_NETCOP_SPI
 	default "/dev/ttyS0"
 
 config NETCOP_BAUD
-	int "Baud rate asked for once the link is up (0: stay at 115200)"
+	int "Speed asked for once the link is up (0: stay at the first)"
+	default 20000000 if FPC_NETCOP_SPI
 	default 3000000
+	---help---
+		UART: the baud rate (the link starts at 115200).  SPI
+		(FPC_NETCOP_SPI): the clock in Hz (the link starts at 10 MHz;
+		the coprocessor takes up to 40 MHz).  A speed that fails soon
+		after the switch is halved at the next try.
 
 config NETCOP_FLOWCONTROL
 	bool "RTS/CTS flow control on the UART"
 	default y
+	depends on !FPC_NETCOP_SPI
 
 config NETCOP_WINDOW
 	int "Receive window per socket (bytes, in the heap)"
