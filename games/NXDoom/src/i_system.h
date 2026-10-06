@@ -99,8 +99,8 @@ void i_error(const char *error, ...) NORETURN PRINTF_ATTR(1, 2);
  * Name: i_exit
  *
  * Description:
- *   End the game with this exit code (i_main.c: the program's memory is
- *   given back; it does not return).  i_exit_error() says why first.
+ *   End the game and free its memory (i_main.c); does not return.
+ *   i_exit_error() reports why first.
  *
  ****************************************************************************/
 

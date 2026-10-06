@@ -38,31 +38,14 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-/* A game in a window of the FPC desktop (apps/graphics/fpcdesk).
- *
- * The desktop owns the window: its title bar, its place among the others,
- * and how pixels get to the GPU (docs/desktop.md).  The game is a task of
- * its own, started by the desktop with DESKGAME_ARG and the session's
- * address among its arguments.  It:
- *
- *   - attaches to the session (deskgame_attach()), saying how big its
- *     frames are;
- *   - renders frames of 8-bit pixels with a palette of 256 colours and
- *     hands each one over (deskgame_frame()): the desktop scales it to the
- *     window (by whole numbers: 320 x 200 is 640 x 400 in a new window),
- *     and sends only the rows and columns that changed;
- *   - once a tic, calls deskgame_wait(), which holds it while its window
- *     is not the active one (or is minimised) and says when to quit (the
- *     window has been closed);
- *   - reads its input with deskgame_input(): key events (nxkeys.h: every
- *     press and release, the modifiers), mouse movement and buttons over
- *     the window, and DESKGAME_FOCUS when the window stops being the
- *     active one (keys held are then to be released);
- *   - may show a line of text in the window before its first frame
- *     (deskgame_status(): loading, an error);
- *   - detaches when it ends (deskgame_detach()), with an error message or
- *     NULL.  Without an error the desktop closes the window; with one it
- *     shows it there.
+/* A game in a window of the FPC desktop (apps/graphics/fpcdesk).  The
+ * desktop owns the window and gets the pixels to the GPU; the game is a
+ * task it starts with DESKGAME_ARG and the session's address in argv.
+ * The game attaches, hands over 8-bit frames with a 256-colour palette
+ * (the desktop scales them by whole numbers and sends only what changed),
+ * calls deskgame_wait() once a tic (held while the window is inactive,
+ * -1 when it was closed), reads keys and mouse with deskgame_input()
+ * (DESKGAME_FOCUS: release held keys), and detaches when it ends.
  */
 
 #define DESKGAME_ARG          "-deskgame"
@@ -123,9 +106,8 @@ FAR struct deskgame_s *deskgame_attach(int argc, FAR char *argv[],
  * Name: deskgame_frame
  *
  * Description:
- *   A new frame: width x height palette indices, row by row, and the
- *   palette (256 x R, G, B), or NULL if it has not changed.  Both are
- *   copied; the desktop draws the latest frame when it can.
+ *   A frame of width x height palette indices and the palette (256 x RGB,
+ *   NULL: unchanged).  Both are copied; the desktop draws the latest.
  *
  ****************************************************************************/
 
@@ -171,8 +153,7 @@ void deskgame_status(FAR struct deskgame_s *g, FAR const char *text);
  * Name: deskgame_detach
  *
  * Description:
- *   The game has ended, with an error (shown in the window) or NULL (the
- *   window closes).  g is not to be used again.
+ *   The game has ended: error is shown in the window, NULL closes it.
  *
  ****************************************************************************/
 

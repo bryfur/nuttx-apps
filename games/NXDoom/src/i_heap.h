@@ -14,9 +14,8 @@
  * GNU General Public License for more details.
  *
  * DESCRIPTION:
- *   The game's own heap (CONFIG_GAMES_NXDOOM_HEAPSIZE): included before
- *   every source file (the Makefile's -include), it sends the game's
- *   allocations there (i_main.c).
+ *   Included in every source file (-include): sends the game's
+ *   allocations to its own heap (CONFIG_GAMES_NXDOOM_HEAPSIZE, i_main.c).
  *
  ****************************************************************************/
 
@@ -27,7 +26,7 @@
 
 #if defined(CONFIG_GAMES_NXDOOM_HEAPSIZE) && CONFIG_GAMES_NXDOOM_HEAPSIZE > 0
 
-/* The declarations first, as they are; then the calls go elsewhere */
+/* Declare the real ones first, then redirect the calls */
 
 #include <stdlib.h>
 #include <string.h>

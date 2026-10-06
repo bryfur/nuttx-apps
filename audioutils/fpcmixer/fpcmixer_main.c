@@ -3,19 +3,17 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * mixer: the FPC's audio mixer (fpc/drivers/audio, nuttx/audio/fpc_mixer.h)
- * from the shell, and test sounds through it.
+ * mixer: the FPC's audio mixer (nuttx/audio/fpc_mixer.h) from the shell,
+ * and test sounds through it.
  *
  *   mixer                        what is playing, the volumes
  *   mixer master [N|+N|-N]       the master volume, percent
  *   mixer mute [on|off|toggle]
  *   mixer level NAME N           an application's level, percent
  *   mixer tone FREQ MS [RATE [CH [BITS [AMP [NAME [VOL]]]]]]
- *                                a sine of FREQ Hz for MS ms through a free
- *                                channel's write(): at RATE Hz (48000), CH
- *                                channels (2), BITS bits (16), peak AMP
- *                                (10000, of 32767), named NAME ("tone"),
- *                                its own volume VOL percent (100)
+ *                                a sine through a free channel; defaults
+ *                                48000 Hz, 2 ch, 16 bits, peak 10000,
+ *                                "tone", volume 100 %
  *   mixer wav FILE [NAME]        a WAV file through a free channel
  *   mixer watch [N]              a line each time the state changes
  ****************************************************************************/
@@ -39,9 +37,7 @@
  * Private Functions
  ****************************************************************************/
 
-/* sin(x), without libm: reduced to [-pi/2, pi/2], then a polynomial
- * (errors below 1e-6)
- */
+/* sin(x) without libm: reduced to [-pi/2, pi/2], then a polynomial */
 
 static double msin(double x)
 {
@@ -81,9 +77,7 @@ static int chan_open(unsigned int rate, int nch, int bits,
           continue;
         }
 
-      /* In use (it does not offer itself), or taken meanwhile (the name
-       * is a claim on it)
-       */
+      /* Skip one in use; the name claims it (another mixer may race) */
 
       memset(&desc, 0, sizeof(desc));
       desc.caps.ac_len     = sizeof(struct audio_caps_s);
@@ -154,10 +148,6 @@ static int write_all(int fd, const uint8_t *p, size_t n)
   return 0;
 }
 
-/* (Buffers on the stack: several mixers may run at once, and a flat build
- * shares their static data)
- */
-
 static int cmd_tone(int argc, char **argv)
 {
   uint8_t buf[1024];
@@ -177,9 +167,8 @@ static int cmd_tone(int argc, char **argv)
   int n0;
   int fd;
 
-  /* A table of one period and a phase that steps through it (integer
-   * work a frame: the CPU has no double-precision unit, and msin() a
-   * frame cannot keep up with 48 kHz)
+  /* One period in a table, stepped by a phase: msin() per frame can't
+   * keep up with 48 kHz (no double-precision FPU)
    */
 
   for (n0 = 0; n0 < 1024; n0++)

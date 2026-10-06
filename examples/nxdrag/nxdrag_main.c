@@ -3,18 +3,14 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Window drag benchmark: open a RAM-backed framed window on the running NX
- * server (as twm4nx's windows are), put it on top, then move it N steps of
- * (dx, dy), each followed by nxtk_synch() so that the step is timed until
- * the server has finished it.  Or scroll its content as a terminal does:
- * move it all up a text line, then fill the line uncovered.
+ * Window drag benchmark: a RAM-backed framed window on the running NX
+ * server, moved N steps of (dx, dy), each timed to nxtk_synch().  scroll
+ * scrolls its content a text line at a time; text draws one glyph bitmap
+ * per character cell, as NxTerm does.
  *
  *   nxdrag [steps [dx [dy [w [h]]]]]     defaults: 60 8 4 500 350
  *   nxdrag scroll [steps [line]]         defaults: 60 16
  *   nxdrag text [screens]                defaults: 10
- *
- * text fills the window with 8 x 16 two-colour glyph bitmaps, one
- * nxtk_bitmapwindow() per character cell, as NxTerm draws text.
  ****************************************************************************/
 
 #include <nuttx/config.h>

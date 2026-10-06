@@ -5,14 +5,10 @@
  *
  * DESCRIPTION:
  *  Doom's sound effects through the FPC's audio mixer
- *  (CONFIG_GAMES_NXDOOM_FPCSOUND, nuttx/audio/fpc_mixer.h): Doom's
- *  channels (its sounds are 8-bit unsigned lumps, 11025 Hz mostly) mixed
- *  here into 11025 Hz stereo 16-bit, each with its volume and stereo
- *  separation, and written into a channel of the mixer named "Doom" (the
- *  mixer converts the rate, applies the volumes and plays it over HDMI).
- *  A thread of its own keeps the channel about 60 ms ahead of what the
- *  mixer has played (the frames it reports for the channel), so a sound
- *  starts soon after the game asks for it.
+ *  (nuttx/audio/fpc_mixer.h): its 8-bit lumps mixed here into 11025 Hz
+ *  stereo 16-bit and written to a mixer channel named "Doom".  A thread
+ *  keeps the channel about 60 ms ahead of what the mixer has played, so a
+ *  sound starts soon after the game asks for it.
  *
  ****************************************************************************/
 
@@ -237,9 +233,8 @@ static void fpc_mix(int n)
   pthread_mutex_unlock(&g_fpc.lock);
 }
 
-/* The thread: the channel kept FPC_AHEAD frames ahead of the mixer.  The
- * mixer plays silence while nothing sounds (the channel is written all
- * along: a stream, not sounds one by one).
+/* Keeps the channel FPC_AHEAD frames ahead of the mixer, writing silence
+ * when nothing sounds: one continuous stream
  */
 
 static void *fpc_thread(void *arg)
@@ -307,7 +302,7 @@ static void i_fpc_shutdown_sound(void)
   if (g_fpc.running)
     {
       g_fpc.quit = true;
-      ioctl(g_fpc.fd, MIXIOC_FLUSH, 0);          /* A write that waits */
+      ioctl(g_fpc.fd, MIXIOC_FLUSH, 0);          /* Wakes a waiting write */
       pthread_join(g_fpc.thread, NULL);
       close(g_fpc.fd);
       close(g_fpc.mixfd);
@@ -376,7 +371,7 @@ static int i_fpc_start_sound(sfxinfo_t *sfxinfo, int channel, int vol,
 
   lump = sfxinfo->lumpnum;
   size = w_lump_length(lump);
-  data = w_cache_lump_num(lump, PU_STATIC);      /* Kept: others read it */
+  data = w_cache_lump_num(lump, PU_STATIC);      /* Other channels may share it */
   if (size < 8 || data[0] != 3 || data[1] != 0)
     {
       return -1;

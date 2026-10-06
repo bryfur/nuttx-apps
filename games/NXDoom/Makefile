@@ -19,8 +19,7 @@ PCSOUNDSRCDIR = pcsound
 CFLAGS += -I$(COMMONSRCDIR) -I$(DOOMSRCDIR) -I$(TEXTSCREENSRCDIR)
 CFLAGS += -I$(PCSOUNDSRCDIR)
 
-# The game's own heap (CONFIG_GAMES_NXDOOM_HEAPSIZE): every file allocates
-# through it
+# Every file allocates from the game's own heap (CONFIG_GAMES_NXDOOM_HEAPSIZE)
 
 CFLAGS += -include $(COMMONSRCDIR)/i_heap.h
 
@@ -223,10 +222,8 @@ endif
 
 MAINSRC  = $(COMMONSRCDIR)/i_main.c
 
-# Start afresh every time (CONFIG_GAMES_NXDOOM_RESTART): the game's objects
-# (all but i_main.c, which restores the rest) are linked into one, whose
-# data and bss are one block each (nxdoom.ld), and that goes into the
-# library instead of them
+# CONFIG_GAMES_NXDOOM_RESTART: all objects but i_main.c linked into one
+# with a single data and bss block (nxdoom.ld), which i_main.c restores
 
 ifeq ($(CONFIG_GAMES_NXDOOM_RESTART),y)
 GAMESRCS  := $(CSRCS)

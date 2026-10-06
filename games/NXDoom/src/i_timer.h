@@ -68,7 +68,7 @@ void i_init_timer(void);
  * Name: i_skip_time
  *
  * Description:
- *  Leave ms out of the game's clock (it was held).
+ *  Leave ms the game was paused out of its clock.
  ****************************************************************************/
 
 void i_skip_time(int ms);

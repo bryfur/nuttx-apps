@@ -92,8 +92,8 @@ int i_get_time_ms(void)
  * Name: i_skip_time
  *
  * Description:
- *  The game was held for ms (its window was not active): the clock leaves
- *  that out, so that the game does not run the tics it missed.
+ *  Leave ms the game was paused out of its clock, so that it does not
+ *  catch up on the tics it missed.
  ****************************************************************************/
 
 void i_skip_time(int ms)

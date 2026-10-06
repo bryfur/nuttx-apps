@@ -214,8 +214,8 @@ static boolean clear_cache(int size)
  * Name: z_purge_cache
  *
  * Description:
- *  Let go of cached blocks (the oldest first) worth size bytes, for an
- *  allocation that failed; *purged counts what went.
+ *  Free cached blocks (oldest first) worth size bytes after a failed
+ *  allocation; adds the bytes freed to *purged.
  *
  * Return:
  *  True if any blocks were freed.
