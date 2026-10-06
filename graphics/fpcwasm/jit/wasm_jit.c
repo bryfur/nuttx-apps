@@ -163,7 +163,24 @@ typedef struct cold_s
   uint32_t k;                     /* The offset added (ip = ra + k) */
   int8_t ra;
   uint8_t size;
+  uint8_t mode;                   /* COLD_* */
 } cold_t;
+
+enum
+{
+  COLD_EXACT,                     /* r9 the size - 3: ra (+ k) exactly */
+  COLD_GUARD,                     /* r9 the size - JIT_GUARD: ra + k */
+  COLD_GUARD_IP                   /* ... the address in ip (ra + k) */
+};
+
+/* r9 is the memory's size less JIT_GUARD where the memory has at least
+ * 64 KB when the module is compiled (it only grows): an access at ra +
+ * k of size bytes, k + size <= JIT_GUARD, is in when ra < r9 (cmp, bhs:
+ * no adding of k, with its carry, first); ra at or past r9 is checked
+ * exactly out of line (the memory's last JIT_GUARD bytes)
+ */
+
+#define JIT_GUARD    4096
 
 typedef struct jc_s
 {
@@ -180,6 +197,7 @@ typedef struct jc_s
   uint32_t exc_pos;               /* Unwinding with the exception set */
   uint32_t mem_off;               /* The memory instance (from r11) */
   bool has_mem;
+  uint32_t guard;                 /* JIT_GUARD, or 0 (r9 the size - 3) */
   uint8_t *may_grow;              /* Each function: may grow the memory */
   far_t *calls;                   /* BLs to functions (mb positions) */
   uint32_t ncalls;
@@ -760,6 +778,22 @@ static void br_to(jc_t *c, int l)            /* b.w label */
 
   e32(&c->fb, 0xf000, 0x9000);
   add_fix(c, l, F_B, 0, pos, 0);
+}
+
+/* b.n to a label bound already, when it is near enough; else b.w */
+
+static void br_back(jc_t *c, int l)
+{
+  int32_t off = c->labels[l].pos >= 0 ?
+                c->labels[l].pos - (int32_t)(c->fb.len + 4) : 1 << 20;
+
+  if (off >= -2048 && off <= 2046)
+    {
+      e16(&c->fb, 0xe000 | ((off >> 1) & 0x7ff));
+      return;
+    }
+
+  br_to(c, l);
 }
 
 static void bcc_to(jc_t *c, int cond, int l)  /* b<cond>.w label */
@@ -2567,6 +2601,40 @@ static void op_end(jc_t *c)
  * bytes, the last 3 of the memory, are checked exactly out of line.
  */
 
+/* A branch (flags set: HS) to an exact check out of line, which comes
+ * back having changed nothing
+ */
+
+static void add_cold(jc_t *c, int mode, int ra, uint32_t k, uint32_t size)
+{
+  cold_t *cs;
+  uint32_t n;
+  uint32_t kv;
+  __typeof__(c->bc) bc;
+
+  if (!GROW(c, c->cold, c->ncold, c->coldcap))
+    {
+      return;
+    }
+
+  cs = &c->cold[c->ncold++];
+  cs->entry = new_label(c);
+  cs->back  = new_label(c);
+  cs->ra    = (int8_t)ra;
+  cs->size  = (uint8_t)size;
+  cs->k     = k;
+  cs->mode  = (uint8_t)mode;
+  bcc_to(c, CC_HS, cs->entry);
+
+  n  = c->nbc;
+  kv = c->kvalid;
+  memcpy(bc, c->bc, sizeof(bc));
+  lbind(c, cs->back);
+  memcpy(c->bc, bc, sizeof(bc));
+  c->nbc = n;
+  c->kvalid = kv;
+}
+
 static void mem_addr(jc_t *c, val_t *addr, uint32_t offset, uint32_t size,
                      int *base, int *reg, int *imm)
 {
@@ -2633,6 +2701,63 @@ static void mem_addr(jc_t *c, val_t *addr, uint32_t offset, uint32_t size,
         }
     }
 
+  if (c->guard != 0 && (uint64_t)offset + size <= c->guard)
+    {
+      /* ra < r9: [ra, ra + JIT_GUARD) is in */
+
+      t_cmp(&c->fb, ra, JR_LIM4);
+      add_cold(c, COLD_GUARD, ra, offset, size);
+      if (offset == 0 && size != 8)
+        {
+          *reg = ra;
+        }
+      else
+        {
+          t_dp_reg(&c->fb, DP_ADD, 0, R_IP, JR_MEM, ra, SH_LSL, 0);
+          *base = R_IP;
+          *reg  = -1;
+          *imm  = (int)offset;
+        }
+
+      goto proved;
+    }
+
+  if (c->guard != 0)
+    {
+      /* A large offset: ip = ra + offset (past 4 GB: out), then ip < r9 */
+
+      if ((uint64_t)offset + size > 0xffffffffu)
+        {
+          trap_if(c, CC_AL, JT_OOB);
+          *reg = ra;
+          return;
+        }
+
+      enc = t_modimm(offset);
+      if (enc >= 0)
+        {
+          t_dp_imm(&c->fb, DP_ADD, 1, R_IP, ra, enc);       /* adds */
+        }
+      else
+        {
+          t_movi(&c->fb, R_IP, offset);
+          t_dp_reg(&c->fb, DP_ADD, 1, R_IP, ra, R_IP, SH_LSL, 0);
+        }
+
+      trap_if(c, CC_HS, JT_OOB);
+      t_cmp(&c->fb, R_IP, JR_LIM4);
+      add_cold(c, COLD_GUARD_IP, R_IP, 0, size);
+      *reg = R_IP;
+      if (size == 8)
+        {
+          e16(&c->fb, 0x4400 | 0x80 | JR_MEM << 3 | (R_IP & 7));
+          *base = R_IP;                         /* (add ip, r10) */
+          *reg  = -1;
+        }
+
+      goto proved;
+    }
+
   if (k == 0)
     {
       t_cmp(&c->fb, ra, JR_LIM4);
@@ -2660,29 +2785,9 @@ static void mem_addr(jc_t *c, val_t *addr, uint32_t offset, uint32_t size,
     {
       trap_if(c, CC_HS, JT_OOB);
     }
-  else if (GROW(c, c->cold, c->ncold, c->coldcap))
+  else
     {
-      cold_t *cs = &c->cold[c->ncold++];
-
-      cs->entry = new_label(c);
-      cs->back  = new_label(c);
-      cs->ra    = (int8_t)ra;
-      cs->size  = (uint8_t)size;
-      cs->k     = (uint32_t)k;
-      bcc_to(c, CC_HS, cs->entry);
-      {
-        /* (the exact check comes back here having changed nothing) */
-
-        uint32_t n = c->nbc;
-        uint32_t kv = c->kvalid;
-        __typeof__(c->bc) bc;
-
-        memcpy(bc, c->bc, sizeof(bc));
-        lbind(c, cs->back);
-        memcpy(c->bc, bc, sizeof(bc));
-        c->nbc = n;
-        c->kvalid = kv;
-      }
+      add_cold(c, COLD_EXACT, ra, (uint32_t)k, size);
     }
 
   if (size == 8)
@@ -2695,6 +2800,7 @@ static void mem_addr(jc_t *c, val_t *addr, uint32_t offset, uint32_t size,
 
   /* What this proved, of a local's register */
 
+proved:
   if (addr->kind == V_LOCAL && c->lkind[addr->local] == L_CORE)
     {
       uint32_t end = offset + size;     /* (no wrap: k <= 2^32 - 1) */
@@ -2725,6 +2831,35 @@ static void emit_cold(jc_t *c)
     {
       cold_t *cs = &c->cold[i];
       int ea = cs->k ? R_IP : cs->ra;
+
+      if (cs->mode == COLD_GUARD)
+        {
+          /* ra + k + size <= the size: ra <= size - k - size (the size is
+           * at least 64 KB: no borrow)
+           */
+
+          lbind(c, cs->entry);
+          t_addi(&c->fb, R_IP, JR_LIM4, (int32_t)(c->guard - cs->k -
+                                                   cs->size));
+          t_cmp(&c->fb, cs->ra, R_IP);      /* (r9 + guard: the size) */
+          trap_if(c, CC_HI, JT_OOB);
+          br_back(c, cs->back);
+          continue;
+        }
+
+      if (cs->mode == COLD_GUARD_IP)
+        {
+          lbind(c, cs->entry);
+          e32(&c->fb, 0xf84d, 0xed08);             /* str lr, [sp, #-8]! */
+          t_ldst(&c->fb, LS_LDR, R_LR, JR_INST, c->mem_off +
+                 offsetof(WASMMemoryInstance, memory_data_size));
+          t_addi(&c->fb, R_LR, R_LR, -(int32_t)cs->size);
+          t_cmp(&c->fb, R_IP, R_LR);
+          e32(&c->fb, 0xf85d, 0xeb08);             /* ldr lr, [sp], #8 */
+          trap_if(c, CC_HI, JT_OOB);
+          br_to(c, cs->back);
+          continue;
+        }
 
       lbind(c, cs->entry);
       if (cs->k)
@@ -7319,6 +7454,19 @@ bool wasm_jit_attach(wasm_module_inst_t module_inst, unsigned flags,
     {
       c.has_mem = true;
       c.mem_off = (uint32_t)((uint8_t *)inst->memories[0] - (uint8_t *)inst);
+      if (inst->memories[0]->memory_data_size >= 65536)
+        {
+          c.guard = JIT_GUARD;      /* (the memory only grows) */
+        }
+
+#ifndef __NuttX__
+      if (getenv("WASM_JIT_EXACT") != NULL)
+        {
+          c.guard = 0;              /* (the harness: the other way too) */
+        }
+#endif
+
+      jm->guard = c.guard;
     }
 
   for (i = 0; i < mod->type_count; i++)

@@ -148,7 +148,10 @@ void jit_set_lim4(WASMModuleInstance *inst)
       size = 0xffffffffu;
     }
 
-  inst->ext_words[EXT_LIM4] = size >= 4 ? (uint32_t)size - 3 : 0;
+  jit_module_t *jm = inst->e->ext_data;
+  uint32_t g = jm != NULL && jm->guard != 0 ? jm->guard : 3;
+
+  inst->ext_words[EXT_LIM4] = size > g ? (uint32_t)size - g : 0;
 }
 
 static uint8_t *mem_check(WASMModuleInstance *inst, uint32_t addr,

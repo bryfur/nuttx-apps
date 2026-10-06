@@ -32,7 +32,8 @@
 #define EXT_FUNCS    3     /* jit_fent_t[]: every function's code, type */
 #define EXT_AUXB     4     /* exec_env->aux_stack_boundary */
 #define EXT_AUXT     5     /* exec_env->aux_stack_bottom */
-#define EXT_LIM4     6     /* The memory's size - 3 (0 under 4 bytes) */
+#define EXT_LIM4     6     /* The memory's size - 3, or - JIT_GUARD (0
+                                 * under that): r9 (jit_module_t.guard) */
 
 #define EXT_OFF(n)   (offsetof(WASMModuleInstance, ext_words) + 4 * (n))
 
@@ -101,6 +102,7 @@ typedef struct jit_module_s
   uint32_t *loops;                /* Every loop's head (a nop.w, aligned) */
   uint32_t nloops;
   uint32_t exc_off;               /* Unwinding with the exception set */
+  uint32_t guard;                 /* r9 = the size - guard (0: - 3) */
   struct wasm_jit_stats_s stats;
 } jit_module_t;
 

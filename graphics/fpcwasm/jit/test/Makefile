@@ -11,7 +11,9 @@
 #
 #   make                       build $(OUT)/jitrun
 #   make spec                  the WebAssembly spec tests, JIT against the
-#                              interpreter and the expected results
+#                              interpreter and the expected results (the
+#                              memory's tests again with r9 the exact
+#                              limit: WASM_JIT_EXACT, a memory of 0 pages)
 #   make fuzz N=200            random modules (wasm-tools smith), JIT
 #                              against the interpreter
 #   make progs                 whole programs (progs/*.c, CoreMark; xcc's
@@ -154,6 +156,12 @@ spec: $(OUT)/jitrun
 	  $(filter-out $(patsubst %,$(TESTSUITE)/%.wast,$(SPEC_SKIP)),\
 	    $(wildcard $(TESTSUITE)/*.wast)) $(wildcard $(CURDIR)/wast/*.wast) \
 	  $(OUT)/spec/jit-big.wast
+	WASM_JIT_EXACT=1 python3 $(CURDIR)/spec.py --wast2json $(WAST2JSON) \
+	  --jitrun "$(QEMU) $(OUT)/jitrun" --out $(OUT)/spec \
+	  $(TESTSUITE)/address.wast $(TESTSUITE)/memory_trap.wast \
+	  $(TESTSUITE)/memory.wast $(TESTSUITE)/memory_grow.wast \
+	  $(TESTSUITE)/align.wast $(TESTSUITE)/load.wast $(TESTSUITE)/store.wast \
+	  $(wildcard $(CURDIR)/wast/*.wast) | tail -1
 
 N ?= 100
 fuzz: $(OUT)/jitrun
