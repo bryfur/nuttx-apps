@@ -82,6 +82,7 @@ struct wasm_app_s g_wapp;
 
 #ifdef CONFIG_ARCH_USE_TEXT_HEAP
 extern const char *g_wamr_text_section;   /* (wamr's nuttx_platform.c) */
+extern bool wasm_loader_validate_only;      /* (wamr's 0007) */
 #endif
 
 /****************************************************************************
@@ -577,6 +578,9 @@ static int run_found(FAR struct wasm_found_s *f,
   uint32_t t1;
   bool aot = false;
   bool jit = false;
+  bool validated = false;
+  bool want_jit = !o->interp && wasm_jit_supported() &&
+                  (o->jit || strcmp(f->run, "interp") != 0);
   int status = 1;
   int nargs;
   int i;
@@ -603,7 +607,12 @@ static int run_found(FAR struct wasm_found_s *f,
                                  wasm_jit_sram_fits(size)) ?
                                 ".time_critical.wasm" : ".text";
 #endif
+          /* To be compiled here: without the interpreter's translation */
+
+          validated = want_jit && !aot;
+          wasm_loader_validate_only = validated;
           module = wasm_runtime_load(buf, size, err, sizeof(err));
+          wasm_loader_validate_only = false;
           if (module != NULL)
             {
               break;
@@ -694,6 +703,35 @@ static int run_found(FAR struct wasm_found_s *f,
         {
           fprintf(stderr, "wasm: %s: not compiled (%s): interpreting\n",
                   f->name, err);
+          if (validated)
+            {
+              /* Loaded again, with the interpreter's translation */
+
+              wasm_runtime_deinstantiate(g_wapp.inst);
+              g_wapp.inst = NULL;
+              wasm_runtime_unload(module);
+              free(buf);              /* (the loader wrote into it) */
+              buf = read_file(f->path, &size);
+              module = buf != NULL ? wasm_runtime_load(buf, size, err,
+                                                       sizeof(err)) : NULL;
+              if (module == NULL)
+                {
+                  fprintf(stderr, "wasm: %s: %s\n", f->path,
+                          buf != NULL ? err : strerror(errno));
+                  free(buf);
+                  return 1;
+                }
+
+              wasm_runtime_set_wasi_args(module, dirs, ndirs, maps, 1, NULL,
+                                         0, (char **)wargv, nargs);
+              g_wapp.inst = wasm_runtime_instantiate_ex(module, &ia, err,
+                                                        sizeof(err));
+              if (g_wapp.inst == NULL)
+                {
+                  fprintf(stderr, "wasm: %s: %s\n", f->name, err);
+                  goto out_unload;
+                }
+            }
         }
     }
 

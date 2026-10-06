@@ -408,6 +408,12 @@ static uint32_t rd_u32(const uint8_t **pp)
   int sh = 0;
   uint8_t b;
 
+  if (*p < 0x80)
+    {
+      *pp = p + 1;                /* (the common case: one byte) */
+      return *p;
+    }
+
   do
     {
       b = *p++;
@@ -1115,9 +1121,12 @@ static val_t *vpush(jc_t *c, int kind, int type)
     }
 
   v = &c->vs[c->vsp];
-  memset(v, 0, sizeof(*v));
   v->kind  = (uint8_t)kind;
   v->type  = (uint8_t)type;
+  v->r     = 0;
+  v->r2    = 0;
+  v->local = 0;
+  v->c     = 0;
   v->depth = c->vsp++;
   return v;
 }

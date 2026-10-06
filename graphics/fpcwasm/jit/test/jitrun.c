@@ -33,6 +33,8 @@
 
 #define STACK_SIZE (512 * 1024)      /* The wasm stack (interpreter) */
 
+extern bool wasm_loader_validate_only;  /* (patch 0007) */
+
 /****************************************************************************
  * Instances
  ****************************************************************************/
@@ -1008,7 +1010,13 @@ static int cmd_run(int argc, char **argv)
 
   for (r = 0; r < times; r++)
     {
+      /* Compiled: loaded without the fast interpreter's translation, as
+       * the board's wasm does (again with it if the JIT refuses it)
+       */
+
+      wasm_loader_validate_only = !interp;
       m = wasm_runtime_load(buf, size, err, sizeof(err));
+      wasm_loader_validate_only = false;
       if (m == NULL)
         {
           fprintf(stderr, "jitrun: %s\n", err);
@@ -1025,11 +1033,37 @@ static int cmd_run(int argc, char **argv)
         }
 
       clock_gettime(CLOCK_MONOTONIC, &t0);
-      if (!interp && !wasm_jit_attach(inst, WASM_JIT_VERBOSE |
+      /* (JITRUN_REFUSE: as if the JIT refused the module: the reload) */
+
+      if (!interp && (getenv("JITRUN_REFUSE") != NULL ?
+                      (snprintf(err, sizeof(err), "refused"), false) :
+                      wasm_jit_attach(inst, WASM_JIT_VERBOSE |
                                       (getenv("JITRUN_MAP") != NULL ?
-                                       WASM_JIT_MAP : 0), err, sizeof(err)))
+                                       WASM_JIT_MAP : 0), err,
+                                      sizeof(err))) == false)
         {
           fprintf(stderr, "jitrun: JIT: %s\n", err);
+          wasm_runtime_deinstantiate(inst);
+          wasm_runtime_unload(m);
+          free(buf);                    /* (the loader writes into it) */
+          buf = read_file(argv[i], &size);
+          m = buf != NULL ? wasm_runtime_load(buf, size, err, sizeof(err)) :
+              NULL;
+          if (m == NULL)
+            {
+              fprintf(stderr, "jitrun: %s\n", err);
+              return 2;
+            }
+
+          wasm_runtime_set_wasi_args(m, dirs, 1, NULL, 0, NULL, 0, argv + i,
+                                     argc - i);
+          inst = m != NULL ? wasm_runtime_instantiate(m, STACK_SIZE, 0, err,
+                                                      sizeof(err)) : NULL;
+          if (inst == NULL)
+            {
+              fprintf(stderr, "jitrun: %s\n", err);
+              return 2;
+            }
         }
 
       clock_gettime(CLOCK_MONOTONIC, &t1);
