@@ -16,8 +16,9 @@ RESET = ESC + '0m'
 
 def setup(color):
     global COLOR, TTY
+    import os
     TTY = _agent.isatty()
-    COLOR = bool(color) and TTY
+    COLOR = bool(color) and TTY and not os.getenv('NO_COLOR')
 
 
 def c(code, s):
@@ -66,8 +67,8 @@ def width():
     return _agent.term_size()[0] if TTY else 100
 
 
-MARK = '▌'      # The tool line's mark (a block: the Terminal has it)
-TREE = '└'      # The result's corner
+MARK = '\u25cf'      # The tool line's mark (a bullet: the Terminal has it)
+TREE = '\u2514'      # The result's corner
 
 
 # ---------------------------------------------------------------------------
@@ -186,14 +187,14 @@ class Markdown:
                 self.setstyle()
                 return
         if st.startswith('>'):
-            self.emit(dim('│ '), 2)
+            self.emit(dim('\u2502 '), 2)
             self.indent = 2
             self.start = st[1:].lstrip()
             return
         if len(st) >= 3 and st.strip() in ('---', '***', '___') or \
                 (st.startswith('---') and st.strip('-') == ''):
             if whole or len(st) >= 3:
-                self.emit(dim('─' * min(self.w, 40)), 0)
+                self.emit(dim('\u2500' * min(self.w, 40)), 0)
                 self.skip = True
                 self.start = ''
                 return
@@ -202,7 +203,7 @@ class Markdown:
             return
         lead = len(s) - len(st)
         if len(st) > 1 and st[0] in '-*+' and st[1] == ' ':
-            self.emit(' ' * lead + accent('-') + ' ', lead + 2)
+            self.emit(' ' * lead + accent('\u2022') + ' ', lead + 2)
             self.indent = lead + 2
             self.start = st[2:]
             return
@@ -326,7 +327,19 @@ class Markdown:
 # ---------------------------------------------------------------------------
 # Tool lines
 
+# What was shown last ('text', 'tool'): a blank line between the two
+
+LAST = [None]
+
+
+def gap(kind):
+    if LAST[0] is not None and LAST[0] != kind:
+        out('\n')
+    LAST[0] = kind
+
+
 def tool_line(name, arg):
+    gap('tool')
     out(accent(MARK) + ' ' + bold(name) + (dim('(') + arg + dim(')') if arg else '') + '\n')
 
 
@@ -371,11 +384,25 @@ def note(msg):
 # ---------------------------------------------------------------------------
 # Questions
 
+def read_line():
+    # A line of input that is not a terminal (a file): None at its end.
+    # (sys.stdin.readline() never ends there: the port's input gives
+    # Ctrl-D for ever)
+    chars = []
+    while True:
+        ch = sys.stdin.read(1)
+        if not ch or ch == '\x04':
+            return ''.join(chars) if chars else None
+        if ch == '\n' or ch == '\r':
+            return ''.join(chars)
+        chars.append(ch)
+
+
 def ask_key(prompt, keys):
     # One key of keys (lower case); Enter is the first, Esc and Ctrl-C 'n'
     out(prompt)
     if not TTY:
-        ln = sys.stdin.readline()
+        ln = read_line() or ''
         k = ln.strip().lower()[:1] or keys[0]
         out(k + '\n')
         return k if k in keys else 'n'
@@ -396,10 +423,9 @@ def ask_key(prompt, keys):
 def ask_line(prompt, default='', mask=False):
     if not TTY:
         out(prompt)
-        ln = sys.stdin.readline()
-        if not ln:
+        ln = read_line()
+        if ln is None:
             raise EOFError
-        ln = ln.rstrip('\n')
         out((('*' * len(ln)) if mask else ln) + '\n')
         return ln or default
     s = _agent.readline(prompt, None, mask=mask, text='' if mask else default)

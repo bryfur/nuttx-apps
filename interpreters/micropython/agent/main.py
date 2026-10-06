@@ -242,10 +242,10 @@ def repl(s, cfg):
                                        cont='  ', completions=COMMANDS)
             else:
                 ui.out('> ')
-                text = sys.stdin.readline()
-                if not text:
+                text = ui.read_line()
+                if text is None:
                     raise EOFError
-                ui.out(text)
+                ui.out(text + '\n')
         except KeyboardInterrupt:
             interrupts += 1
             if interrupts >= 2:
@@ -267,9 +267,26 @@ def repl(s, cfg):
                 _agent.flush_input()
                 ui.out(ui.yellow('Interrupted') + '\n')
             continue
-        s.ask(text)
+        guarded(s.ask, text)
         ui.line()
     s.pool.close()
+
+
+def guarded(f, *args):
+    # A bug in the agent shown, not the end of the session
+    try:
+        return f(*args)
+    except KeyboardInterrupt:
+        _agent.flush_input()
+        ui.out(ui.yellow('Interrupted') + '\n')
+    except MemoryError:
+        import gc
+        gc.collect()
+        ui.error('out of memory (/compact or /clear, or a bigger AGENT_HEAP)')
+    except Exception as e:
+        ui.error('internal error: %s: %s' % (type(e).__name__, e))
+        sys.print_exception(e)
+    return False
 
 
 def tool_args(words):
@@ -378,7 +395,7 @@ def run():
         sys.exit(run_tool(s, tool, tool_arg))
 
     if prompt is not None:
-        ok = s.ask(prompt)
+        ok = guarded(s.ask, prompt)
         s.pool.close()
         if not ok:
             sys.exit(1)

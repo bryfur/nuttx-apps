@@ -17,7 +17,7 @@ from . import util
 
 class ApiError(Exception):
     def __init__(self, msg, status=0, retry=False, wait=0):
-        Exception.__init__(self, msg)
+        super().__init__(msg)
         self.status = status
         self.retry = retry
         self.wait = wait

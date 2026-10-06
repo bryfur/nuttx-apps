@@ -80,6 +80,7 @@ class Session:
         # One request of the user's, to the end of the model's work.  True
         # when it ended normally.
         self.maybe_compact()
+        ui.LAST[0] = None
         self.add_user([{'type': 'text', 'text': text}])
         _agent.interrupt_keys(True)
         try:
@@ -123,6 +124,7 @@ class Session:
                         ui.out('\n' if ui.TTY else '')
                         st['thinking'] = False
                     if st['md'] is None:
+                        ui.gap('text')
                         st['md'] = ui.Markdown()
                     st['md'].feed(data)
                 elif kind == 'thinking':
@@ -237,9 +239,13 @@ class Session:
             except KeyboardInterrupt:
                 ok = False
             if not ok:
-                results.append(result(blk, 'The user refused this call. Stop and ask the user '
-                                           'what to do instead.', True))
-                stop = True
+                if self.interactive:
+                    results.append(result(blk, 'The user refused this call. Stop and ask the '
+                                               'user what to do instead.', True))
+                    stop = True
+                else:
+                    results.append(result(blk, 'This call was refused: it is not allowed '
+                                               'without asking, and nobody can be asked.', True))
                 continue
             self.spinner.start('Running')
             error = False
