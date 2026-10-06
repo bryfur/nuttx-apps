@@ -1314,6 +1314,26 @@ static NativeSymbol g_natives[] =
   N(music_playing,  "()i"),
 };
 
+FAR void *wasm_app_buf(wasm_exec_env_t env, uint32_t off, uint64_t size)
+{
+  return app_buf(env, off, size);
+}
+
+uint64_t wasm_rect_size(int32_t w, int32_t h, int32_t stride, int esize)
+{
+  return rect_size(w, h, stride, esize);
+}
+
+int wasm_app_path(FAR const char *s, int len, FAR char *out, size_t size)
+{
+  return app_path(s, len, out, size);
+}
+
+int wasm_fpc_key_code(uint8_t code)
+{
+  return key_code(code);
+}
+
 bool wasm_fpc_register(void)
 {
   return wasm_runtime_register_natives("env", g_natives,

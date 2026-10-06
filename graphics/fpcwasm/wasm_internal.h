@@ -19,7 +19,7 @@
 
 #include "wasm_export.h"
 
-#define WASM_API_VERSION   1              /* sdk/fpc_wasm.h's FPC_API_VERSION */
+#define WASM_API_VERSION   2              /* sdk/fpc_wasm.h's FPC_API_VERSION */
 
 /* The app that runs (one a task: the runtime is a program of its own) */
 
@@ -37,6 +37,7 @@ struct wasm_app_s
   bool trapped;                           /* A callback trapped */
   int game_w;                             /* For an app with no _start */
   int game_h;
+  int windows;                            /* Its windows (fpc_win_open()) */
 };
 
 extern struct wasm_app_s g_wapp;
@@ -46,6 +47,25 @@ extern struct wasm_app_s g_wapp;
 bool wasm_fpc_register(void);
 void wasm_fpc_game_end(void);             /* Free what the game held */
 int  wasm_fpc_run_game(int w, int h);     /* fpc_game_run(), from the host */
+
+/* ... what wasm_win.c shares with it: the app's buffer of size bytes at
+ * off (NULL: outside the linear memory, a trap), a rectangle's bytes (0:
+ * wrong numbers), a path of the app's own directory, a key's FPC_KEY_*
+ * code (-1: none)
+ */
+
+FAR void *wasm_app_buf(wasm_exec_env_t env, uint32_t off, uint64_t size);
+uint64_t wasm_rect_size(int32_t w, int32_t h, int32_t stride, int esize);
+int  wasm_app_path(FAR const char *s, int len, FAR char *out, size_t size);
+int  wasm_fpc_key_code(uint8_t code);
+
+/* wasm_win.c: the "env" module's fpc_win_* functions (windows on the
+ * desktop)
+ */
+
+bool wasm_win_register(void);
+void wasm_win_end(void);                  /* Its windows closed */
+bool wasm_win_any_alive(void);            /* One not closed by the user */
 
 /* wasm_image.c: an image file's bytes into a new fpcgame image */
 

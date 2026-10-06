@@ -62,6 +62,8 @@
 #define WASM_MAX_FILE       (8 * 1024 * 1024)
 #define WASM_DEF_MAXMEM_KB  4096          /* The linear memory's limit */
 #define WASM_WATCHDOG_S     5
+#define WASM_ORPHAN_S       3              /* Windows all closed, still
+                                            * running: ended after this */
 #define WASM_MAX_DIRS       4
 
 /* The watchdog's stack: it calls syslog() (and the simulator's threads
@@ -423,7 +425,7 @@ static bool runtime_init(void)
     }
 
   wasm_runtime_set_log_level(WASM_LOG_LEVEL_ERROR);
-  if (!wasm_fpc_register())
+  if (!wasm_fpc_register() || !wasm_win_register())
     {
       fprintf(stderr, "wasm: the fpc functions did not register\n");
       wasm_runtime_destroy();
@@ -511,6 +513,7 @@ static FAR void *watchdog(FAR void *arg)
   int limit = (int)(intptr_t)arg * 10;
   uint32_t last = g_wapp.beat;
   int still = 0;
+  int orphan = 0;
 
   while (!g_wdstop)
     {
@@ -537,6 +540,26 @@ static FAR void *watchdog(FAR void *arg)
         {
           still = 0;
           last  = g_wapp.beat;
+        }
+
+      /* Its windows all closed by the user, and it still running (not
+       * reading their events): ended as a program whose windows have gone
+       */
+
+      if (g_wapp.windows > 0 && !wasm_win_any_alive())
+        {
+          if (++orphan >= WASM_ORPHAN_S * 10 && !g_wapp.killed)
+            {
+              syslog(LOG_INFO, "wasm %s: its windows closed: ended\n",
+                     g_wapp.name);
+              g_wapp.killed = true;
+              wasm_runtime_terminate(g_wapp.inst);
+              wasm_jit_interrupt(g_wapp.inst);
+            }
+        }
+      else
+        {
+          orphan = 0;
         }
     }
 
@@ -854,6 +877,7 @@ static int run_found(FAR struct wasm_found_s *f,
   g_wapp.env = NULL;
 
 out_deinst:
+  wasm_win_end();
   wasm_jit_detach(g_wapp.inst);
   wasm_runtime_deinstantiate(g_wapp.inst);
   g_wapp.inst = NULL;

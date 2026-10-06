@@ -971,7 +971,9 @@ static bool client_src_ok(struct client_win_s *c, FAR void *src)
   return false;
 }
 
-/* One of the program's surfaces, or -1 */
+/* One of the program's surfaces, or -1 (h: its handle as a command's
+ * 32-bit argument carries it: its low word in the 64-bit simulators)
+ */
 
 static int client_surface(struct client_win_s *c, uintptr_t h)
 {
@@ -979,7 +981,7 @@ static int client_surface(struct client_win_s *c, uintptr_t h)
 
   for (i = 0; h != 0 && i < DESKWIN_SURFACES; i++)
     {
-      if ((uintptr_t)c->surf[i] == h)
+      if ((uint32_t)(uintptr_t)c->surf[i] == (uint32_t)h)
         {
           return i;
         }

@@ -11,10 +11,12 @@
  * 32 bits, drawn on a tile of the manifest's colour), or a tile of that
  * colour with the name's first letters.  Opening it runs the `wasm`
  * program (apps/graphics/fpcwasm) on its directory, as a task of its own
- * that takes the display and the keyboard as the other games do.
+ * that takes the display and the keyboard as the other games do; an app
+ * of kind window runs beside the desktop's windows, in windows of its own
+ * (fpc_win_*).
  *
- * The manifest: lines of "key value": name, kind (game, app, cli), api,
- * icon (default icon.bmp), color (the tile's, RRGGBB).
+ * The manifest: lines of "key value": name, kind (game, app, window,
+ * cli), api, icon (default icon.bmp), color (the tile's, RRGGBB).
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -59,6 +61,7 @@ struct wasm_app_s
   NXWINDOW surf;                        /* The icon's pixels, or NULL */
   volatile bool lost;                   /* ... gone (the GPU's memory) */
   bool noicon;                          /* No icon file to be had */
+  bool window;                          /* kind window: a desktop app */
 };
 
 /****************************************************************************
@@ -134,6 +137,7 @@ static bool read_manifest(struct wasm_app_s *a)
       else if (strcmp(k, "kind") == 0)
         {
           shown = strcmp(v, "cli") != 0;
+          a->window = strcmp(v, "window") == 0;
         }
       else if (strcmp(k, "icon") == 0 && *v != '\0' && strchr(v, '/') == NULL)
         {
@@ -322,7 +326,8 @@ void desk_wasm_scan(void)
           if (strcmp(found[i].dir, g_wa[i].dir) != 0 ||
               strcmp(found[i].name, g_wa[i].name) != 0 ||
               strcmp(found[i].icon, g_wa[i].icon) != 0 ||
-              found[i].colour != g_wa[i].colour)
+              found[i].colour != g_wa[i].colour ||
+              found[i].window != g_wa[i].window)
             {
               break;
             }
@@ -430,7 +435,10 @@ bool desk_wasm_launch(int i)
     }
 
 #ifdef CONFIG_FPC_GPU
-  fpc_gpu_game_prepare();
+  if (!g_wa[i].window)
+    {
+      fpc_gpu_game_prepare();           /* (a game: the display its own) */
+    }
 #endif
 
   snprintf(dir, sizeof(dir), "%s/%s", CONFIG_FPCWASM_APPDIR, g_wa[i].dir);

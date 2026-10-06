@@ -35,7 +35,7 @@ WAMRC_SAFE  = --bounds-checks=1 --stack-bounds-checks=1 --enable-multi-thread
 WAMRC_FLAGS = --target=thumbv8m.main --target-abi=gnueabihf \
               --cpu=cortex-m33 --disable-simd $(WAMRC_SAFE)
 
-APPS = hello rocks fgdemo crash apitest
+APPS = hello rocks fgdemo crash apitest mandel
 
 # The simulators' x86-64 (tests/desk/wasm.test runs these as AOT there:
 # the loader, AOT code calling the host, its traps); --size-level=0: the

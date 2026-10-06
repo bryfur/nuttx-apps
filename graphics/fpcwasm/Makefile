@@ -18,7 +18,7 @@ STACKSIZE = $(CONFIG_FPCWASM_STACKSIZE)
 MODULE    = $(CONFIG_GRAPHICS_FPCWASM)
 
 MAINSRC   = wasm_main.c
-CSRCS     = wasm_fpc.c wasm_image.c
+CSRCS     = wasm_fpc.c wasm_image.c wasm_win.c
 
 CFLAGS   += ${INCDIR_PREFIX}$(APPDIR)/interpreters/wamr/wamr/core/iwasm/include
 CFLAGS   += ${INCDIR_PREFIX}sdk
@@ -48,4 +48,19 @@ include $(APPDIR)/Application.mk
 ifeq ($(CONFIG_GRAPHICS_FPCWASM),m)
 $(PROGLIST): $(wildcard jit/*.c jit/*.h) \
              $(wildcard $(APPDIR)/interpreters/wamr/*.patch)
+
+# ... from libapps less the desktop's objects (fpcdesk): the windows'
+# deskwin client (desk_client.c) must be the firmware's, the desktop's own
+# (a copy linked into the module would talk to no desktop); its functions
+# stay undefined here, so the firmware's symbol table has them
+
+WASMDEPS = $(PREFIX)libwasmdeps$(LIBEXT)
+
+$(WASMDEPS): $(BIN) Makefile
+	$(Q) cp $(BIN) $@
+	$(Q) $(CROSSDEV)ar d $@ $$($(CROSSDEV)ar t $@ | grep "\.fpcdesk[._]") || true
+
+$(PROGLIST): $(WASMDEPS)
+
+LDLIBS = $(WASMDEPS) $(COMPILER_RT_LIB)
 endif
