@@ -1,0 +1,1051 @@
+#include "../../config.h"
+#include "codegen.h"
+
+#include <assert.h>
+#include <limits.h>
+#include <stdlib.h>  // malloc
+#include <string.h>
+
+#include "ast.h"
+#include "be_aux.h"
+#include "fe_misc.h"  // curscope, extract_bitfield_vale
+#include "ir.h"
+#include "regalloc.h"
+#include "table.h"
+#include "type.h"
+#include "util.h"
+#include "var.h"
+
+bool is_stack_param(const Type *type) {
+  return type->kind == TY_STRUCT;
+}
+
+enum VRegSize to_vsize(const Type *type) {
+  const int MAX_REG_SIZE = 8;
+  assert(is_prim_type(type));
+  int size = type_size(type);
+  assert(1 <= size && size <= MAX_REG_SIZE && IS_POWER_OF_2(size));
+  UNUSED(MAX_REG_SIZE);
+  return most_significant_bit(size);
+}
+
+int to_vflag_with_storage(const Type *type, int storage) {
+  int flag = 0;
+  if (is_flonum(type))
+    flag |= VRF_FLONUM;
+  if (is_unsigned(type))
+    flag |= VRF_UNSIGNED;
+  if (type->qualifier & TQ_VOLATILE)
+    flag |= (storage & VS_REGISTER) ? (VRF_VOLATILEREG | VRF_NO_SPILL) : VRF_VOLATILE;
+  return flag;
+}
+
+VReg *add_new_vreg_with_storage(const Type *type, int storage) {
+  return reg_alloc_spawn(curra, to_vsize(type), to_vflag_with_storage(type, storage));
+}
+
+static Table builtin_function_table;  // <BuiltinFunctionProc>
+
+void add_builtin_function(const char *str, Type *type, BuiltinFunctionProc *proc,
+                          bool add_to_scope) {
+  const Name *name = alloc_name(str, NULL, false);
+  table_put(&builtin_function_table, name, proc);
+
+  if (add_to_scope) {
+    const Token *token = alloc_ident(name, NULL, name->chars, name->chars + name->bytes);
+    scope_add(global_scope, token, type, 0);
+  }
+}
+
+struct CompareExpr {
+  enum ConditionKind cond;
+  VReg *lhs, *rhs;
+};
+static struct CompareExpr gen_compare_expr(enum ExprKind kind, Expr *lhs, Expr *rhs) {
+  assert(lhs->type->kind == rhs->type->kind);
+
+  assert(EX_EQ <= kind && kind <= EX_GT);
+  enum ConditionKind cond = kind + (COND_EQ - EX_EQ);
+
+  VReg *lhs_reg = gen_expr(lhs);
+  VReg *rhs_reg = gen_expr(rhs);
+  if ((lhs_reg->flag & VRF_CONST) != 0) {
+    if ((rhs_reg->flag & VRF_CONST) != 0) {
+      static struct CompareExpr kNone = {.cond = COND_NONE};
+      static struct CompareExpr kAny = {.cond = COND_ANY};
+#ifndef __NO_FLONUM
+      if (is_flonum(lhs->type)) {
+        assert(lhs_reg->flag & VRF_FLONUM);
+        assert(rhs_reg->flag & VRF_FLONUM);
+        switch (cond) {
+        case COND_NONE: return kNone;
+        case COND_ANY:  return kAny;
+        case COND_EQ:  return lhs_reg->flonum.value == rhs_reg->flonum.value ? kAny : kNone;
+        case COND_NE:  return lhs_reg->flonum.value != rhs_reg->flonum.value ? kAny : kNone;
+        case COND_LT:  return lhs_reg->flonum.value <  rhs_reg->flonum.value ? kAny : kNone;
+        case COND_LE:  return lhs_reg->flonum.value <= rhs_reg->flonum.value ? kAny : kNone;
+        case COND_GE:  return lhs_reg->flonum.value >= rhs_reg->flonum.value ? kAny : kNone;
+        case COND_GT:  return lhs_reg->flonum.value >  rhs_reg->flonum.value ? kAny : kNone;
+        default: assert(false); break;
+        }
+      }
+#endif
+      assert(!(lhs_reg->flag & VRF_FLONUM));
+      assert(!(rhs_reg->flag & VRF_FLONUM));
+      if (is_unsigned(lhs->type)) {
+        switch (cond) {
+        case COND_NONE: return kNone;
+        case COND_ANY:  return kAny;
+        case COND_EQ:  return (uint64_t)lhs_reg->fixnum == (uint64_t)rhs_reg->fixnum ? kAny : kNone;
+        case COND_NE:  return (uint64_t)lhs_reg->fixnum != (uint64_t)rhs_reg->fixnum ? kAny : kNone;
+        case COND_LT:  return (uint64_t)lhs_reg->fixnum <  (uint64_t)rhs_reg->fixnum ? kAny : kNone;
+        case COND_LE:  return (uint64_t)lhs_reg->fixnum <= (uint64_t)rhs_reg->fixnum ? kAny : kNone;
+        case COND_GE:  return (uint64_t)lhs_reg->fixnum >= (uint64_t)rhs_reg->fixnum ? kAny : kNone;
+        case COND_GT:  return (uint64_t)lhs_reg->fixnum >  (uint64_t)rhs_reg->fixnum ? kAny : kNone;
+        default: assert(false); break;
+        }
+      } else {
+        switch (cond) {
+        case COND_NONE: return kNone;
+        case COND_ANY:  return kAny;
+        case COND_EQ:  return lhs_reg->fixnum == rhs_reg->fixnum ? kAny : kNone;
+        case COND_NE:  return lhs_reg->fixnum != rhs_reg->fixnum ? kAny : kNone;
+        case COND_LT:  return lhs_reg->fixnum <  rhs_reg->fixnum ? kAny : kNone;
+        case COND_LE:  return lhs_reg->fixnum <= rhs_reg->fixnum ? kAny : kNone;
+        case COND_GE:  return lhs_reg->fixnum >= rhs_reg->fixnum ? kAny : kNone;
+        case COND_GT:  return lhs_reg->fixnum >  rhs_reg->fixnum ? kAny : kNone;
+        default: assert(false); break;
+        }
+      }
+    }
+
+    VReg *tmp = lhs_reg;
+    lhs_reg = rhs_reg;
+    rhs_reg = tmp;
+    cond = swap_cond(cond);
+  }
+
+  assert(is_prim_type(lhs->type));
+
+  return (struct CompareExpr){.cond = cond, .lhs = lhs_reg, .rhs = rhs_reg};
+}
+
+void gen_cond_jmp(Expr *cond, BB *tbb, BB *fbb) {
+  enum ExprKind ck = cond->kind;
+  switch (ck) {
+  case EX_FIXNUM:
+    new_ir_jmp(cond->fixnum != 0 ? tbb : fbb);
+    return;
+  case EX_EQ:
+  case EX_NE:
+  case EX_LT:
+  case EX_LE:
+  case EX_GE:
+  case EX_GT:
+    {
+      struct CompareExpr cmp = gen_compare_expr(ck, cond->bop.lhs, cond->bop.rhs);
+      new_ir_cjmp(cmp.lhs, cmp.rhs, cmp.cond, tbb);
+      set_curbb(new_bb());
+      new_ir_jmp(fbb);
+    }
+    return;
+  case EX_LOGAND:
+    {
+      BB *bb1 = new_bb();
+      gen_cond_jmp(cond->bop.lhs, bb1, fbb);
+      set_curbb(bb1);
+      gen_cond_jmp(cond->bop.rhs, tbb, fbb);
+    }
+    break;
+  case EX_LOGIOR:
+    {
+      BB *bb1 = new_bb();
+      gen_cond_jmp(cond->bop.lhs, tbb, bb1);
+      set_curbb(bb1);
+      gen_cond_jmp(cond->bop.rhs, tbb, fbb);
+    }
+    return;
+  case EX_COMMA:
+    gen_expr(cond->bop.lhs);
+    gen_cond_jmp(cond->bop.rhs, tbb, fbb);
+    break;
+  case EX_EXPECT:
+    gen_cond_jmp(cond->bop.lhs, tbb, fbb);
+    break;
+  default: assert(false); break;
+  }
+}
+
+static VReg *gen_cast(Expr *expr) {
+  Expr *src = expr->unary.sub;
+  Type *dst_type = expr->type;
+  assert(!is_bool(dst_type));  // bool is handled in parse phase.
+
+  VReg *vreg = gen_expr(src);
+  assert(!is_bool(dst_type));
+
+  switch (dst_type->kind) {
+  case TY_VOID:
+  case TY_STRUCT:
+    return vreg;
+  default: break;
+  }
+
+  size_t dst_size = type_size(dst_type);
+  if (vreg->flag & VRF_CONST) {
+    assert(!(vreg->flag & VRF_FLONUM));  // No const vreg for flonum.
+    Fixnum value = vreg->fixnum;
+    if (dst_size < (1U << vreg->vsize) && dst_size < sizeof(Fixnum)) {
+      // Assume that integer is represented in Two's complement
+      size_t bit = dst_size * TARGET_CHAR_BIT;
+      UFixnum mask = (-1UL) << bit;
+      if (!is_unsigned(dst_type) && (value & ((Fixnum)1 << (bit - 1))))  // signed && negative
+        value |= mask;
+      else
+        value &= ~mask;
+    }
+
+    enum VRegSize vsize = to_vsize(dst_type);
+    int flag = to_vflag(dst_type);
+#ifndef __NO_FLONUM
+    if (flag & VRF_FLONUM)
+      return new_const_vfreg(value, vsize);
+#endif
+    return new_const_vreg(value, vsize, flag);
+  }
+
+  size_t src_size = 1U << vreg->vsize;
+  if (dst_size == src_size &&
+      is_flonum(dst_type) == ((vreg->flag & VRF_FLONUM) != 0) &&
+      is_unsigned(dst_type) == is_unsigned(src->type))
+    return vreg;
+
+  IR *ir = new_ir_cast(vreg, to_vsize(dst_type), to_vflag(dst_type));
+  return ir->dst;
+}
+
+static VReg *gen_ref_sub(Expr *expr) {
+  switch (expr->kind) {
+  case EX_VAR:
+    {
+      Scope *scope;
+      const Name *name = expr->var.name;
+      const VarInfo *varinfo = scope_find(expr->var.scope, name, &scope);
+      assert(varinfo != NULL && scope == expr->var.scope);
+      bool global = false;
+      if (is_global_scope(scope)) {
+        global = (varinfo->storage & VS_STATIC) == 0;
+      } else {
+        if (is_local_storage(varinfo)) {
+#if STRUCT_ARG_AS_POINTER
+          if (varinfo->storage & VS_PARAM && expr->type->kind == TY_STRUCT &&
+              !is_small_struct(expr->type)) {
+            assert(varinfo->type->kind == TY_STRUCT);
+            assert(varinfo->local.vreg != NULL);
+            return varinfo->local.vreg;
+          }
+#endif
+          return new_ir_bofs(varinfo->local.frameinfo)->dst;
+        }
+        if (varinfo->storage & VS_STATIC)
+          name = varinfo->static_.svar->ident->ident;
+        else
+          global = true;
+      }
+      return new_ir_iofs(name, global)->dst;
+    }
+  case EX_DEREF:
+    return gen_expr(expr->unary.sub);
+  case EX_MEMBER:
+    {
+      const MemberInfo *member = expr->member.info;
+      VReg *vreg = gen_expr(expr->member.target);
+      if (member->offset == 0)
+        return vreg;
+      enum VRegSize vsize = to_vsize(&tySize);
+      VReg *imm = new_const_vreg(member->offset, vsize, VRF_UNSIGNED);
+      return new_ir_bop(IR_ADD, vreg, imm, vsize);
+    }
+  case EX_COMPLIT:
+    {
+      Expr *var = expr->complit.var;
+      assert(var->var.scope != NULL);
+      const VarInfo *varinfo = scope_find(var->var.scope, var->var.name, NULL);
+      assert(varinfo != NULL);
+      VReg *vreg = varinfo->local.vreg;
+      if (vreg != NULL)
+        vreg->flag |= VRF_REF;
+
+      gen_clear_local_var(varinfo);
+      gen_stmts(expr->complit.inits);
+      return gen_ref_sub(expr->complit.var);
+    }
+  default: assert(false); break;
+  }
+  return NULL;
+}
+
+static VReg *gen_lval(Expr *expr) {
+  return gen_ref_sub(expr);
+}
+
+static VReg *gen_variable(Expr *expr) {
+  switch (expr->type->kind) {
+  case TY_FIXNUM:
+  case TY_PTR:
+  case TY_FLONUM:
+    {
+      Scope *scope;
+      const VarInfo *varinfo = scope_find(expr->var.scope, expr->var.name, &scope);
+      assert(varinfo != NULL && scope == expr->var.scope);
+      if (!is_global_scope(scope) && is_local_storage(varinfo)) {
+        assert(varinfo->local.vreg != NULL);
+        return varinfo->local.vreg;
+      }
+
+      VReg *vreg = gen_lval(expr);
+      IR *ir = new_ir_load(vreg, 0, to_vsize(expr->type),
+                           to_vflag_with_storage(expr->type, varinfo->storage));
+      return ir->dst;
+    }
+  case TY_ARRAY:   // Use variable address as a pointer.
+  case TY_STRUCT:  // struct value is handled as a pointer.
+  case TY_FUNC:
+    return gen_lval(expr);
+  case TY_VOID: break;
+  case TY_AUTO: assert(false); break;
+  }
+  assert(!"Must not reached");
+  return NULL;
+}
+
+static VReg *gen_ternary(Expr *expr) {
+  Expr *cond = expr->ternary.cond;
+  Expr *texpr = expr->ternary.tval;
+  Expr *fexpr = expr->ternary.fval;
+  bool flip_order = false;
+  if (cond->kind == EX_EXPECT) {
+    Expr *value = cond->bop.lhs;
+    Expr *expect = cond->bop.rhs;
+    assert(expect->kind == EX_FIXNUM);
+    if (expect->fixnum == 0) {
+      flip_order = true;
+      Expr *tmp = texpr;
+      texpr = fexpr;
+      fexpr = tmp;
+    }
+    cond = value;
+  }
+
+  VReg *result = NULL;
+  if (expr->type->kind != TY_VOID) {
+    Type *type = expr->type;
+    if (!is_number(type) && !ptr_or_array(type))
+      type = ptrof(type);
+    result = add_new_vreg(type);
+  }
+
+  BB *tbb = new_bb();
+  BB *fbb = new_bb();
+  BB *nbb = new_bb();
+  if (flip_order)
+    gen_cond_jmp(cond, fbb, tbb);  // Swap jump target to flip the condition.
+  else
+    gen_cond_jmp(cond, tbb, fbb);
+
+  set_curbb(tbb);
+  VReg *tval = gen_expr(texpr);
+  if (result != NULL)
+    new_ir_mov(result, tval);
+  new_ir_jmp(nbb);
+
+  set_curbb(fbb);
+  VReg *fval = gen_expr(fexpr);
+  if (result != NULL)
+    new_ir_mov(result, fval);
+
+  set_curbb(nbb);
+  return result;
+}
+
+static inline void set_call_info(IrCallInfo *call, const Name *label, bool global,
+                                 int total_arg_count, int reg_arg_count, VReg **args,
+                                 int vaarg_start) {
+  call->label = label;
+  call->global = global;
+  call->args = args;
+  call->total_arg_count = total_arg_count;
+  call->reg_arg_count = reg_arg_count;
+  call->vaarg_start = vaarg_start;
+}
+
+#define ARGF_FLONUM    (1 << 0)
+#define ARGF_FP_AS_GP  (1 << 1)
+
+typedef struct {
+  ssize_t offset;
+  ssize_t size;
+  int reg_index;
+  int flag;
+#if STRUCT_ARG_AS_POINTER
+  ssize_t indirect_offset;
+#endif
+} ArgInfo;
+
+typedef struct {
+  VarInfo *ret_varinfo;
+  VReg **arg_vregs;
+  ssize_t offset;
+  int arg_start;
+  int stack_arg_count;
+  int reg_arg_count[2];  // [0]=gp-reg, [1]=fp-reg
+  bool ret_small_struct;
+
+  // Register arguments.
+  int regarg[2];  // [0]=gp-reg, [1]=fp-reg
+} FuncallWork;
+
+static inline ArgInfo *collect_funargs(const Type *functype, Vector *args, FuncallWork *work,
+                                       ArgInfo *arg_infos) {
+  ssize_t offset = 0;
+  int stack_arg_count = 0;
+  int reg_arg_count[2] = {0, 0};
+  const int arg_count = args->len;
+
+  int reg_index[2] = {work->arg_start, 0};  // [0]=gp-reg, [1]=fp-reg
+
+  // Check stack arguments.
+  int vaarg_start = functype->func.vaargs && functype->func.params != NULL
+      ? functype->func.params->len : INT_MAX;
+  for (int i = 0; i < arg_count; ++i) {
+    ArgInfo *p = &arg_infos[i];
+    p->reg_index = -1;
+    p->offset = -1;
+    Expr *arg = args->data[i];
+    const Type *arg_type = arg->type;
+    assert(arg_type->kind != TY_ARRAY);
+#if STRUCT_ARG_AS_POINTER
+    p->indirect_offset = -1;
+    if (is_stack_param(arg_type) && !is_small_struct(arg_type))
+      arg_type = ptrof(arg->type);
+#endif
+    p->size = type_size(arg_type);
+    if (is_flonum(arg_type))
+      p->flag |= ARGF_FLONUM;
+    bool is_vaarg = i >= vaarg_start;
+    UNUSED(is_vaarg);
+#if VAARG_FP_AS_GP
+    if (is_vaarg)
+      p->flag |= ARGF_FP_AS_GP;
+#endif
+    bool is_flo = (p->flag & (ARGF_FLONUM | ARGF_FP_AS_GP)) == ARGF_FLONUM;
+#if USE_GP_FOR_OVERFLOW_FP
+    if (is_flo && reg_index[is_flo] >= kArchSetting.max_reg_args[is_flo]) {
+      if (reg_index[GPREG] < kArchSetting.max_reg_args[GPREG]) {
+        is_flo = false;
+        p->flag |= ARGF_FP_AS_GP;
+      }
+    }
+#endif
+    bool stack_arg = is_stack_param(arg_type) ||
+                     reg_index[is_flo] >= kArchSetting.max_reg_args[is_flo];
+
+    size_t regnum = 1;
+    if (arg_type->kind == TY_STRUCT && is_small_struct(arg_type)) {
+      size_t n = (p->size + (TARGET_POINTER_SIZE - 1)) / TARGET_POINTER_SIZE;
+      if (reg_index[GPREG] + (int)n <= kArchSetting.max_reg_args[GPREG]) {
+        assert(!is_flo);
+        stack_arg = false;
+        regnum = n;
+      }
+    }
+#if VAARG_ON_STACK
+    if (is_vaarg)
+      stack_arg = true;
+#endif
+
+    if (stack_arg) {
+      offset = ALIGN(offset, align_size(arg_type));
+      p->offset = offset;
+      offset += ALIGN(p->size, TARGET_POINTER_SIZE);
+      ++stack_arg_count;
+    } else {
+      p->reg_index = reg_index[is_flo];
+      reg_index[is_flo] += regnum;
+      reg_arg_count[is_flo] += regnum;
+    }
+  }
+
+#if STRUCT_ARG_AS_POINTER
+  for (int i = 0; i < arg_count; ++i) {
+    Expr *arg = args->data[i];
+    const Type *arg_type = arg->type;
+    if (!(is_stack_param(arg_type) && !is_small_struct(arg_type)))
+      continue;
+    ArgInfo *p = &arg_infos[i];
+    p->indirect_offset = offset = ALIGN(offset, align_size(arg_type));
+    offset += type_size(arg_type);
+  }
+#endif
+  work->offset = offset;
+  work->stack_arg_count = stack_arg_count;
+  assert(sizeof(work->reg_arg_count) == sizeof(reg_arg_count));
+  memcpy(work->reg_arg_count, reg_arg_count, sizeof(work->reg_arg_count));
+
+  return arg_infos;
+}
+
+#if STRUCT_ARG_AS_POINTER
+static inline VReg *gen_funarg_struct_pointer(
+    Expr *arg, const ArgInfo *arg_info, bool prepare_struct, FuncallWork *work) {
+  const Type *type = arg->type;
+  assert(is_stack_param(type));
+  VReg *dst = new_ir_sofs(new_const_vreg(arg_info->indirect_offset, VRegSize8, VRF_UNSIGNED))->dst;
+  if (prepare_struct) {
+    VReg *vreg = gen_expr(arg);
+    gen_memcpy(type, dst, vreg);
+    return vreg;
+  }
+
+  if (arg_info->offset < 0) {
+    int regarg = ++work->regarg[GPREG];
+    int index = work->reg_arg_count[GPREG] - regarg;
+#if !EXTRA_RETURN_STRUCT_REGISTER
+    if (work->ret_varinfo != NULL && !work->ret_small_struct)
+      ++index;
+#endif
+    assert(0 <= index && index < kArchSetting.max_reg_args[GPREG]);
+    new_ir_pusharg(dst, index);
+  } else {
+    ssize_t offset = arg_info->offset;
+    VReg *dst2 = new_ir_sofs(new_const_vreg(offset, VRegSize8, VRF_UNSIGNED))->dst;
+    new_ir_store(dst2, 0, dst);
+    dst = NULL;
+  }
+  return dst;
+}
+#endif
+
+static inline void gen_funarg_small_struct(Expr *arg, VReg *vreg, FuncallWork *work) {
+  const enum VRegSize kMaxVSize = VRegSize8;  // TODO: Max
+  const size_t kMaxSize = 1U << kMaxVSize;
+  size_t size = type_size(arg->type);
+  if (size == 0)
+    return;
+  int n = (size + (kMaxSize - 1)) / kMaxSize;
+
+  // Assumed little endian.
+  int index = work->reg_arg_count[GPREG] - (work->regarg[GPREG] + n) + work->arg_start;
+  assert(index + (int)n <= kArchSetting.max_reg_args[GPREG]);
+  for (int i = 0; i < n; ++i) {
+    enum VRegSize vsize = size >= kMaxSize ? kMaxVSize :
+        (enum VRegSize)(most_significant_bit(size) + (IS_POWER_OF_2(size) ? 0 : 1));
+    size -= (size_t)1 << vsize;
+    VReg *loaded = new_ir_load(vreg, i * kMaxSize, vsize, VRF_PARAM | VRF_UNSIGNED)->dst;
+    new_ir_pusharg(loaded, index + i);
+  }
+  work->regarg[GPREG] += n;
+}
+
+static inline VReg *gen_funarg_stack(Expr *arg, const ArgInfo *arg_info) {
+  VReg *vreg = gen_expr(arg);
+  ssize_t offset = arg_info->offset;
+  VReg *dst = new_ir_sofs(new_const_vreg(offset, VRegSize8, 0))->dst;
+  const Type *type = arg->type;
+  if (is_prim_type(type)) {
+    new_ir_store(dst, 0, vreg);
+  } else {
+    gen_memcpy(type, dst, vreg);
+  }
+  return dst;
+}
+
+static inline VReg *gen_funarg_reg(Expr *arg, const ArgInfo *arg_info, FuncallWork *work) {
+  VReg *vreg = gen_expr(arg);
+  if (arg->type->kind == TY_STRUCT) {
+    assert(is_small_struct(arg->type));
+    gen_funarg_small_struct(arg, vreg, work);
+    return NULL;
+  }
+
+  bool is_flo = (arg_info->flag & (ARGF_FLONUM | ARGF_FP_AS_GP)) == ARGF_FLONUM;
+  int regarg = ++work->regarg[is_flo];
+  int index = work->reg_arg_count[is_flo] - regarg;
+#if !EXTRA_RETURN_STRUCT_REGISTER
+  if (!is_flo && work->ret_varinfo != NULL && !work->ret_small_struct)
+    ++index;
+#endif
+  assert(index < kArchSetting.max_reg_args[is_flo]);
+  IR *ir = new_ir_pusharg(vreg, index);
+#if !VAARG_FP_AS_GP
+  UNUSED(ir);
+#else
+  if (!is_flo && (arg_info->flag & ARGF_FP_AS_GP))
+    ir->pusharg.fp_as_gp = true;
+#endif
+  return vreg;
+}
+
+static inline VReg *gen_funarg(
+    Expr *arg, const ArgInfo *arg_info, bool prepare_struct, FuncallWork *work) {
+#if STRUCT_ARG_AS_POINTER
+  if (arg_info->indirect_offset >= 0)
+    return gen_funarg_struct_pointer(arg, arg_info, prepare_struct, work);
+#endif
+
+  if ((arg_info->offset >= 0) == prepare_struct) {
+    return prepare_struct ? gen_funarg_stack(arg, arg_info)
+                          : gen_funarg_reg(arg, arg_info, work);
+  }
+  return NULL;
+}
+
+static inline void gen_funargs(Expr *expr, FuncallWork *work) {
+  work->ret_varinfo = NULL;
+  work->arg_vregs = NULL;
+  work->offset = 0;
+  work->arg_start = 0;
+  work->stack_arg_count = 0;
+  work->ret_small_struct = is_small_struct(expr->type);
+  work->reg_arg_count[GPREG] = work->reg_arg_count[FPREG] = 0;
+
+  Expr *func = expr->funcall.func;
+  const Type *functype = get_callee_type(func->type);
+  assert(functype != NULL);
+
+  VarInfo *ret_varinfo = NULL;  // Return value is on the stack?
+  if (expr->type->kind == TY_STRUCT) {
+    const Token *token = alloc_dummy_ident();
+    Type *type = expr->type;
+    ret_varinfo = scope_add(curscope, token, type, VS_USED);
+    FrameInfo *fi = calloc_or_die(sizeof(*fi));
+    fi->size = type_size(type);
+    fi->offset = 0;
+    ret_varinfo->local.frameinfo = fi;
+  }
+  work->ret_varinfo = ret_varinfo;
+
+#if !EXTRA_RETURN_STRUCT_REGISTER
+  work->arg_start = ret_varinfo != NULL && !work->ret_small_struct ? 1 : 0;
+#endif
+  ArgInfo *arg_infos = ALLOCA(sizeof(*arg_infos) * expr->funcall.args->len);
+  memset(arg_infos, 0x00, sizeof(*arg_infos) * expr->funcall.args->len);
+  collect_funargs(functype, expr->funcall.args, work, arg_infos);
+
+  Vector *args = expr->funcall.args;
+  const int arg_count = args->len;
+  int total_arg_count = arg_count + (ret_varinfo != NULL ? 1 : 0);
+  VReg **arg_vregs = total_arg_count == 0 ? NULL
+                                          : calloc_or_die(total_arg_count * sizeof(*arg_vregs));
+  work->arg_vregs = arg_vregs;
+
+  for (int i = 0; i < 2; ++i) {  // Put struct argument onto stack frame first, then handle rest.
+    bool prepare_struct = i == 0;
+    work->regarg[GPREG] = work->regarg[FPREG] = 0;
+    for (int j = args->len; --j >= 0; ) {
+      Expr *arg = args->data[j];
+      VReg *vreg = gen_funarg(arg, &arg_infos[j], prepare_struct, work);
+      arg_vregs[j + work->arg_start] = vreg;
+    }
+  }
+
+  if (ret_varinfo != NULL && !work->ret_small_struct) {
+    VReg *dst = new_ir_bofs(ret_varinfo->local.frameinfo)->dst;
+#if EXTRA_RETURN_STRUCT_REGISTER
+    new_ir_pusharg(dst, kArchSetting.max_reg_args[GPREG]);
+    arg_vregs[total_arg_count - 1] = dst;
+#else
+    new_ir_pusharg(dst, 0);
+    arg_vregs[0] = dst;
+#endif
+  }
+}
+
+static inline VReg *gen_funcall_sub(Expr *expr, FuncallWork *work) {
+  Expr *func = expr->funcall.func;
+  const VarInfo *ret_varinfo = work->ret_varinfo;
+
+  bool label_call = false;
+  bool global = false;
+  if (func->kind == EX_VAR) {
+    const VarInfo *varinfo = scope_find(func->var.scope, func->var.name, NULL);
+    assert(varinfo != NULL);
+    label_call = varinfo->type->kind == TY_FUNC;
+    if (label_call)
+      global = !(varinfo->storage & VS_STATIC);
+  }
+
+  int arg_count = expr->funcall.args->len;
+  IrCallInfo *callinfo = calloc_or_die(sizeof(*callinfo));
+  callinfo->stack_args_size = work->offset;
+  callinfo->arg_count = arg_count - work->stack_arg_count;
+  callinfo->living_pregs = 0;
+  callinfo->caller_saves = NULL;
+  if (work->ret_small_struct && type_size(expr->type) > 0) {
+    assert(ret_varinfo != NULL && is_local_storage(ret_varinfo));
+    assert(ret_varinfo->local.frameinfo->size == type_size(expr->type));
+    callinfo->small_struct_result_frameinfo = ret_varinfo->local.frameinfo;
+  }
+
+  VReg *dst = NULL;
+  Type *type = expr->type;
+  if (ret_varinfo != NULL)
+    type = ptrof(type);
+  if (type->kind != TY_VOID)
+    dst = reg_alloc_spawn(curra, to_vsize(type), to_vflag(type));
+
+  const Name *funcname = NULL;
+  VReg *freg = NULL;
+  if (label_call)
+    funcname = func->var.name;
+  else
+    freg = gen_expr(func);
+
+  const Type *functype = get_callee_type(func->type);
+  int ret_count = ret_varinfo != NULL ? 1 : 0;
+  int total_arg_count = arg_count + ret_count;
+  int vaarg_start = !functype->func.vaargs || functype->func.params == NULL ? -1 :
+      functype->func.params->len + ret_count;
+  set_call_info(callinfo, funcname, global, total_arg_count,
+                work->reg_arg_count[GPREG] + work->reg_arg_count[FPREG] + ret_count,
+                work->arg_vregs, vaarg_start);
+  IR *call = new_ir_call(callinfo, dst, freg);
+
+  FuncallInfo *fcinfo = calloc_or_die(sizeof(*fcinfo));
+  fcinfo->call = call;
+  assert(expr->funcall.fcinfo == NULL);
+  expr->funcall.fcinfo = fcinfo;
+
+  FuncBackend *fnbe = curfunc->extra;
+  assert(fnbe != NULL);
+  Vector *funcalls = fnbe->funcalls;
+  if (funcalls == NULL)
+    fnbe->funcalls = funcalls = new_vector();
+  vec_push(funcalls, expr);
+
+  if (ret_varinfo != NULL) {
+    if (work->ret_small_struct) {
+      dst = new_ir_bofs(ret_varinfo->local.frameinfo)->dst;
+    }
+#if EXTRA_RETURN_STRUCT_REGISTER
+    else {
+      assert(total_arg_count > 0);
+      dst = work->arg_vregs[total_arg_count - 1];
+    }
+#endif
+  }
+
+  return dst;
+}
+
+static VReg *gen_funcall(Expr *expr) {
+  Expr *func = expr->funcall.func;
+  if (func->kind == EX_VAR && is_global_scope(func->var.scope)) {
+    void *proc = table_get(&builtin_function_table, func->var.name);
+    if (proc != NULL)
+      return (*(BuiltinFunctionProc*)proc)(expr);
+  }
+
+  FuncallWork work;
+  gen_funargs(expr, &work);
+  return gen_funcall_sub(expr, &work);
+}
+
+static VReg *gen_arith(enum ExprKind kind, const Type *type, VReg *lhs, VReg *rhs) {
+  assert(EX_ADD <= kind && kind <= EX_RSHIFT);
+  return new_ir_bop(kind + (IR_ADD - EX_ADD), lhs, rhs, to_vsize(type));
+}
+
+static VReg *gen_block_expr(Expr *expr) {
+  return gen_block(expr->block);
+}
+
+static VReg *gen_fixnum(Expr *expr) {
+  const Type *type = expr->type;
+  VReg *vreg = new_const_vreg(expr->fixnum, to_vsize(type), to_vflag(type));
+  if (type->qualifier & TQ_VOLATILE) {
+    VReg *var = add_new_vreg(type);
+    new_ir_mov(var, vreg);
+    vreg = var;
+  }
+  return vreg;
+}
+
+static VReg *gen_flonum(Expr *expr) {
+#ifndef __NO_FLONUM
+  const Type *type = expr->type;
+  VReg *vreg = new_const_vfreg(expr->flonum, to_vsize(type));
+  if (type->qualifier & TQ_VOLATILE) {
+    VReg *var = add_new_vreg(type);
+    new_ir_mov(var, vreg);
+    vreg = var;
+  }
+  return vreg;
+#else
+  UNUSED(expr);
+  assert(false);
+  return NULL;
+#endif
+}
+
+static VReg *gen_str(Expr *expr) {
+  UNUSED(expr);
+  assert(!"should be handled in parser");
+  return NULL;
+}
+
+static VReg *gen_ref(Expr *expr) {
+  return gen_ref_sub(expr->unary.sub);
+}
+
+static VReg *gen_deref(Expr *expr) {
+  VReg *vreg = gen_expr(expr->unary.sub);
+  // array, struct and func values are handled as a pointer.
+  if (is_prim_type(expr->type)) {
+    vreg = new_ir_load(vreg, 0, to_vsize(expr->type), to_vflag(expr->type))->dst;
+  }
+  return vreg;
+}
+
+static VReg *gen_member(Expr *expr) {
+  VReg *vreg = gen_lval(expr);
+  VReg *result = vreg;
+  if (is_prim_type(expr->type)) {
+    result = new_ir_load(vreg, 0, to_vsize(expr->type), to_vflag(expr->type))->dst;
+  }
+  return result;
+}
+
+static VReg *gen_comma(Expr *expr) {
+  gen_expr(expr->bop.lhs);
+  return gen_expr(expr->bop.rhs);
+}
+
+static VReg *gen_expect(Expr *expr) {
+  return gen_expr(expr->bop.lhs);
+}
+
+static VReg *gen_assign_sub(Expr *lhs, Expr *rhs) {
+  VReg *src = gen_expr(rhs);
+  if (lhs->kind == EX_VAR) {
+    const VarInfo *varinfo = scope_find(lhs->var.scope, lhs->var.name, NULL);
+    assert(varinfo != NULL);
+    if (is_prim_type(lhs->type) && !is_global_scope(lhs->var.scope)) {
+      if (is_local_storage(varinfo)) {
+        assert(varinfo->local.vreg != NULL);
+        new_ir_mov(varinfo->local.vreg, src);
+        return src;
+      }
+    }
+
+    if ((varinfo->storage & (VS_STATIC | VS_USED)) == VS_STATIC) {
+      // Can be omitted.
+      return src;
+    }
+  }
+
+  VReg *dst = gen_lval(lhs);
+
+  switch (lhs->type->kind) {
+  case TY_ARRAY: case TY_FUNC: case TY_VOID:
+    assert(false);
+    // Fallthrough to suppress compiler error.
+  case TY_FIXNUM:
+  case TY_PTR:
+  case TY_FLONUM:
+    new_ir_store(dst, 0, src);
+    break;
+  case TY_STRUCT:
+    if (lhs->type->struct_.info->size > 0) {
+      gen_memcpy(lhs->type, dst, src);
+    }
+    break;
+  case TY_AUTO: assert(false); break;
+  }
+  return src;
+}
+
+static VReg *gen_assign(Expr *expr) {
+  assert(same_type(expr->type, expr->bop.lhs->type));
+  return gen_assign_sub(expr->bop.lhs, expr->bop.rhs);
+}
+
+static VReg *gen_expr_incdec(Expr *expr) {
+#define IS_POST(expr)  ((expr)->kind >= EX_POSTINC)
+#define IS_DEC(expr)   (((expr)->kind - EX_PREINC) & 1)
+  static enum IrKind kOpAddSub[] = {IR_ADD, IR_SUB};
+
+  Expr *target = expr->unary.sub;
+  const VarInfo *varinfo = NULL;
+  if (target->kind == EX_VAR && !is_global_scope(target->var.scope)) {
+    const VarInfo *vi = scope_find(target->var.scope, target->var.name, NULL);
+    assert(vi != NULL);
+    if (is_local_storage(vi))
+      varinfo = vi;
+  }
+
+  const Type *type = expr->type;
+  enum VRegSize vsize = to_vsize(type);
+  VReg *before = NULL;
+  VReg *lval = NULL;
+  VReg *val;
+  if (varinfo != NULL) {
+    val = varinfo->local.vreg;
+    if (IS_POST(expr)) {
+      before = add_new_vreg(target->type);
+      new_ir_mov(before, val);
+    }
+  } else {
+    lval = gen_lval(target);
+    val = new_ir_load(lval, 0, vsize, to_vflag(type))->dst;
+    if (IS_POST(expr))
+      before = val;
+  }
+
+  VReg *addend =
+#ifndef __NO_FLONUM
+      is_flonum(target->type) ? gen_flonum(new_expr_flolit(target->type, NULL, 1)) :
+#endif
+          new_const_vreg(type->kind == TY_PTR ? type_size(type->pa.ptrof) : 1, vsize,
+                         to_vflag(type));
+  VReg *after = new_ir_bop(kOpAddSub[IS_DEC(expr)], val, addend, vsize);
+  if (varinfo != NULL)  new_ir_mov(varinfo->local.vreg, after);
+  else                  new_ir_store(lval, 0, after);
+  return before != NULL ? before : after;
+#undef IS_POST
+#undef IS_DEC
+}
+
+static VReg *gen_pos(Expr *expr) {
+  return gen_expr(expr->unary.sub);
+}
+
+static VReg *gen_neg(Expr *expr) {
+  VReg *vreg = gen_expr(expr->unary.sub);
+  return new_ir_unary(IR_NEG, vreg, to_vsize(expr->type));
+}
+
+static VReg *gen_bitnot(Expr *expr) {
+  VReg *vreg = gen_expr(expr->unary.sub);
+  return new_ir_unary(IR_BITNOT, vreg, to_vsize(expr->type));
+}
+
+static VReg *gen_relation(Expr *expr) {
+  struct CompareExpr cmp = gen_compare_expr(expr->kind, expr->bop.lhs, expr->bop.rhs);
+  switch (cmp.cond) {
+  case COND_NONE:
+  case COND_ANY:
+    return new_const_vreg(cmp.cond == COND_ANY, to_vsize(&tyBool), 0);
+  default:
+    return new_ir_cond(cmp.lhs, cmp.rhs, cmp.cond)->dst;
+  }
+}
+
+static VReg *gen_expr_logandor(Expr *expr) {
+  BB *tbb = new_bb();
+  BB *fbb = new_bb();
+  BB *nbb = new_bb();
+  gen_cond_jmp(expr, tbb, fbb);
+  set_curbb(tbb);
+  enum VRegSize vsbool = to_vsize(&tyBool);
+  VReg *result = add_new_vreg(&tyBool);
+  new_ir_mov(result, new_const_vreg(true, vsbool, 0));
+  new_ir_jmp(nbb);
+  set_curbb(fbb);
+  new_ir_mov(result, new_const_vreg(false, vsbool, 0));
+  set_curbb(nbb);
+  return result;
+}
+
+static VReg *gen_expr_bop(Expr *expr) {
+  VReg *lhs = gen_expr(expr->bop.lhs);
+  VReg *rhs = gen_expr(expr->bop.rhs);
+  return gen_arith(expr->kind, expr->type, lhs, rhs);
+}
+
+static VReg *gen_complit(Expr *expr) {
+  Expr *var = expr->complit.var;
+  const VarInfo *varinfo = scope_find(var->var.scope, var->var.name, NULL);
+  assert(varinfo != NULL);
+  gen_clear_local_var(varinfo);
+  gen_stmts(expr->complit.inits);
+  return gen_expr(var);
+}
+
+static VReg *gen_inlined(Expr *expr) {
+  // Nested inline funcall is transformed so its scope relation is modified.
+  // ex. foo(bar(123))
+  //     => ({foo-body(({bar-body(123)}))})
+  //     => tmp=({bar-body(123)}), ({foo-body(tmp)})
+  Scope *bak_curscope = curscope;
+  Stmt *embedded = expr->inlined.embedded;
+  assert(embedded->kind == ST_BLOCK);
+  Scope *top_scope = embedded->block.scope;
+  assert(top_scope != NULL);
+  Vector *top_scope_vars = top_scope->vars;
+
+  // Assign arguments to variables for embedding function parameter.
+  curscope = top_scope; {
+    Vector *args = expr->inlined.args;
+    assert(args->len <= top_scope_vars->len);
+    for (int i = 0; i < args->len; ++i) {
+      Expr *arg = args->data[i];
+      VarInfo *varinfo = top_scope_vars->data[i];
+      assert(!(varinfo->storage & VS_PARAM));
+      Expr *lhs = new_expr_variable(varinfo->ident->ident, varinfo->type, NULL, top_scope);
+      gen_assign_sub(lhs, arg);
+    }
+  } curscope = bak_curscope;
+
+  // Tweak function information to make `return` statement works for inlined function.
+  BB *inline_end_bb = new_bb();
+  FuncBackend *fnbe = curfunc->extra;
+  BB *bak_retbb = fnbe->ret_bb;
+  VReg *bak_result_dst = fnbe->inline_result_dst;
+  fnbe->ret_bb = inline_end_bb;
+
+  Type *rettype = expr->type;
+  VReg *dst = NULL;
+  if (rettype->kind != TY_VOID) {
+    if (!is_prim_type(rettype)) {
+      // Receive as its pointer.
+      rettype = ptrof(rettype);
+    }
+    dst = add_new_vreg(rettype);
+    fnbe->inline_result_dst = dst;
+  }
+
+  gen_block(embedded);
+
+  fnbe->inline_result_dst = bak_result_dst;
+  fnbe->ret_bb = bak_retbb;
+
+  set_curbb(inline_end_bb);
+  return dst;
+}
+
+VReg *gen_expr(Expr *expr) {
+  typedef VReg *(*GenExprFunc)(Expr*);
+  static const GenExprFunc table[] = {
+    [EX_FIXNUM] = gen_fixnum, [EX_FLONUM] = gen_flonum, [EX_STR] = gen_str,
+    [EX_VAR] = gen_variable,
+    [EX_ADD] = gen_expr_bop, [EX_SUB] = gen_expr_bop, [EX_MUL] = gen_expr_bop,
+    [EX_DIV] = gen_expr_bop, [EX_MOD] = gen_expr_bop, [EX_BITAND] = gen_expr_bop,
+    [EX_BITOR] = gen_expr_bop, [EX_BITXOR] = gen_expr_bop,
+    [EX_LSHIFT] = gen_expr_bop, [EX_RSHIFT] = gen_expr_bop,
+    [EX_EQ] = gen_relation, [EX_NE] = gen_relation, [EX_LT] = gen_relation,
+    [EX_LE] = gen_relation, [EX_GE] = gen_relation, [EX_GT] = gen_relation,
+    [EX_LOGAND] = gen_expr_logandor, [EX_LOGIOR] = gen_expr_logandor,
+    [EX_ASSIGN] = gen_assign, [EX_COMMA] = gen_comma, [EX_EXPECT] = gen_expect,
+    [EX_POS] = gen_pos, [EX_NEG] = gen_neg, [EX_BITNOT] = gen_bitnot,
+    [EX_PREINC] = gen_expr_incdec, [EX_PREDEC] = gen_expr_incdec,
+    [EX_POSTINC] = gen_expr_incdec, [EX_POSTDEC] = gen_expr_incdec,
+    [EX_REF] = gen_ref, [EX_DEREF] = gen_deref, [EX_CAST] = gen_cast, [EX_TERNARY] = gen_ternary,
+    [EX_MEMBER] = gen_member, [EX_FUNCALL] = gen_funcall, [EX_INLINED] = gen_inlined,
+    [EX_COMPLIT] = gen_complit, [EX_BLOCK] = gen_block_expr,
+  };
+
+  assert(expr->kind < (int)ARRAY_SIZE(table));
+  assert(table[expr->kind] != NULL);
+  return (*table[expr->kind])(expr);
+}

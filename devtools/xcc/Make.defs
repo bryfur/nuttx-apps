@@ -1,0 +1,10 @@
+############################################################################
+# apps/devtools/xcc/Make.defs
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+############################################################################
+
+ifneq ($(CONFIG_DEVTOOLS_XCC),)
+CONFIGURED_APPS += $(APPDIR)/devtools/xcc
+endif

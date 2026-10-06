@@ -1,0 +1,9 @@
+/canonicalize_path_test
+/file_test
+/longjmp_test
+/math_test
+/printf_test
+/scanf_test
+/stdlib_test
+
+*.wasm

@@ -1,0 +1,374 @@
+#include "../../../config.h"
+#include "ir_asm.h"
+
+#include <assert.h>
+#include <string.h>
+
+#include "aarch64_code.h"
+#include "inst.h"
+#include "parse_asm.h"
+#include "table.h"
+#include "util.h"
+
+static void sec_add_data(SectionInfo *section, const void *data, size_t bytes) {
+  assert(!(section->flag & SF_BSS));
+  data_append(section->ds, data, bytes);
+}
+
+static void sec_add_code(SectionInfo *section, const void *buf, size_t bytes) {
+  sec_add_data(section, buf, bytes);
+}
+
+static void sec_add_bss(SectionInfo *section, size_t size) {
+  assert(section->flag & SF_BSS);
+  section->bss_size += size;
+}
+
+static void sec_align_size(SectionInfo *section, size_t align) {
+  if (align > section->align)
+    section->align = align;
+
+  if (section->flag & SF_BSS)
+    section->bss_size = ALIGN(section->bss_size, align);
+  else
+    data_align(section->ds, align);
+}
+
+bool calc_label_address(uint64_t start_address, Vector *sections, Table *label_table) {
+  bool settle = true;
+  uint64_t address = start_address;
+  for (int sec = 0; sec < sections->len; ++sec) {
+    SectionInfo *section = sections->data[sec];
+    address = ALIGN(address, section->align);
+    section->start_address = address;
+
+    Vector *irs = section->irs;
+    for (int i = 0, len = irs->len; i < len; ++i) {
+      IR *ir = irs->data[i];
+      ir->address = address;
+      switch (ir->kind) {
+      case IR_LABEL:
+        {
+          LabelInfo *label;
+          if (!table_try_get(label_table, ir->label, (void**)&label)) {
+            fprintf(stderr, "[%.*s] not found\n", NAMES(ir->label));
+            assert(!"Unexpected");
+          } else {
+            label->address = address;
+          }
+        }
+        break;
+      case IR_CODE:
+        address += ir->code.len;
+        break;
+      case IR_DATA:
+        address += ir->data.len;
+        break;
+      case IR_BSS:
+        address += ir->bss;
+        break;
+      case IR_ZERO:
+        address += ir->zero;
+        break;
+      case IR_ALIGN:
+        ir->address = address = ALIGN(address, ir->align);
+        if ((size_t)ir->align > section->align) {
+          section->align = ir->align;
+          settle = false;
+        }
+        break;
+      case IR_EXPR_BYTE:
+        address += BYTE_SIZE;
+        break;
+      case IR_EXPR_SHORT:
+        address += SHORT_SIZE;
+        break;
+      case IR_EXPR_LONG:
+        address += LONG_SIZE;
+        break;
+      case IR_EXPR_QUAD:
+        address += QUAD_SIZE;
+        break;
+      }
+    }
+  }
+  return settle;
+}
+
+bool resolve_relative_address(Vector *sections, Table *label_table, Vector *unresolved) {
+  assert(unresolved != NULL);
+  vec_clear(unresolved);
+  bool size_upgraded = false;
+  for (int sec = 0; sec < sections->len; ++sec) {
+    SectionInfo *section = sections->data[sec];
+    Vector *irs = section->irs;
+    uint64_t start_address = irs->len > 0 ? ((IR*)irs->data[0])->address : 0;
+    for (int i = 0, len = irs->len; i < len; ++i) {
+      IR *ir = irs->data[i];
+      uint64_t address = ir->address;
+      switch (ir->kind) {
+      case IR_CODE:
+        {
+          Inst *inst = ir->code.inst;
+          switch (inst->op) {
+          case ADD_I:
+            if (inst->opr[2].type == DIRECT) {
+              ExprWithFlag *expr = &inst->opr[2].direct.expr;
+              Value value = calc_expr(label_table, expr->expr);
+              if (value.label != NULL) {
+                if (expr->flag == LF_PAGEOFF || expr->flag == (LF_GOT | LF_PAGEOFF)) {
+                  UnresolvedInfo *unres = calloc_or_die(sizeof(*unres));
+                  unres->kind = expr->flag == LF_PAGEOFF ? UNRES_PCREL_LO : UNRES_GOT_LO;
+                  unres->label = value.label;
+                  unres->src_section = section;
+                  unres->offset = address - start_address;
+                  unres->add = value.offset;
+                  vec_push(unresolved, unres);
+                }
+              }
+            }
+            break;
+          case LDR:
+          case STR:
+            if (inst->opr[1].type == INDIRECT && inst->opr[1].indirect.offset.expr != NULL) {
+              ExprWithFlag *offset = &inst->opr[1].indirect.offset;
+              Value value = calc_expr(label_table, offset->expr);
+              if (value.label != NULL) {
+                static const int table[][2] = {
+                  {LF_GOT, UNRES_GOT_HI},
+                  {LF_GOT | LF_PAGEOFF, UNRES_GOT_LO},
+                };
+                size_t i;
+                for (i = 0; i < ARRAY_SIZE(table); ++i) {
+                  if (table[i][0] == offset->flag)
+                    break;
+                }
+                if (i >= ARRAY_SIZE(table)) {
+                  break;
+                }
+
+                UnresolvedInfo *unres = calloc_or_die(sizeof(*unres));
+                unres->kind = table[i][1];
+                unres->label = value.label;
+                unres->src_section = section;
+                unres->offset = address - start_address;
+                unres->add = value.offset;
+                vec_push(unresolved, unres);
+              }
+            }
+            break;
+          case ADRP:
+            if (inst->opr[1].type == DIRECT) {
+              ExprWithFlag *expr = &inst->opr[1].direct.expr;
+              Value value = calc_expr(label_table, expr->expr);
+              if (value.label != NULL) {
+                static const int table[][2] = {
+                  {0, UNRES_PCREL_HI},
+                  {LF_PAGE, UNRES_PCREL_HI},
+                  {LF_GOT | LF_PAGE, UNRES_GOT_HI},
+                };
+                size_t i;
+                for (i = 0; i < ARRAY_SIZE(table); ++i) {
+                  if (table[i][0] == expr->flag)
+                    break;
+                }
+                if (i >= ARRAY_SIZE(table)) {
+                  break;
+                }
+
+                UnresolvedInfo *unres = calloc_or_die(sizeof(*unres));
+                unres->kind = table[i][1];
+                unres->label = value.label;
+                unres->src_section = section;
+                unres->offset = address - start_address;
+                unres->add = value.offset;
+                vec_push(unresolved, unres);
+              }
+            }
+            break;
+          case B:
+          case BEQ: case BNE: case BHS: case BLO:
+          case BMI: case BPL: case BVS: case BVC:
+          case BHI: case BLS: case BGE: case BLT:
+          case BGT: case BLE: case BAL: case BNV:
+          case CBZ: case CBNZ:
+            {
+              bool cb = inst->op == CBZ || inst->op == CBNZ;
+              Operand *label_opr = &inst->opr[cb];
+              if (label_opr->type == DIRECT) {
+                Value value = calc_expr(label_table, label_opr->direct.expr.expr);
+                if (value.label != NULL) {
+                  LabelInfo *label_info = table_get(label_table, value.label);
+                  if (label_info == NULL) {
+                    if (inst->op != B) {
+                      extern void asm_bcc_with_offset(Inst *inst, Code *code, int64_t offset);
+                      extern void asm_cbxx_with_offset(Inst *inst, Code *code, int64_t offset);
+
+                      Inst *binst = calloc_or_die(sizeof(*binst));
+                      binst->op = B;
+                      binst->opr[0] = *label_opr;
+
+                      Code bcode;
+                      memset(&bcode, 0, sizeof(bcode));
+                      bcode.inst = binst;
+                      {
+                        Inst *inst = binst;
+                        Code *code = &bcode;
+                        W_B();
+                      }
+
+                      IR *bir = new_ir_code(&bcode);
+                      vec_insert(irs, i + 1, bir);
+
+                      // Flip branch condition and modify target.
+                      static const enum Opcode kFlippedTable[] = {
+                        [BEQ] = BNE, [BNE] = BEQ, [BHS] = BLO, [BLO] = BHS,
+                        [BMI] = BPL, [BPL] = BMI, [BVS] = BVC, [BVC] = BVS,
+                        [BHI] = BLS, [BLS] = BHI, [BGE] = BLT, [BLT] = BGE,
+                        [BGT] = BLE, [BLE] = BGT, [BAL] = BNV, [BNV] = BAL,
+                        [CBZ] = CBNZ, [CBNZ] = CBZ,
+                      };
+                      inst->op = kFlippedTable[inst->op];
+                      label_opr->type = IMMEDIATE;
+                      label_opr->immediate = 4;
+
+                      const int64_t kSkipOffset = 4 + 4;
+                      ir->code.len = 0;
+                      if (cb)
+                        asm_cbxx_with_offset(inst, &ir->code, kSkipOffset);
+                      else
+                        asm_bcc_with_offset(inst, &ir->code, kSkipOffset);
+
+                      size_upgraded = true;
+                      break;
+                    }
+
+                    UnresolvedInfo *unres = calloc_or_die(sizeof(*unres));
+                    unres->kind = UNRES_CALL;
+                    unres->label = value.label;
+                    unres->src_section = section;
+                    unres->offset = address - start_address;
+                    unres->add = value.offset;
+                    vec_push(unresolved, unres);
+                    break;
+                  } else {
+                    value.offset += label_info->address;
+                  }
+                }
+
+                int64_t offset = value.offset - address;
+                if (inst->op == B) {
+                  if (offset >= (1L << 27) || offset < -(1L << 27) || (offset & 3) != 0)
+                    error("Jump offset too far (over 32bit)");
+
+                  Code *code = &ir->code;
+                  uint32_t *buf = (uint32_t*)code->buf;
+                  *buf = (*buf & 0xfc000000) | ((offset >> 2) & ((1U << 26) - 1));
+                } else {
+                  if (offset >= (1L << 20) || offset < -(1L << 20) || (offset & 3) != 0)
+                    error("Jump offset too far (over 32bit)");
+
+                  Code *code = &ir->code;
+                  uint32_t *buf = (uint32_t*)code->buf;
+                  *buf = (*buf & 0xff00001f) | ((offset & ((1U << 21) - 1)) << (5 - 2));
+                }
+              }
+            }
+            break;
+
+          case BL:
+            if (inst->opr[0].type == DIRECT) {
+              Value value = calc_expr(label_table, inst->opr[0].direct.expr.expr);
+              if (value.label != NULL) {
+                UnresolvedInfo *unres = calloc_or_die(sizeof(*unres));
+                unres->kind = UNRES_CALL;
+                unres->label = value.label;
+                unres->src_section = section;
+                unres->offset = address - start_address;
+                unres->add = value.offset;
+                vec_push(unresolved, unres);
+              }
+            }
+            break;
+          default:
+            break;
+          }
+        }
+        break;
+      case IR_EXPR_BYTE:
+      case IR_EXPR_SHORT:
+      case IR_EXPR_LONG:
+      case IR_EXPR_QUAD:
+        {
+          Value value = calc_expr(label_table, ir->expr.expr);
+          assert(value.label != NULL);
+          UnresolvedInfo *unres = calloc_or_die(sizeof(*unres));
+          unres->kind = UNRES_ABS64;  // TODO:
+          unres->label = value.label;
+          unres->src_section = section;
+          unres->offset = address - start_address;
+          unres->add = value.offset;
+          ir->expr.addend = value.offset;
+          vec_push(unresolved, unres);
+        }
+        break;
+      case IR_LABEL:
+      case IR_DATA:
+      case IR_BSS:
+      case IR_ZERO:
+      case IR_ALIGN:
+        break;
+      }
+    }
+  }
+
+  return !size_upgraded;
+}
+
+void emit_irs(Vector *sections) {
+  for (int sec = 0; sec < sections->len; ++sec) {
+    SectionInfo *section = sections->data[sec];
+    Vector *irs = section->irs;
+    for (int i = 0, len = irs->len; i < len; ++i) {
+      IR *ir = irs->data[i];
+      switch (ir->kind) {
+      case IR_LABEL:
+        break;
+      case IR_CODE:
+        sec_add_code(section, ir->code.buf, ir->code.len);
+        break;
+      case IR_DATA:
+        sec_add_data(section, ir->data.buf, ir->data.len);
+        break;
+      case IR_BSS:
+        sec_add_bss(section, ir->bss);
+        break;
+      case IR_ZERO:
+        if (section->flag & SF_BSS) {
+          sec_add_bss(section, ir->zero);
+        } else {
+          void *buf = calloc_or_die(ir->zero);
+          sec_add_data(section, buf, ir->zero);
+        }
+        break;
+      case IR_ALIGN:
+        sec_align_size(section, ir->align);
+        break;
+      case IR_EXPR_BYTE:
+      case IR_EXPR_SHORT:
+      case IR_EXPR_LONG:
+      case IR_EXPR_QUAD:
+        {
+#if XCC_TARGET_PLATFORM == XCC_PLATFORM_APPLE
+          int64_t value = ir->expr.addend;
+#else
+          int64_t value = 0;
+#endif
+          int size = 1 << (ir->kind - IR_EXPR_BYTE);
+          sec_add_data(section, &value, size);  // TODO: Target endian
+        }
+        break;
+      }
+    }
+  }
+}
