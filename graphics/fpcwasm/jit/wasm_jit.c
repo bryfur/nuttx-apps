@@ -305,6 +305,13 @@ typedef struct jc_s
   uint32_t kval[16];
   uint32_t kvalid;
 
+  /* ... and frame locals' values: lvalid's registers hold the value of
+   * the local lval[r] (stored from them, not changed since)
+   */
+
+  uint32_t lval[16];
+  uint32_t lvalid;
+
   /* Registers */
 
   uint32_t ctemp;                 /* Core registers that are temporaries */
@@ -730,6 +737,7 @@ static void lbind(jc_t *c, int l)
 
   c->nbc = 0;                   /* (other ways in: nothing proven) */
   c->kvalid = 0;                /* (nor known) */
+  c->lvalid = 0;
   lb->pos = (int32_t)c->fb.len;
   for (i = lb->fix; i >= 0; i = c->fix[i].next)
     {
@@ -934,6 +942,7 @@ static int take_core(jc_t *c, int r)
 {
   c->cfree &= ~(1u << r);
   c->kvalid &= ~(1u << r);
+  c->lvalid &= ~(1u << r);
   if (r == R_LR)
     {
       c->lr_used = true;
@@ -958,7 +967,7 @@ static int alloc_core(jc_t *c)
         {
           int r = g_alloc_order[i];
 
-          if ((c->cfree & ~c->kvalid) & (1u << r))
+          if ((c->cfree & ~c->kvalid & ~c->lvalid) & (1u << r))
             {
               return take_core(c, r);
             }
@@ -1035,7 +1044,7 @@ static int const_reg(jc_t *c, uint32_t k, uint32_t avoid)
   for (i = 0; i < sizeof(g_alloc_order); i++)
     {
       r = g_alloc_order[i];
-      if ((c->cfree & ~c->kvalid & ~avoid) & (1u << r))
+      if ((c->cfree & ~c->kvalid & ~c->lvalid & ~avoid) & (1u << r))
         {
           break;
         }
@@ -1538,6 +1547,24 @@ static int vreg(jc_t *c, val_t *v)
             return c->lreg[v->local];
           }
 
+        {
+          uint32_t m = c->cfree & c->lvalid;
+
+          for (; m != 0; m &= m - 1)
+            {
+              if (c->lval[__builtin_ctz(m)] == v->local)
+                {
+                  break;
+                }
+            }
+
+          if (m != 0)
+            {
+              r = take_core(c, __builtin_ctz(m));    /* (holds it) */
+              break;
+            }
+        }
+
         r = alloc_core(c);
         ld_sp(c, r, c->loff[v->local]);
         break;
@@ -1945,6 +1972,7 @@ static void ccall(jc_t *c, void *fn, const char *sig, val_t *args, int rtype,
   save_csl(c);
   pmoves(c, m, n);
   c->kvalid = 0;
+  c->lvalid = 0;
   for (i = 0; i < ai; i++)
     {
       free_val(c, &args[i]);
@@ -2095,6 +2123,7 @@ static void call_args(jc_t *c, WASMFuncType *t)
   save_csl(c);
   pmoves(c, m, n);
   c->kvalid = 0;
+  c->lvalid = 0;
   for (i = 0; i < na; i++)
     {
       val_t v = pop(c);
@@ -2159,6 +2188,7 @@ static void op_call_indirect(jc_t *c, uint32_t tidx, uint32_t tbl)
 
   c->cfree &= ~(1u << R_LR);    /* Held below */
   c->kvalid = 0;
+  c->lvalid = 0;
 
   /* idx < size, the entry set, a function of this module, the type */
 
@@ -2253,6 +2283,7 @@ static void res_move(jc_t *c, ctrl_t *ct)
   res_free(c, ct);
   word_to(c, ct->rreg, v, 0);
   c->kvalid &= ~(1u << ct->rreg);
+  c->lvalid &= ~(1u << ct->rreg);
 }
 
 static void res_choose(jc_t *c, ctrl_t *ct)
@@ -2610,6 +2641,7 @@ static void add_cold(jc_t *c, int mode, int ra, uint32_t k, uint32_t size)
   cold_t *cs;
   uint32_t n;
   uint32_t kv;
+  uint32_t lv;
   __typeof__(c->bc) bc;
 
   if (!GROW(c, c->cold, c->ncold, c->coldcap))
@@ -2628,11 +2660,13 @@ static void add_cold(jc_t *c, int mode, int ra, uint32_t k, uint32_t size)
 
   n  = c->nbc;
   kv = c->kvalid;
+  lv = c->lvalid;
   memcpy(bc, c->bc, sizeof(bc));
   lbind(c, cs->back);
   memcpy(c->bc, bc, sizeof(bc));
   c->nbc = n;
   c->kvalid = kv;
+  c->lvalid = lv;
 }
 
 static void mem_addr(jc_t *c, val_t *addr, uint32_t offset, uint32_t size,
@@ -5747,6 +5781,15 @@ static void op_local_set(jc_t *c, uint32_t l, bool tee)
 {
   val_t v = pop(c);
   int k = c->lkind[l];
+  uint32_t m;
+
+  for (m = c->lvalid; m != 0; m &= m - 1)
+    {
+      if (c->lval[__builtin_ctz(m)] == l)
+        {
+          c->lvalid &= ~(1u << __builtin_ctz(m));   /* (it changes) */
+        }
+    }
 
   local_changing(c, l, true);
   if (k == L_CORE)
@@ -5852,7 +5895,23 @@ static void op_local_set(jc_t *c, uint32_t l, bool tee)
       return;
     }
 
-  free_val(c, &v);
+  if (k == L_FRAME && v.kind == V_REG && v.type == T_I32 &&
+      (c->ctemp & (1u << v.r)))
+    {
+      /* Its register, once free, still holds the local's value */
+
+      int r = v.r;
+
+      free_val(c, &v);
+      c->lval[r] = l;
+      c->lvalid |= 1u << r;
+      c->kvalid &= ~(1u << r);
+    }
+  else
+    {
+      free_val(c, &v);
+    }
+
   if (tee)
     {
       val_t *t = vpush(c, V_LOCAL, c->ltype[l]);
@@ -6943,6 +7002,7 @@ static bool compile_function1(jc_t *c, uint32_t fidx)
   c->nlheads = 0;
   c->nbc = 0;
   c->kvalid = 0;
+  c->lvalid = 0;
   c->cused = 0;
   assign_locals(c);
   c->epilogue = new_label(c);
