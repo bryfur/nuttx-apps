@@ -38,8 +38,9 @@
  *
  * This header is plain C99 (any C compiler that targets wasm32 can use
  * it): FPC_IMPORT and FPC_EXPORT are clang's import_module/export_name
- * attributes, and empty elsewhere (a compiler without them imports
- * undefined functions from "env" and exports by linker options).
+ * attributes (xcc's wcc has them too), and empty elsewhere (a compiler
+ * without them imports undefined functions from "env" and exports by
+ * linker options).
  *
  * Building (wasi-sdk; docs/wasm.md, sdk/Makefile):
  *   clang --target=wasm32-wasip1 -O2 -o app.wasm app.c \
@@ -61,7 +62,7 @@ extern "C"
 
 #define FPC_API_VERSION 1
 
-#if defined(__clang__) && defined(__wasm__)
+#if (defined(__clang__) || defined(__XCC)) && defined(__wasm__)
 #  define FPC_IMPORT(name) \
      __attribute__((import_module("env"), import_name(#name)))
 #  define FPC_EXPORT(name) __attribute__((export_name(#name)))
