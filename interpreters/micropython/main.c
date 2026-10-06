@@ -246,8 +246,8 @@ static int run_repl(void)
     }
 }
 
-/* sys.path: "" (the script's folder once there is one), then the
- * configured folders or MICROPYPATH's, ~/ being the home directory
+/* sys.path: "" (the script's folder once there is one), ".frozen" (the
+ * modules in the firmware), then the configured folders or MICROPYPATH's, ~/ being the home directory
  */
 
 static void set_path(void)
@@ -269,6 +269,9 @@ static void set_path(void)
 
   mp_sys_path = mp_obj_new_list(0, NULL);
   mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(MP_QSTR_));
+#if MICROPY_MODULE_FROZEN
+  mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(MP_QSTR__dot_frozen));
+#endif
   while (*path != '\0')
     {
       const char *end = strchr(path, ':');

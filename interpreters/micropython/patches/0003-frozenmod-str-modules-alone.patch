@@ -1,0 +1,18 @@
+frozenmod: frozen str modules without frozen mpy ones
+
+The number of str entries was only counted when both kinds are on, so
+with MICROPY_MODULE_FROZEN_STR alone no str module was ever found (the
+agent, docs/agent.md, is frozen as source).
+
+diff -ru a/py/frozenmod.c b/py/frozenmod.c
+--- a/py/frozenmod.c
++++ b/py/frozenmod.c
+@@ -74,7 +74,7 @@
+ 
+     // Count the number of str lengths we have to find how many str entries.
+     size_t num_str = 0;
+-    #if MICROPY_MODULE_FROZEN_STR && MICROPY_MODULE_FROZEN_MPY
++    #if MICROPY_MODULE_FROZEN_STR
+     for (const uint32_t *s = mp_frozen_str_sizes; *s != 0; ++s) {
+         ++num_str;
+     }

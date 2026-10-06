@@ -2,3 +2,4 @@
 /micropython-*.tar.gz
 /micropython-*.tar.gz.part
 /build
+/frozen_agent.c

@@ -99,4 +99,27 @@ config INTERPRETERS_MICROPYTHON_FPC
 		and put the widget kit's controls in them (buttons, labels,
 		fields, sliders, check boxes, lists, ...).
 
+config INTERPRETERS_MICROPYTHON_AGENT
+	bool "The agent: an AI coding agent (agent command)"
+	default y
+	depends on NETUTILS_NETCOP && SYSTEM_NSH && BUILTIN
+	---help---
+		agent: an AI agent in the terminal (docs/agent.md), a light
+		Claude Code.  It talks to the Anthropic Messages API or an
+		OpenAI-compatible Chat Completions API over the network
+		coprocessor (TLS on it) and has local tools: files, search,
+		NSH commands, web pages.  The C half is the _agent module
+		(HTTP and server-sent events, NSH commands with their output,
+		grep and glob, the line editor); the agent itself is Python
+		(the agent package, frozen into the firmware).
+
+config INTERPRETERS_MICROPYTHON_AGENT_HEAPSIZE
+	int "The agent's heap (KB)"
+	default 2048
+	depends on INTERPRETERS_MICROPYTHON_AGENT
+	---help---
+		The MicroPython heap the agent runs with: the conversation,
+		the files read, the requests and responses.  AGENT_HEAP=N in
+		the environment changes it for a run.
+
 endif

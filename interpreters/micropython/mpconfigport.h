@@ -85,6 +85,14 @@
 #  define MICROPY_EMIT_INLINE_THUMB   (0)
 #endif
 
+/* The agent's Python, frozen into the firmware as source (mkfrozen.py),
+ * imported from ".frozen" in sys.path
+ */
+
+#ifdef CONFIG_INTERPRETERS_MICROPYTHON_AGENT
+#  define MICROPY_MODULE_FROZEN_STR   (1)
+#endif
+
 /* Files: NuttX's, through the POSIX VFS mounted at / */
 
 #define MICROPY_VFS                   (1)
@@ -223,6 +231,8 @@ struct mp_nuttx_port_s
   /* The terminal and Ctrl-C (mphalport.c, main.c) */
 
   int      interrupt_char;
+  int      interrupt_esc;              /* A lone Esc interrupts too (the
+                                        * agent, while it works): -1 not */
   uint8_t  ring[256];                  /* Typed ahead */
   int16_t  head;
   int16_t  count;

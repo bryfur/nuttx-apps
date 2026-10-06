@@ -1,0 +1,45 @@
+json: \u surrogate pairs decoded as one character
+
+A pair (an emoji, as some APIs escape them) became two invalid 3-byte
+sequences; now one character, and a lone surrogate U+FFFD.
+
+diff -ru a/extmod/modjson.c b/extmod/modjson.c
+--- a/extmod/modjson.c
++++ b/extmod/modjson.c
+@@ -230,6 +230,36 @@
+                                     }
+                                     num = (num << 4) | c;
+                                 }
++                                if (num >= 0xd800 && num < 0xdc00) {
++                                    // A surrogate pair: one character
++                                    mp_uint_t lo = 0;
++                                    c = S_NEXT(s);
++                                    if (c != '\\') {
++                                        vstr_add_char(&vstr, 0xfffd);
++                                        continue;
++                                    }
++                                    c = S_NEXT(s);
++                                    if (c != 'u') {
++                                        vstr_add_char(&vstr, 0xfffd);
++                                        vstr_add_byte(&vstr, c);
++                                        goto str_cont;
++                                    }
++                                    for (int i = 0; i < 4; i++) {
++                                        c = (S_NEXT(s) | 0x20) - '0';
++                                        if (c > 9) {
++                                            c -= ('a' - ('9' + 1));
++                                        }
++                                        lo = (lo << 4) | c;
++                                    }
++                                    if (lo >= 0xdc00 && lo < 0xe000) {
++                                        num = 0x10000 + ((num - 0xd800) << 10) + (lo - 0xdc00);
++                                    } else {
++                                        vstr_add_char(&vstr, 0xfffd);
++                                        num = lo >= 0xd800 && lo < 0xe000 ? 0xfffd : lo;
++                                    }
++                                } else if (num >= 0xdc00 && num < 0xe000) {
++                                    num = 0xfffd;
++                                }
+                                 vstr_add_char(&vstr, num);
+                                 goto str_cont;
+                             }

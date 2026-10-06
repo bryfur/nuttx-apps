@@ -53,7 +53,19 @@ PORT_SRCS  += modfpc.c
 endif
 
 MAINSRC     = main.c
-CSRCS       = $(PORT_SRCS) $(notdir $(MPY_SRCS))
+
+# The agent (docs/agent.md): the _agent module, the agent package frozen
+# (mkfrozen.py: frozen_agent.c), the agent command
+
+AGENT_PY    = $(sort $(wildcard agent/*.py))
+ifeq ($(CONFIG_INTERPRETERS_MICROPYTHON_AGENT),y)
+PORT_SRCS  += modagent.c agent_http.c agent_proc.c agent_search.c
+PROGNAME   += agent
+MAINSRC    += agent_main.c
+AGENT_SRCS  = frozen_agent.c
+endif
+
+CSRCS       = $(PORT_SRCS) $(AGENT_SRCS) $(notdir $(MPY_SRCS))
 
 # MicroPython's sources by name (no two have the same), found in their
 # folders: so the dependencies on headers (the generated ones) are right
@@ -76,6 +88,7 @@ MPY_CFLAGS += -Dreadline_push_history=mp_readline_push_history
 MPY_CFLAGS += -fno-strict-aliasing -DFFCONF_H=\"lib/oofatfs/ffconf.h\"
 
 CFLAGS     += $(MPY_CFLAGS)
+CFLAGS     += -DMPY_PYTHON_MAIN=$(subst -,_,$(subst ",,$(CONFIG_INTERPRETERS_MICROPYTHON_PROGNAME)))_main
 CFLAGS     += -Wno-shadow -Wno-undef -Wno-unused-function
 CFLAGS     += -Wno-unused-but-set-variable -Wno-missing-field-initializers
 CFLAGS     += -Wno-sign-compare -Wno-implicit-fallthrough
@@ -119,11 +132,15 @@ mpy_genhdr: $(MPY_PATCHED)
 		SRC_QSTR_PORT="$(MAINSRC) $(PORT_SRCS) $(MPY_SRCS)" \
 		NUTTX_CONFIG_H=$(TOPDIR)/include/nuttx/config.h
 
-context:: mpy_genhdr
+frozen_agent.c: $(AGENT_PY) mkfrozen.py
+	$(Q) python3 mkfrozen.py $@ agent
+
+context:: mpy_genhdr $(AGENT_SRCS)
 
 depend:: mpy_genhdr
 
 distclean::
+	$(call DELFILE, frozen_agent.c)
 	$(call DELDIR, $(MPY))
 	$(call DELDIR, $(MPY_BUILD))
 	$(call DELFILE, $(MPY_TARBALL))

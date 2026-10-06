@@ -128,7 +128,13 @@ static void input_take(int timeout)
 
   for (i = 0; i < n; i++)
     {
-      if (p->interrupt_char >= 0 && buf[i] == p->interrupt_char)
+      /* Ctrl-C; or Esc alone (the last byte read: a key's sequence
+       * comes in one piece) while the agent asks for it
+       */
+
+      if (p->interrupt_char >= 0 &&
+          (buf[i] == p->interrupt_char ||
+           (buf[i] == 0x1b && p->interrupt_esc > 0 && i == n - 1)))
         {
           /* What was typed before it goes too, as in a terminal */
 
@@ -424,6 +430,7 @@ void *mp_nuttx_attach(size_t ctxsize)
   if (p != NULL)
     {
       p->interrupt_char   = -1;
+      p->interrupt_esc    = -1;
       p->pyexec_mode = PYEXEC_MODE_FRIENDLY_REPL;
     }
 
