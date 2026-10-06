@@ -63,7 +63,8 @@ void fpcq_dq_wait(void);                  /* fpc_drawq.c */
 
 #define FS_W          320
 #define FS_H          200
-#define FS_MODE       FPC_GPU_MODE_1280x800
+#define FS_H43        240                 /* Its rows at 4:3 */
+#define FS_MODE       FPC_GPU_MODE_1280x800   /* (-gpu3d, -gl) */
 #define FS_SCALE      4
 
 #define SRAM_MAX      8                   /* Arrays in the SRAM at most */
@@ -92,6 +93,11 @@ static struct
   int      back;                          /* The canvas drawn next */
   int      x[2];
   int      y[2];
+  bool     aspect;                        /* 4:3 in the desktop's mode */
+  int      cw;                            /* A canvas */
+  int      ch;
+  int      ox;                            /* The frame in it */
+  int      oy;
   uint16_t lut[256];                      /* The palette, RGB565 */
   uint16_t base[256];                     /* ... without the tints (the GPU's world) */
   bool baseok;
@@ -403,6 +409,9 @@ void QG_Init(void)
 {
   extern void Host_Frame(float time);
   extern void D_DrawSpans8(void *pspans);
+  int w;
+  int h;
+  int s;
   int k;
 
   /* Where the loader put the code (a profile's symbols: the module's
@@ -445,9 +454,45 @@ void QG_Init(void)
       fpcq_exit(1);
     }
 
+  /* The software renderer's frame at 4:3, as on the CRTs Quake was drawn
+   * for, in the desktop's own display mode: 200 rows as 240 (every fifth
+   * row twice), scaled the most whole times that fit (3 x 3, 960 x 720,
+   * in 1280 x 800, 1280 x 720 and 1024 x 768; 2 x 2 in 800 x 600), in the
+   * middle with black around.  -gpu3d draws its world in 320 x 200 on the
+   * GPU: 1280 x 800 at 4 x 4 as before
+   */
+
+  g_fs.aspect = true;
+  for (k = 1; k < g_argc; k++)
+    {
+      if (strcmp(g_argv[k], "-gpu3d") == 0)
+        {
+          g_fs.aspect = false;
+        }
+    }
+
+  s = FS_SCALE;
+  g_fs.cw = FS_W;
+  g_fs.ch = FS_H;
+  g_fs.ox = 0;
+  g_fs.oy = 0;
+  if (g_fs.aspect && fpc_gpu_modesize(fpc_gpu_mode(), &w, &h) == 0)
+    {
+      s = w / FS_W < h / FS_H43 ? w / FS_W : h / FS_H43;
+      s = s < 1 ? 1 : s > 4 ? 4 : s;
+      g_fs.cw = (w + s - 1) / s;
+      g_fs.ch = (h + s - 1) / s;
+      g_fs.ox = ((g_fs.cw - FS_W) / 2) & ~1;   /* (PUT8: x even) */
+      g_fs.oy = (g_fs.ch - FS_H43) / 2;
+    }
+  else
+    {
+      g_fs.aspect = false;
+    }
+
   for (k = 0; k < 2; k++)
     {
-      if (fpc_gpu_game_alloc(FS_W, FS_H, &g_fs.x[k], &g_fs.y[k]) < 0)
+      if (fpc_gpu_game_alloc(g_fs.cw, g_fs.ch, &g_fs.x[k], &g_fs.y[k]) < 0)
         {
           fpc_gpu_game_free_all();
           fpc_gpu_game_display(false);
@@ -455,11 +500,13 @@ void QG_Init(void)
           fpcq_exit(1);
         }
 
-      fpc_gpu_fill(g_fs.x[k], g_fs.y[k], FS_W, FS_H, 0);
+      fpc_gpu_fill(g_fs.x[k], g_fs.y[k], g_fs.cw, g_fs.ch, 0);
     }
 
-  syslog(LOG_INFO, "quake: canvases at (%d, %d) (%d, %d)\n", g_fs.x[0],
-         g_fs.y[0], g_fs.x[1], g_fs.y[1]);   /* (grab.py) */
+  syslog(LOG_INFO, "quake: canvases at (%d, %d) (%d, %d), %d x %d at "
+         "%d x %d%s, the frame at (+%d, +%d)\n", g_fs.x[0], g_fs.y[0],
+         g_fs.x[1], g_fs.y[1], g_fs.cw, g_fs.ch, s, s,
+         g_fs.aspect ? " (4:3)" : "", g_fs.ox, g_fs.oy);   /* (grab.py) */
   for (k = 1; k + 1 < g_argc; k++)
     {
       if (strcmp(g_argv[k], "-holdframe") == 0)
@@ -470,8 +517,12 @@ void QG_Init(void)
 
   fpcq_g3_init();                         /* (the atlas: after the canvases) */
   fpc_gpu_game_keys(true);
-  fpc_gpu_game_mode(FS_MODE);
-  fpc_gpu_set_scale(FS_SCALE, FS_SCALE);
+  if (!g_fs.aspect)
+    {
+      fpc_gpu_game_mode(FS_MODE);
+    }
+
+  fpc_gpu_set_scale(s, s);
   fpc_gpu_game_flip(g_fs.x[0], g_fs.y[0]);
   fpc_gpu_flush();
   g_fs.back = 1;
@@ -594,7 +645,31 @@ void QG_DrawFrame(void *pixels)
     }
   else
     {
-      fpc_gpu_put8(g_fs.x[k], g_fs.y[k], FS_W, FS_H, pixels, FS_W, g_fs.lut);
+      if (g_fs.aspect)
+        {
+          int g;
+
+          /* 200 rows as 240: each group of five rows as six, its middle
+           * one twice (rows 0-2 and 2-4 of the group, a PUT each)
+           */
+
+          for (g = 0; g < FS_H / 5; g++)
+            {
+              const uint8_t *src = pixels + g * 5 * FS_W;
+              int y = g_fs.y[k] + g_fs.oy + g * 6;
+
+              fpc_gpu_put8(g_fs.x[k] + g_fs.ox, y, FS_W, 3, src, FS_W,
+                           g_fs.lut);
+              fpc_gpu_put8(g_fs.x[k] + g_fs.ox, y + 3, FS_W, 3,
+                           src + 2 * FS_W, FS_W, g_fs.lut);
+            }
+        }
+      else
+        {
+          fpc_gpu_put8(g_fs.x[k], g_fs.y[k], FS_W, FS_H, pixels, FS_W,
+                       g_fs.lut);
+        }
+
       g_fs.basesent = false;              /* (the GPU has the tinted one) */
     }
 
@@ -622,7 +697,7 @@ void QG_DrawFrame(void *pixels)
 
       syslog(LOG_INFO, "quake: frame %" PRIu32 " hash %08" PRIx32
              " (canvas (%d, %d)), held 40 s\n", g_fs.frames, h,
-             g_fs.x[k], g_fs.y[k]);
+             g_fs.x[k] + g_fs.ox, g_fs.y[k] + g_fs.oy);
       sleep(40);
     }
 }
