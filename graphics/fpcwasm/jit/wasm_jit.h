@@ -26,6 +26,7 @@
 
 #define WASM_JIT_SRAM     1      /* The code in the internal SRAM if it fits */
 #define WASM_JIT_VERBOSE  2      /* What it did, on stderr */
+#define WASM_JIT_MAP      4      /* Where each function's code is, on stderr */
 
 struct wasm_jit_stats_s
 {

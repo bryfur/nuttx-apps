@@ -91,7 +91,8 @@ typedef struct val_s
 
 enum
 {
-  L_FRAME, L_CORE, L_SREG
+  L_FRAME, L_CORE, L_SREG, L_NONE,         /* (L_NONE: never used) */
+  L_KEPT                                    /* (assigning: the frame) */
 };
 
 enum
@@ -174,6 +175,7 @@ typedef struct jc_s
   uint32_t exc_pos;               /* Unwinding with the exception set */
   uint32_t mem_off;               /* The memory instance (from r11) */
   bool has_mem;
+  uint8_t *may_grow;              /* Each function: may grow the memory */
   far_t *calls;                   /* BLs to functions (mb positions) */
   uint32_t ncalls;
   uint32_t calls_cap;
@@ -224,6 +226,17 @@ typedef struct jc_s
   cold_t *cold;
   uint32_t ncold;
   uint32_t coldcap;
+  /* Bounds proven in this straight-line code: [reg, reg + end) is in the
+   * memory for a local's register (until a label or a write to it; the
+   * memory only grows)
+   */
+
+  struct
+  {
+    int8_t reg;
+    uint32_t end;
+  } bc[4];
+  uint32_t nbc;
   int hint;                       /* local.set/tee follows: its local, or -1 */
   int shint;                      /* ... of an f32 local in an S register */
   bool hint_used;
@@ -251,6 +264,9 @@ typedef struct jc_s
   uint32_t cfree;                 /* ... free */
   uint32_t sfree;                 /* s0-s15 free */
   uint32_t cused;                 /* Callee-saved core registers used */
+  uint32_t stemp;                 /* S registers that are temporaries */
+  bool lr_used;                   /* lr held a temporary */
+  bool leaf;                      /* No calls (nor helpers) */
   uint32_t sused;                 /* s16+ used: how many */
 
   int epilogue;                   /* Label */
@@ -657,6 +673,7 @@ static void lbind(jc_t *c, int l)
   label_t *lb = &c->labels[l];
   int32_t i;
 
+  c->nbc = 0;                   /* (other ways in: nothing proven) */
   lb->pos = (int32_t)c->fb.len;
   for (i = lb->fix; i >= 0; i = c->fix[i].next)
     {
@@ -844,6 +861,11 @@ static int pinned(jc_t *c, uint32_t v, bool f32);
 static int take_core(jc_t *c, int r)
 {
   c->cfree &= ~(1u << r);
+  if (r == R_LR)
+    {
+      c->lr_used = true;
+    }
+
   if (r >= 4 && r <= 8)
     {
       c->cused |= 1u << r;
@@ -907,9 +929,9 @@ static int alloc_s(jc_t *c)
 
   for (tries = 0; tries < 64; tries++)
     {
-      if (c->sfree != 0)
+      if ((c->sfree & c->stemp) != 0)
         {
-          int s = __builtin_ctz(c->sfree);
+          int s = __builtin_ctz(c->sfree & c->stemp);
 
           c->sfree &= ~(1u << s);
           return s;
@@ -938,7 +960,7 @@ static int alloc_s(jc_t *c)
 
 static void free_s(jc_t *c, int s)
 {
-  if (s < 16)
+  if (s < 16 && (c->stemp & (1u << s)))
     {
       c->sfree |= 1u << s;
     }
@@ -1170,11 +1192,29 @@ static void spill_caller_saved(jc_t *c, uint32_t upto)
     }
 }
 
+/* A register a local lives in changes: what was proven of it goes */
+
+static void bc_forget(jc_t *c, int r)
+{
+  uint32_t i;
+
+  for (i = 0; i < c->nbc; i++)
+    {
+      if (c->bc[i].reg == r)
+        {
+          c->bc[i] = c->bc[--c->nbc];
+          i--;
+        }
+    }
+}
+
 /* Before a local changes: the stack's references to it get its value (a
- * free register, or their slot)
+ * free register, or their slot; only their slot when temps is false: an
+ * instruction's operands, freed already, may still be in registers that
+ * look free)
  */
 
-static void local_changing(jc_t *c, uint32_t l)
+static void local_changing(jc_t *c, uint32_t l, bool temps)
 {
   uint32_t i;
 
@@ -1187,7 +1227,11 @@ static void local_changing(jc_t *c, uint32_t l)
           continue;
         }
 
-      if (c->lkind[l] == L_CORE && IS64(c->ltype[l]) &&
+      if (!temps)
+        {
+          spill_at(c, i);
+        }
+      else if (c->lkind[l] == L_CORE && IS64(c->ltype[l]) &&
           __builtin_popcount(c->cfree & c->ctemp) >= 2)
         {
           int r = alloc_core(c);
@@ -1208,7 +1252,7 @@ static void local_changing(jc_t *c, uint32_t l)
           v->kind = V_REG;
           v->r = (int8_t)r;
         }
-      else if (c->lkind[l] == L_SREG && c->sfree != 0)
+      else if (c->lkind[l] == L_SREG && (c->sfree & c->stemp) != 0)
         {
           int s = alloc_s(c);
 
@@ -1232,7 +1276,7 @@ static int alloc_sdest(jc_t *c)
 {
   if (c->shint >= 0 && !c->hint_used)
     {
-      local_changing(c, (uint32_t)c->shint);
+      local_changing(c, (uint32_t)c->shint, false);
       c->hint_used = true;
       return c->lreg[c->shint];
     }
@@ -1244,7 +1288,8 @@ static int alloc_dest(jc_t *c)
 {
   if (c->hint >= 0 && !c->hint_used)
     {
-      local_changing(c, (uint32_t)c->hint);
+      local_changing(c, (uint32_t)c->hint, false);
+      bc_forget(c, c->lreg[c->hint]);
       c->hint_used = true;
       return c->lreg[c->hint];
     }
@@ -1847,7 +1892,11 @@ static void op_call(jc_t *c, uint32_t idx)
 
   call_args(c, t);
   call_func(c, idx);
-  reload_mem(c, &c->fb);
+  if (c->may_grow == NULL || c->may_grow[idx])
+    {
+      reload_mem(c, &c->fb);      /* (the memory may have moved) */
+    }
+
   push_results(c, t);
 }
 
@@ -2255,6 +2304,39 @@ static void mem_addr(jc_t *c, val_t *addr, uint32_t offset, uint32_t size,
       return;
     }
 
+  /* A local's register already checked far enough: no check */
+
+  if (addr->kind == V_LOCAL && c->lkind[addr->local] == L_CORE &&
+      (uint64_t)offset + size <= 0xffffffffu)
+    {
+      uint32_t i;
+
+      for (i = 0; i < c->nbc; i++)
+        {
+          if (c->bc[i].reg == ra && offset + size <= c->bc[i].end)
+            {
+              if (offset == 0 && size != 8)
+                {
+                  *reg = ra;
+                }
+              else
+                {
+                  t_dp_reg(&c->fb, DP_ADD, 0, R_IP, JR_MEM, ra, SH_LSL, 0);
+                  *base = R_IP;
+                  *reg  = -1;
+                  *imm  = (int)offset;
+                  if (offset > 4091)
+                    {
+                      t_addi(&c->fb, R_IP, R_IP, (int32_t)offset);
+                      *imm = 0;
+                    }
+                }
+
+              return;
+            }
+        }
+    }
+
   if (k == 0)
     {
       t_cmp(&c->fb, ra, JR_LIM4);
@@ -2292,7 +2374,17 @@ static void mem_addr(jc_t *c, val_t *addr, uint32_t offset, uint32_t size,
       cs->size  = (uint8_t)size;
       cs->k     = (uint32_t)k;
       bcc_to(c, CC_HS, cs->entry);
-      lbind(c, cs->back);
+      {
+        /* (the exact check comes back here having changed nothing) */
+
+        uint32_t n = c->nbc;
+        __typeof__(c->bc) bc;
+
+        memcpy(bc, c->bc, sizeof(bc));
+        lbind(c, cs->back);
+        memcpy(c->bc, bc, sizeof(bc));
+        c->nbc = n;
+      }
     }
 
   if (size == 8)
@@ -2301,6 +2393,27 @@ static void mem_addr(jc_t *c, val_t *addr, uint32_t offset, uint32_t size,
       *base = R_IP;
       *reg  = -1;
       *imm  = -4;
+    }
+
+  /* What this proved, of a local's register */
+
+  if (addr->kind == V_LOCAL && c->lkind[addr->local] == L_CORE)
+    {
+      uint32_t end = offset + size;     /* (no wrap: k <= 2^32 - 1) */
+      uint32_t i;
+
+      for (i = 0; i < c->nbc && c->bc[i].reg != ra; i++);
+      if (i == c->nbc && c->nbc < sizeof(c->bc) / sizeof(c->bc[0]))
+        {
+          c->bc[c->nbc].reg = (int8_t)ra;
+          c->bc[c->nbc].end = 0;
+          c->nbc++;
+        }
+
+      if (i < c->nbc && end > c->bc[i].end)
+        {
+          c->bc[i].end = end;
+        }
     }
 }
 
@@ -4023,9 +4136,60 @@ static int pinned(jc_t *c, uint32_t v, bool f32)
   return -1;
 }
 
+/* Whether an instruction calls one of the runtime's helpers (p after
+ * the opcode; prev the instruction before it)
+ */
+
+static bool calls_helper(uint8_t op, const uint8_t *p, uint8_t prev)
+{
+  uint32_t sub;
+
+  switch (op)
+    {
+      case WASM_OP_I32_POPCNT:
+      case WASM_OP_I64_CTZ:
+      case WASM_OP_I64_POPCNT:
+      case WASM_OP_I64_DIV_S:
+      case WASM_OP_I64_DIV_U:
+      case WASM_OP_I64_REM_S:
+      case WASM_OP_I64_REM_U:
+      case WASM_OP_I64_ROTL:
+      case WASM_OP_I64_ROTR:
+      case WASM_OP_MEMORY_GROW:
+      case WASM_OP_TABLE_GET:
+      case WASM_OP_TABLE_SET:
+      case WASM_OP_I32_TRUNC_S_F64:
+      case WASM_OP_I32_TRUNC_U_F64:
+      case WASM_OP_F32_DEMOTE_F64:
+      case WASM_OP_F64_PROMOTE_F32:
+        return true;
+
+      case WASM_OP_I64_SHL:
+      case WASM_OP_I64_SHR_S:
+      case WASM_OP_I64_SHR_U:
+        return prev != WASM_OP_I64_CONST;   /* (by a constant: inline) */
+
+      case WASM_OP_MISC_PREFIX:
+        sub = rd_u32(&p);
+        return sub != WASM_OP_I32_TRUNC_SAT_S_F32 &&
+               sub != WASM_OP_I32_TRUNC_SAT_U_F32 &&
+               sub != WASM_OP_TABLE_SIZE;
+
+      default:
+        break;
+    }
+
+  return (op >= WASM_OP_F64_EQ && op <= WASM_OP_F64_GE) ||
+         (op >= WASM_OP_F64_CEIL && op <= WASM_OP_F64_MAX) ||
+         (op >= WASM_OP_I64_TRUNC_S_F32 && op <= WASM_OP_I64_TRUNC_U_F64) ||
+         (op >= WASM_OP_F32_CONVERT_S_I64 && op <= WASM_OP_F32_CONVERT_U_I64) ||
+         (op >= WASM_OP_F64_CONVERT_S_I32 && op <= WASM_OP_F64_CONVERT_U_I64);
+}
+
 /* Count the uses of each local (weighted by loop depth) and of the
- * constants in loops, find the largest outgoing area; false if the
- * function uses what the compiler does not support
+ * constants in loops, find the largest outgoing area, whether the
+ * function is a leaf; false if the function uses what the compiler does
+ * not support
  */
 
 static bool prescan(jc_t *c)
@@ -4034,12 +4198,17 @@ static bool prescan(jc_t *c)
   uint8_t loops[64];
   uint32_t depth = 0;
   uint32_t ld = 0;
+  uint8_t prev = WASM_OP_NOP;
+  bool helpers = false;
 
   while (p < c->code_end)
     {
       uint8_t op = *p++;
       const uint8_t *q = p;
       uint32_t w = 1u << (2 * (ld < 5 ? ld : 5));
+
+      helpers = helpers || calls_helper(op, p, prev);
+      prev = op;
 
       if (op == WASM_OP_BLOCK || op == WASM_OP_LOOP || op == WASM_OP_IF)
         {
@@ -4132,21 +4301,103 @@ static bool prescan(jc_t *c)
         }
     }
 
+  c->leaf = !c->makes_calls && !helpers;
   return true;
 }
 
-/* Which locals live in registers; the frame's layout */
+/* Which locals live in registers; the frame's layout.  A function that
+ * calls keeps them in callee-saved registers (r4-r8, s16-s31: calls leave
+ * them); a leaf (no calls, not even of the runtime's helpers) first in
+ * the caller-saved ones (nothing to save), its parameters in the
+ * registers they come in.  At most 5 core registers go to locals and
+ * constants: the rest are the temporaries.
+ */
+
+static int free_reg(const int8_t *order, int n, uint32_t taken)
+{
+  int i;
+
+  for (i = 0; i < n; i++)
+    {
+      if (!(taken & (1u << order[i])))
+        {
+          return order[i];
+        }
+    }
+
+  return -1;
+}
 
 static void assign_locals(jc_t *c)
 {
+  static const int8_t core_call[] =
+  {
+    4, 5, 6, 7, 8
+  };
+
+  static const int8_t core_leaf[] =
+  {
+    0, 1, 2, 3, 4, 5, 6, 7, 8
+  };
+
+  static const int8_t s_call[] =
+  {
+    16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+  };
+
+  static const int8_t s_leaf[] =
+  {
+    15, 14, 13, 12, 11, 10, 9, 8,
+    16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+  };
+
+  const int8_t *cr = c->leaf ? core_leaf : core_call;
+  const int8_t *sr = c->leaf ? s_leaf : s_call;
+  int ncr = c->leaf ? 9 : 5;
+  int nsr = c->leaf ? 24 : 16;
+  uint32_t taken = 0;           /* Core registers of locals, constants */
+  uint32_t reserved = 0;        /* ... and parameters' until the prologue */
+  uint32_t staken = 0;
   uint32_t ncore = 0;
-  uint32_t ns = 0;
   uint32_t nframe = 0;
   uint32_t i;
+  uint32_t w = 0;
 
   for (i = 0; i < c->nlocals; i++)
     {
       c->lkind[i] = L_FRAME;
+    }
+
+  /* A leaf's parameters where they come */
+
+  for (i = 0; c->leaf && i < c->nparams; i++)
+    {
+      int ty = c->ltype[i];
+
+      if (c->lweight[i] > 0 && ty == T_I32 && w < 4 && ncore < 5)
+        {
+          c->lkind[i] = L_CORE;
+          c->lreg[i] = (int8_t)w;
+          taken |= 1u << w;
+          ncore++;
+        }
+      else if (c->lweight[i] > 0 && ty == T_I64 && w + 1 < 4 && ncore < 4)
+        {
+          c->lkind[i] = L_CORE;
+          c->lreg[i] = (int8_t)w;
+          c->lreg2[i] = (int8_t)(w + 1);
+          taken |= 3u << w;
+          ncore += 2;
+        }
+      else if (c->lweight[i] > 0)
+        {
+          /* (its registers hold it until the prologue has moved it) */
+
+          reserved |= (w < 4 ? 1u << w : 0) |
+                      (IS64(ty) && w + 1 < 4 ? 1u << (w + 1) : 0);
+        }
+
+      w += TWORDS(ty);
     }
 
   /* The heaviest first */
@@ -4161,7 +4412,7 @@ static void assign_locals(jc_t *c)
           if (c->lkind[i] == L_FRAME && c->lweight[i] > best &&
               ((c->ltype[i] == T_I32 && ncore < 5) ||
                (c->ltype[i] == T_I64 && ncore < 4) ||
-               (c->ltype[i] == T_F32 && ns < 16)))
+               c->ltype[i] == T_F32))
             {
               best = c->lweight[i];
               bi = (int)i;
@@ -4173,28 +4424,51 @@ static void assign_locals(jc_t *c)
           break;
         }
 
-      if (c->ltype[bi] == T_I32)
+      if (c->ltype[bi] == T_F32)
         {
-          c->lkind[bi] = L_CORE;
-          c->lreg[bi] = (int8_t)(4 + ncore++);
-          c->cused |= 1u << c->lreg[bi];
-        }
-      else if (c->ltype[bi] == T_I64)
-        {
-          c->lkind[bi] = L_CORE;
-          c->lreg[bi] = (int8_t)(4 + ncore++);
-          c->lreg2[bi] = (int8_t)(4 + ncore++);
-          c->cused |= 1u << c->lreg[bi] | 1u << c->lreg2[bi];
+          int r = free_reg(sr, nsr, staken);
+
+          if (r < 0)
+            {
+              c->lkind[bi] = L_KEPT;        /* (stays in the frame) */
+              continue;
+            }
+
+          c->lkind[bi] = L_SREG;
+          c->lreg[bi] = (int8_t)r;
+          staken |= 1u << r;
         }
       else
         {
-          c->lkind[bi] = L_SREG;
-          c->lreg[bi] = (int8_t)(16 + ns++);
+          int r = free_reg(cr, ncr, taken | reserved);
+          int r2 = -1;
+
+          if (r >= 0 && c->ltype[bi] == T_I64)
+            {
+              r2 = free_reg(cr, ncr, taken | reserved | 1u << r);
+            }
+
+          if (r < 0 || (c->ltype[bi] == T_I64 && r2 < 0))
+            {
+              c->lkind[bi] = L_KEPT;
+              continue;
+            }
+
+          c->lkind[bi] = L_CORE;
+          c->lreg[bi] = (int8_t)r;
+          taken |= 1u << r;
+          ncore++;
+          if (r2 >= 0)
+            {
+              c->lreg2[bi] = (int8_t)r2;
+              taken |= 1u << r2;
+              ncore++;
+            }
         }
     }
 
-  /* The heaviest constants of loops into what is left of r4-r8 and
-   * s16-s31 (a constant used twice in a loop, or once in a nested one)
+  /* The heaviest constants of loops into the registers left (a constant
+   * used twice in a loop, or once in a nested one)
    */
 
   c->npin = 0;
@@ -4202,11 +4476,11 @@ static void assign_locals(jc_t *c)
     {
       uint32_t best = 7;
       int bi = -1;
+      int r;
 
       for (i = 0; i < c->nkc; i++)
         {
-          if (c->kc[i].w > best &&
-              (c->kc[i].f32 ? ns < 16 : ncore < 5) &&
+          if (c->kc[i].w > best && (c->kc[i].f32 || ncore < 5) &&
               c->npin < sizeof(c->pin) / sizeof(c->pin[0]))
             {
               best = c->kc[i].w;
@@ -4219,23 +4493,46 @@ static void assign_locals(jc_t *c)
           break;
         }
 
+      r = c->kc[bi].f32 ? free_reg(sr, nsr, staken) :
+                          free_reg(cr, ncr, taken | reserved);
+      c->kc[bi].w = 0;
+      if (r < 0)
+        {
+          continue;
+        }
+
       c->pin[c->npin].v = c->kc[bi].v;
       c->pin[c->npin].f32 = c->kc[bi].f32;
+      c->pin[c->npin].r = (int8_t)r;
       if (c->kc[bi].f32)
         {
-          c->pin[c->npin].r = (int8_t)(16 + ns++);
+          staken |= 1u << r;
         }
       else
         {
-          c->pin[c->npin].r = (int8_t)(4 + ncore++);
-          c->cused |= 1u << c->pin[c->npin].r;
+          taken |= 1u << r;
+          ncore++;
         }
 
-      c->kc[bi].w = 0;
       c->npin++;
     }
 
-  c->sused = ns;
+  /* Locals the code never reads or writes: nowhere */
+
+  for (i = 0; i < c->nlocals; i++)
+    {
+      if (c->lkind[i] == L_KEPT)
+        {
+          c->lkind[i] = L_FRAME;
+        }
+      else if (c->lkind[i] == L_FRAME && c->lweight[i] == 0)
+        {
+          c->lkind[i] = L_NONE;
+        }
+    }
+
+  c->cused = taken & CALLEE_TEMPS;
+  c->sused = (uint32_t)__builtin_popcount(staken >> 16);
   for (i = 0; i < c->nlocals; i++)
     {
       if (c->lkind[i] == L_FRAME)
@@ -4261,11 +4558,13 @@ static void assign_locals(jc_t *c)
   c->slot_base = c->local_base + 8 * nframe;
   c->nslots = 0;
 
-  /* The temporaries: r0-r3, lr, and r4-r8 no local holds */
+  /* The temporaries: what no local or constant holds */
 
-  c->ctemp = CALLER_SAVED | (CALLEE_TEMPS & ~c->cused);
+  c->ctemp = (CALLER_SAVED | CALLEE_TEMPS) & ~taken;
   c->cfree = c->ctemp;
-  c->sfree = 0xffff;
+  c->stemp = 0xffffu & ~staken;
+  c->sfree = c->stemp;
+  c->lr_used = false;
 }
 
 /* The prologue (into mb, before the body is placed) */
@@ -4279,8 +4578,13 @@ static uint32_t emit_prologue(jc_t *c, uint32_t push)
   uint32_t w = 0;
   uint32_t i;
   bool zero = false;
+  int scr = (push & (1u << R_LR)) ? R_LR : R_IP;   /* (lr when it is saved) */
 
-  t_push(b, push);
+  if (push != 0)
+    {
+      t_push(b, push);
+    }
+
   if (c->sused > 0)
     {
       e32(b, 0xed2d | (16 & 1) << 6, (16 >> 1) << 12 | 0x0a00 | c->sused);
@@ -4319,6 +4623,11 @@ static uint32_t emit_prologue(jc_t *c, uint32_t push)
         {
           int src = w < 4 ? (int)(R0 + w) : -1;
 
+          if (c->lkind[i] == L_NONE)
+            {
+              continue;
+            }
+
           if (c->lkind[i] == L_CORE)
             {
               int dst = k ? c->lreg2[i] : c->lreg[i];
@@ -4336,8 +4645,8 @@ static uint32_t emit_prologue(jc_t *c, uint32_t push)
             {
               if (src < 0)
                 {
-                  t_ldst(b, LS_LDR, R_LR, R_SP, in_base + 4 * (w - 4));
-                  src = R_LR;
+                  t_ldst(b, LS_LDR, scr, R_SP, in_base + 4 * (w - 4));
+                  src = scr;
                 }
 
               t_vmov_sr(b, c->lreg[i], src);
@@ -4346,8 +4655,8 @@ static uint32_t emit_prologue(jc_t *c, uint32_t push)
             {
               if (src < 0)
                 {
-                  t_ldst(b, LS_LDR, R_LR, R_SP, in_base + 4 * (w - 4));
-                  src = R_LR;
+                  t_ldst(b, LS_LDR, scr, R_SP, in_base + 4 * (w - 4));
+                  src = scr;
                 }
 
               t_ldst(b, LS_STR, src, R_SP, c->loff[i] + 4 * k);
@@ -4361,6 +4670,11 @@ static uint32_t emit_prologue(jc_t *c, uint32_t push)
     {
       uint8_t wt = c->func->local_types[i - c->nparams];
 
+      if (c->lkind[i] == L_NONE)
+        {
+          continue;
+        }
+
       if (wt == VALUE_TYPE_FUNCREF || wt == VALUE_TYPE_EXTERNREF)
         {
           if (c->lkind[i] == L_CORE)
@@ -4369,8 +4683,8 @@ static uint32_t emit_prologue(jc_t *c, uint32_t push)
             }
           else
             {
-              t_movi(b, R_LR, NULL_REF);
-              t_ldst(b, LS_STR, R_LR, R_SP, (int32_t)c->loff[i]);
+              t_movi(b, scr, NULL_REF);
+              t_ldst(b, LS_STR, scr, R_SP, (int32_t)c->loff[i]);
               zero = false;
             }
 
@@ -4379,7 +4693,7 @@ static uint32_t emit_prologue(jc_t *c, uint32_t push)
 
       if (!zero && c->lkind[i] != L_CORE)
         {
-          t_movi(b, R_LR, 0);
+          t_movi(b, scr, 0);
           zero = true;
         }
 
@@ -4393,14 +4707,14 @@ static uint32_t emit_prologue(jc_t *c, uint32_t push)
         }
       else if (c->lkind[i] == L_SREG)
         {
-          t_vmov_sr(b, c->lreg[i], R_LR);
+          t_vmov_sr(b, c->lreg[i], scr);
         }
       else
         {
-          t_ldst(b, LS_STR, R_LR, R_SP, c->loff[i]);
+          t_ldst(b, LS_STR, scr, R_SP, c->loff[i]);
           if (IS64(c->ltype[i]))
             {
-              t_ldst(b, LS_STR, R_LR, R_SP, c->loff[i] + 4);
+              t_ldst(b, LS_STR, scr, R_SP, c->loff[i] + 4);
             }
         }
     }
@@ -4411,8 +4725,8 @@ static uint32_t emit_prologue(jc_t *c, uint32_t push)
     {
       if (c->pin[i].f32)
         {
-          t_movi(b, R_LR, c->pin[i].v);
-          t_vmov_sr(b, c->pin[i].r, R_LR);
+          t_movi(b, scr, c->pin[i].v);
+          t_vmov_sr(b, c->pin[i].r, scr);
         }
       else
         {
@@ -4420,7 +4734,10 @@ static uint32_t emit_prologue(jc_t *c, uint32_t push)
         }
     }
 
-  /* (the body's literal loads want it aligned) */
+  /* The body word-aligned (its loops' first instructions are: a 32-bit
+   * instruction across two words takes the Cortex-M33 another fetch at
+   * every branch to it)
+   */
 
   if ((b->len - start) & 2)
     {
@@ -4462,7 +4779,19 @@ static void emit_epilogue(jc_t *c, uint32_t push)
           (16 >> 1) << 12 | 0x0a00 | c->sused);
     }
 
-  t_pop(&c->fb, (push & ~(1u << R_LR)) | (1u << R_PC));
+  if (push & (1u << R_LR))
+    {
+      t_pop(&c->fb, (push & ~(1u << R_LR)) | (1u << R_PC));
+    }
+  else
+    {
+      if (push != 0)
+        {
+          t_pop(&c->fb, push);
+        }
+
+      t_bx(&c->fb, R_LR);
+    }
 }
 
 static void op_local_set(jc_t *c, uint32_t l, bool tee)
@@ -4470,7 +4799,16 @@ static void op_local_set(jc_t *c, uint32_t l, bool tee)
   val_t v = pop(c);
   int k = c->lkind[l];
 
-  local_changing(c, l);
+  local_changing(c, l, true);
+  if (k == L_CORE)
+    {
+      bc_forget(c, c->lreg[l]);
+      if (IS64(c->ltype[l]))
+        {
+          bc_forget(c, c->lreg2[l]);
+        }
+    }
+
   if (k == L_CORE && IS64(c->ltype[l]))
     {
       int w;
@@ -4981,6 +5319,11 @@ static void compile_body(jc_t *c)
             spill_from(c, c->cs[c->csp - 1].height);
             ct = &c->cs[c->csp - 1];
             ct->label = new_label(c);
+            if (c->fb.len & 2)
+              {
+                e16(&c->fb, 0xbf00);          /* (the loop's start aligned) */
+              }
+
             lbind(c, ct->label);
             check_exception(c);
             break;
@@ -5374,6 +5717,95 @@ static void compile_body(jc_t *c)
     }
 }
 
+/* Which functions may grow the memory (and move it): memory.grow, an
+ * import (the host may call back into the module), call_indirect, or a
+ * call of one that may.  The others' callers keep r10 and r9 as they are.
+ */
+
+static void find_growers(jc_t *c)
+{
+  WASMModule *m = c->mod;
+  uint32_t ni = m->import_function_count;
+  uint32_t n = ni + m->function_count;
+  uint32_t *edge = NULL;          /* (caller, callee) pairs */
+  uint32_t ne = 0;
+  uint32_t cap = 0;
+  uint32_t i;
+  bool changed = true;
+
+  c->may_grow = jit_zalloc(n + 1);
+  if (c->may_grow == NULL)
+    {
+      return;
+    }
+
+  for (i = 0; i < ni; i++)
+    {
+      c->may_grow[i] = 1;
+    }
+
+  for (i = 0; i < m->function_count; i++)
+    {
+      WASMFunction *f = m->functions[i];
+      const uint8_t *p = f->code;
+      const uint8_t *end = f->code + f->code_size;
+
+      while (p < end)
+        {
+          uint8_t op = *p++;
+          const uint8_t *q = p;
+
+          if (op == WASM_OP_MEMORY_GROW || op == WASM_OP_CALL_INDIRECT)
+            {
+              c->may_grow[ni + i] = 1;
+            }
+          else if (op == WASM_OP_CALL)
+            {
+              if (ne >= cap)
+                {
+                  uint32_t *e = jit_realloc(edge, (cap = cap ? cap * 2 : 256)
+                                            * 2 * sizeof(uint32_t));
+
+                  if (e == NULL)
+                    {
+                      jit_free(edge);
+                      jit_free(c->may_grow);
+                      c->may_grow = NULL;       /* (reload after every call) */
+                      return;
+                    }
+
+                  edge = e;
+                }
+
+              edge[2 * ne] = ni + i;
+              edge[2 * ne + 1] = rd_u32(&q);
+              ne++;
+            }
+
+          if (!skip_imm(op, &p))
+            {
+              c->may_grow[ni + i] = 1;    /* (not compiled anyway) */
+              break;
+            }
+        }
+    }
+
+  while (changed)
+    {
+      changed = false;
+      for (i = 0; i < ne; i++)
+        {
+          if (!c->may_grow[edge[2 * i]] && c->may_grow[edge[2 * i + 1]])
+            {
+              c->may_grow[edge[2 * i]] = 1;
+              changed = true;
+            }
+        }
+    }
+
+  jit_free(edge);
+}
+
 /* Place a body (after its prologue) in the module's code */
 
 static void place_body(jc_t *c)
@@ -5489,6 +5921,7 @@ static bool compile_function(jc_t *c, uint32_t fidx)
   c->nfix = 0;
   c->nfars = 0;
   c->ncold = 0;
+  c->nbc = 0;
   c->cused = 0;
   assign_locals(c);
   c->epilogue = new_label(c);
@@ -5518,10 +5951,31 @@ static bool compile_function(jc_t *c, uint32_t fidx)
       return false;
     }
 
-  /* What the prologue saves; the frame keeps sp 8-byte aligned */
+  /* What the prologue saves: lr unless a leaf needs it for nothing (no
+   * temporary in it, no frame of locals or stack arguments to set up, no
+   * stack check); a function that calls keeps sp 8-byte aligned
+   */
 
-  push = (c->cused & CALLEE_TEMPS) | (1u << R_LR);
-  if (((4 * __builtin_popcount(push) + 4 * c->sused + c->frame_size) & 7)
+  push = c->cused & CALLEE_TEMPS;
+  {
+    bool frame_locals = false;
+    uint32_t i;
+
+    for (i = 0; i < c->nlocals; i++)
+      {
+        frame_locals = frame_locals || c->lkind[i] == L_FRAME;
+      }
+
+    if (!c->leaf || c->lr_used || frame_locals || c->frame_size > 256 ||
+        type_words(c->ftype->types, c->nparams) > 4 ||
+        type_words(c->ftype->types + c->nparams, c->ftype->result_count) > 2)
+      {
+        push |= 1u << R_LR;
+      }
+  }
+
+  if (!c->leaf &&
+      ((4 * __builtin_popcount(push) + 4 * c->sused + c->frame_size) & 7)
       != 0)
     {
       c->frame_size += 4;
@@ -5532,6 +5986,11 @@ static bool compile_function(jc_t *c, uint32_t fidx)
   if (c->failed || c->fb.oom)
     {
       return false;
+    }
+
+  while (c->mb.len & 3)
+    {
+      e16(&c->mb, 0xbf00);
     }
 
   c->func_off[c->mod->import_function_count + fidx] = c->mb.len;
@@ -5857,6 +6316,7 @@ static void jc_free(jc_t *c)
   jit_free(c->mb.buf);
   jit_free(c->fb.buf);
   jit_free(c->func_off);
+  jit_free(c->may_grow);
   jit_free(c->typeid);
   jit_free(c->calls);
   jit_free(c->ltype);
@@ -5942,6 +6402,7 @@ bool wasm_jit_attach(wasm_module_inst_t module_inst, unsigned flags,
       c.typeid[i] = j;
     }
 
+  find_growers(&c);
   emit_stubs(&c);
   for (i = 0; i < mod->import_function_count && !c.failed; i++)
     {
@@ -6060,6 +6521,20 @@ bool wasm_jit_attach(wasm_module_inst_t module_inst, unsigned flags,
   jm->stats.compile_us = (uint32_t)(os_time_get_boot_us() - t0);
   jc_free(&c);
   jm->stats.peak_bytes = g_jit_peak - peak0;
+
+  if (flags & WASM_JIT_MAP)
+    {
+      /* (for a profile: fpcswd.py profile's addresses to functions) */
+
+      for (i = 0; i < nfuncs; i++)
+        {
+          fprintf(stderr, "%08x t wasm_f%u\n",
+                  (unsigned)(jm->funcs[i].code & ~1u), (unsigned)i);
+        }
+
+      fprintf(stderr, "%08x t wasm_jit_end\n",
+              (unsigned)((uintptr_t)code + c.mb.len));
+    }
 
   inst->ext_words[EXT_FUNCS] = (uint32_t)(uintptr_t)jm->funcs;
   inst->e->ext_data = jm;

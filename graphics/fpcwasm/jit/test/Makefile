@@ -146,7 +146,7 @@ spec: $(OUT)/jitrun
 	python3 $(CURDIR)/spec.py --wast2json $(WAST2JSON) \
 	  --jitrun "$(QEMU) $(OUT)/jitrun" --out $(OUT)/spec \
 	  $(filter-out $(patsubst %,$(TESTSUITE)/%.wast,$(SPEC_SKIP)),\
-	    $(wildcard $(TESTSUITE)/*.wast))
+	    $(wildcard $(TESTSUITE)/*.wast)) $(wildcard $(CURDIR)/wast/*.wast)
 
 N ?= 100
 fuzz: $(OUT)/jitrun

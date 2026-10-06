@@ -537,6 +537,12 @@ static inline void t_push(jbuf_t *b, uint32_t list)
     {
       e16(b, 0xb400 | ((list >> 14) & 1) << 8 | (list & 0xff));
     }
+  else if ((list & (list - 1)) == 0)
+    {
+      /* One high register (PUSH.W wants two): str r, [sp, #-4]! */
+
+      e32(b, 0xf84d, __builtin_ctz(list) << 12 | 0xd04);
+    }
   else
     {
       e32(b, 0xe92d, list);
@@ -548,6 +554,12 @@ static inline void t_pop(jbuf_t *b, uint32_t list)
   if ((list & ~0x80ffu) == 0)
     {
       e16(b, 0xbc00 | ((list >> 15) & 1) << 8 | (list & 0xff));
+    }
+  else if ((list & (list - 1)) == 0)
+    {
+      /* ldr r, [sp], #4 */
+
+      e32(b, 0xf85d, __builtin_ctz(list) << 12 | 0xb04);
     }
   else
     {

@@ -96,6 +96,7 @@ struct wasm_opts_s
   bool aot;                               /* -a: the .aot or nothing */
   bool sram;                              /* --sram: AOT code in SRAM */
   bool verbose;                           /* -v */
+  bool jitmap;                            /* --jitmap */
   int maxmem_kb;                          /* -m */
   int watchdog_s;                         /* -w */
   const char *dirs[WASM_MAX_DIRS];        /* --dir */
@@ -679,7 +680,8 @@ static int run_found(FAR struct wasm_found_s *f,
       (o->jit || strcmp(f->run, "interp") != 0))
     {
       jit = wasm_jit_attach(g_wapp.inst, (o->sram ? WASM_JIT_SRAM : 0) |
-                            (o->verbose ? WASM_JIT_VERBOSE : 0), err,
+                            (o->verbose ? WASM_JIT_VERBOSE : 0) |
+                            (o->jitmap ? WASM_JIT_MAP : 0), err,
                             sizeof(err));
       if (!jit)
         {
@@ -889,6 +891,10 @@ static int cmd_run(int argc, FAR char **argv)
       else if (strcmp(a, "--sram") == 0)
         {
           o.sram = true;
+        }
+      else if (strcmp(a, "--jitmap") == 0)
+        {
+          o.jitmap = true;                /* (nm lines: a profile's map) */
         }
       else if (strcmp(a, "-s") == 0 && i + 1 < argc)
         {
