@@ -651,6 +651,49 @@ static void t_fall(void)
   out("fall", fall_old(s1) * 7 + fall_old(s2) + fall_new(s1) * 3 + fall_new(s2));
 }
 
+/* Two words 4 bytes apart loaded one after the other (ldrd), either order,
+ * the base loaded over by the first; 64-bit multiplications by constants
+ * in a loop */
+
+struct quad
+{
+  struct quad *next;
+  int32_t a, b, c;
+};
+
+static uint32_t t_ldrd_sum(struct quad *q)
+{
+  uint32_t s = 0;
+  while (q != NULL)
+    {
+      s += (uint32_t)(q->a ^ q->b);
+      s += (uint32_t)(q->c - q->b);
+      q = q->next;
+    }
+  return s;
+}
+
+static void t_ldrd(void)
+{
+  static struct quad qs[6];
+  for (int i = 0; i < 6; i++)
+    {
+      qs[i].next = i < 5 ? &qs[i + 1] : NULL;
+      qs[i].a = i * 1000 - 7;
+      qs[i].b = -i * 3;
+      qs[i].c = i << 20;
+    }
+  uint64_t h = 1469598103934665603ULL;
+  for (int i = 0; i < 50; i++)
+    {
+      h ^= (uint64_t)i;
+      h *= 1099511628211ULL;
+      h += h >> 29;
+    }
+  out("ldrd", t_ldrd_sum(&qs[0]));
+  out("mul64c", (uint32_t)(h ^ (h >> 32)));
+}
+
 int main(int argc, char *argv[])
 {
   (void)argv;
@@ -671,6 +714,7 @@ int main(int argc, char *argv[])
   t_loopsr(argc + 59);
   t_narrowloop();
   t_fall();
+  t_ldrd();
   printf("total %u\n", (unsigned)g_sum);
   return 0;
 }
