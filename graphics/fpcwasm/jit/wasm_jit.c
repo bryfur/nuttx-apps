@@ -253,6 +253,9 @@ typedef struct jc_s
   uint32_t nbc;
   bool tbh_near;                  /* br_table entries only to its fragments */
   bool tbh_far;                   /* A br_table entry was out of reach */
+  bool wide;                      /* 64-bit values: pairs of temporaries */
+  bool regs_out;                  /* Out of registers: compiled again */
+  uint8_t loc_max;                /* Core registers for locals at most */
   int hint;                       /* local.set/tee follows: its local, or -1 */
   int shint;                      /* ... of an f32 local in an S register */
   bool hint_used;
@@ -951,6 +954,7 @@ static int alloc_core(jc_t *c)
         }
     }
 
+  c->regs_out = true;           /* (compiled again with fewer locals) */
   fail(c, "out of registers", 0);
   return R0;
 }
@@ -4504,6 +4508,21 @@ static bool prescan(jc_t *c)
           c->callw += w;
         }
 
+      if (op == WASM_OP_I64_CONST || op == WASM_OP_F64_CONST ||
+          (op >= WASM_OP_I64_LOAD && op <= WASM_OP_F64_LOAD) ||
+          (op >= WASM_OP_I64_LOAD8_S && op <= WASM_OP_I64_LOAD32_U) ||
+          op == WASM_OP_I64_STORE || op == WASM_OP_F64_STORE ||
+          (op >= WASM_OP_I64_STORE8 && op <= WASM_OP_I64_STORE32) ||
+          (op >= WASM_OP_I64_EQZ && op <= WASM_OP_I64_GE_U) ||
+          (op >= WASM_OP_F64_EQ && op <= WASM_OP_F64_GE) ||
+          (op >= WASM_OP_I64_CLZ && op <= WASM_OP_I64_ROTR) ||
+          (op >= WASM_OP_F64_ABS && op <= WASM_OP_F64_COPYSIGN) ||
+          (op >= WASM_OP_I32_WRAP_I64 && op <= WASM_OP_F64_REINTERPRET_I64) ||
+          (op >= WASM_OP_I64_EXTEND8_S && op <= WASM_OP_I64_EXTEND32_S))
+        {
+          c->wide = true;
+        }
+
       prev = op;
 
       if (op == WASM_OP_BLOCK || op == WASM_OP_LOOP || op == WASM_OP_IF)
@@ -4656,6 +4675,7 @@ static void assign_locals(jc_t *c)
   uint32_t reserved = 0;        /* ... and parameters' until the prologue */
   uint32_t staken = 0;
   uint32_t ncore = 0;
+  uint32_t lim5 = c->loc_max < 5 ? c->loc_max : 5;
   uint32_t nframe = 0;
   uint32_t i;
   uint32_t w = 0;
@@ -4671,14 +4691,15 @@ static void assign_locals(jc_t *c)
     {
       int ty = c->ltype[i];
 
-      if (c->lweight[i] > 0 && ty == T_I32 && w < 4 && ncore < 5)
+      if (c->lweight[i] > 0 && ty == T_I32 && w < 4 && ncore < lim5)
         {
           c->lkind[i] = L_CORE;
           c->lreg[i] = (int8_t)w;
           taken |= 1u << w;
           ncore++;
         }
-      else if (c->lweight[i] > 0 && ty == T_I64 && w + 1 < 4 && ncore < 4)
+      else if (c->lweight[i] > 0 && ty == T_I64 && w + 1 < 4 &&
+               ncore + 1 < lim5)
         {
           c->lkind[i] = L_CORE;
           c->lreg[i] = (int8_t)w;
@@ -4710,7 +4731,8 @@ static void assign_locals(jc_t *c)
 
       for (i = 0; i < c->nlocals; i++)
         {
-          uint32_t cap = c->lweight[i] >= LOCAL_HOT ? 7 : 5;
+          uint32_t cap = c->lweight[i] >= LOCAL_HOT || c->loc_max < 5 ?
+                         c->loc_max : 5;
 
           if (c->lkind[i] == L_FRAME && c->lweight[i] > best &&
               ((c->ltype[i] == T_I32 && ncore < cap) ||
@@ -4799,7 +4821,7 @@ static void assign_locals(jc_t *c)
 
       for (i = 0; i < c->nkc; i++)
         {
-          if (c->kc[i].w > best && (c->kc[i].f32 || ncore < 5) &&
+          if (c->kc[i].w > best && (c->kc[i].f32 || ncore < lim5) &&
               c->npin < sizeof(c->pin) / sizeof(c->pin[0]))
             {
               best = c->kc[i].w;
@@ -6282,9 +6304,15 @@ static bool compile_function1(jc_t *c, uint32_t fidx)
   c->callw = 0;
   c->ncsl = 0;
   c->nkc = 0;
+  c->wide = false;
   if (!prescan(c))
     {
       return false;
+    }
+
+  if (c->wide && c->loc_max > 5)
+    {
+      c->loc_max = 5;               /* (64-bit operands: 4 temporaries) */
     }
 
   c->fb.len = 0;
@@ -6383,21 +6411,33 @@ static bool compile_function1(jc_t *c, uint32_t fidx)
 static bool compile_function(jc_t *c, uint32_t fidx)
 {
   c->tbh_near = false;
-  c->tbh_far  = false;
-  if (compile_function1(c, fidx))
+  c->loc_max  = 7;
+  for (; ; )
     {
-      return true;
-    }
+      c->tbh_far  = false;
+      c->regs_out = false;
+      if (compile_function1(c, fidx))
+        {
+          return true;
+        }
 
-  if (!c->tbh_far || c->fb.oom || c->mb.oom)
-    {
-      return false;
-    }
+      if (c->fb.oom || c->mb.oom || (!c->tbh_far && !c->regs_out) ||
+          (c->regs_out && c->loc_max <= 3))
+        {
+          return false;
+        }
 
-  c->failed   = false;
-  c->tbh_near = true;
-  c->tbh_far  = false;
-  return compile_function1(c, fidx);
+      /* Again: its br_table's entries to fragments of their own; fewer
+       * locals in registers (more temporaries)
+       */
+
+      c->failed   = false;
+      c->tbh_near = c->tbh_near || c->tbh_far;
+      if (c->regs_out)
+        {
+          c->loc_max -= 2;
+        }
+    }
 }
 
 /****************************************************************************

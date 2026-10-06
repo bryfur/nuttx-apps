@@ -24,9 +24,14 @@ run() {           # NAME WASM ARGS...: JIT against the interpreter
   local a b
   a=$(cd "$out" && $jitrun run -i "$w" "$@" 2>/dev/null | $filter; \
       echo "status ${PIPESTATUS[0]}")
-  b=$(cd "$out" && $jitrun run "$w" "$@" 2>/dev/null | $filter; \
+  b=$(cd "$out" && $jitrun run "$w" "$@" 2>"$out/jit.err" | $filter; \
       echo "status ${PIPESTATUS[0]}")
   n=$((n + 1))
+  if grep "^jitrun: JIT: " "$out/jit.err" | grep -qv "^jitrun: JIT: status"; then
+    echo "progs: $name $*: the JIT refused it:"
+    grep "^jitrun: JIT: " "$out/jit.err" | head -1
+    bad=1
+  fi
   if [ "$a" != "$b" ]; then
     echo "progs: $name $*: DIFFERENT"
     diff <(echo "$a") <(echo "$b") | head -5
