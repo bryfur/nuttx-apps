@@ -156,9 +156,20 @@ static void port_baud(FAR void *arg, uint32_t baud)
 #endif
 }
 
+/* The UART has sent everything.  Never while a received frame is being
+ * handled: a request made from a callback polls the link, and a baud
+ * switch then would clear the receive buffer under the frame being parsed
+ * (nc_link.c: rx_parse() drops the frame's length after process_frame())
+ */
+
 static bool port_idle(FAR void *arg)
 {
   int n = 0;
+
+  if (g_ncd->in_input)
+    {
+      return false;
+    }
 
   return ioctl(g_ncd->uart, FIONWRITE, (unsigned long)&n) < 0 || n == 0;
 }
@@ -976,7 +987,9 @@ int main(int argc, FAR char *argv[])
         {
           while ((n = read(g_ncd->uart, buf, sizeof(buf))) > 0)
             {
+              g_ncd->in_input = true;
               nc_host_input(&g_ncd->h, buf, n);
+              g_ncd->in_input = false;
             }
 
           if (n < 0 && errno != EAGAIN && errno != EINTR &&

@@ -123,6 +123,7 @@ struct ncd_s
   int                  uart;
   int                  usock;
   bool                 ready;            /* HELLO answered */
+  bool                 in_input;         /* Inside nc_host_input() */
   uint32_t             ups;
   bool                 restarted;
   uint32_t             baud;
