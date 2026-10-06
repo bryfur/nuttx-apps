@@ -521,6 +521,45 @@ static void t_thread2(void)
   out("cnt2", cnt[0] + 10 * cnt[1] + 100 * cnt[2] + 1000 * cnt[3]);
 }
 
+/* A load in a loop known from its first test before it (no store in the
+ * loop), and one that is not (a store to the same place in the loop) */
+
+struct key
+{
+  int16_t pad;
+  int16_t idx;
+};
+
+static struct node *find(struct node *p, const struct key *k)
+{
+  while (p != NULL && p->val != k->idx)
+    p = p->next;
+  return p;
+}
+
+static int find_bump(struct node *p, struct key *k)
+{
+  int n = 0;
+  while (p != NULL && p->val != k->idx)
+    {
+      k->idx++;  /* changes what the test loads */
+      p = p->next;
+      n++;
+    }
+  return n * 100 + k->idx;
+}
+
+static void t_loopload(void)
+{
+  struct key k = {0, 26};
+  struct node *f = find(&g_nodes[0], &k);
+  out("find", f != NULL ? (uint32_t)(f - g_nodes) : 99);
+  k.idx = 3;
+  out("findbump", find_bump(&g_nodes[0], &k));
+  k.idx = 1000;
+  out("findnone", find(&g_nodes[0], &k) == NULL);
+}
+
 int main(int argc, char *argv[])
 {
   (void)argv;
@@ -537,6 +576,7 @@ int main(int argc, char *argv[])
   t_fuse();
   t_shift();
   t_thread2();
+  t_loopload();
   printf("total %u\n", (unsigned)g_sum);
   return 0;
 }
