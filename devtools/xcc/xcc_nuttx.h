@@ -62,9 +62,31 @@ int xcc_stat(const char *path, struct stat *st);
 
 FILE *xcc_memfile(const char *name);
 
-/* Runs a compiler's main() as if it were a process of its own */
+/* One of xcc's programs linked into one object (the Makefile, xcc.ld):
+ * the bounds of its variables, put back as loaded before each run
+ */
 
-int xcc_run(int (*mainfn)(int, char **), int argc, char **argv);
+struct xcc_blob_s
+{
+  char *data_start;
+  char *data_end;
+  char *bss_start;
+  char *bss_end;
+  char *saved;
+};
+
+#define XCC_BLOB(p) \
+  extern char p##_data_start[], p##_data_end[], p##_bss_start[], p##_bss_end[]; \
+  static struct xcc_blob_s p##_blob = \
+    { p##_data_start, p##_data_end, p##_bss_start, p##_bss_end, NULL }
+
+/* Runs a program's main() as if it were a process of its own: its exit(),
+ * its memory (given back at the end), its variables as loaded.  A run may
+ * start another (the driver its compiler...).
+ */
+
+int xcc_run(struct xcc_blob_s *blob, int (*mainfn)(int, char **), int argc,
+            char **argv);
 
 /* The arena's high-water mark (bytes): XCC_STATS=1 prints it at the end */
 

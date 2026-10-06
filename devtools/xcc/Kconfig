@@ -4,7 +4,7 @@
 #
 
 config DEVTOOLS_XCC
-	tristate "xcc: a small C compiler (C to WebAssembly)"
+	tristate "xcc: a small C compiler (C to WebAssembly, C to Thumb-2)"
 	default n
 	depends on ALLOW_MIT_COMPONENTS
 	depends on m || ARCH_SIM
@@ -18,6 +18,19 @@ config DEVTOOLS_XCC
 		docs/xcc.md.
 
 if DEVTOOLS_XCC
+
+config DEVTOOLS_XCC_NATIVE
+	bool "xcc: C to native NuttX modules (Thumb-2)"
+	default y
+	---help---
+		The xcc program: C to loadable modules for this board's
+		Cortex-M33 (Thumb-2, hard float), with xcc's ARM32 backend,
+		assembler and linker; the NuttX headers the firmware was built
+		with (DEVTOOLS_XCC_ROOT/arm).  What a module calls in the
+		firmware must be in its symbol table: nuttx/symtab.list adds
+		the C library's and the run-time ABI's functions to it.
+		Native modules are not sandboxed: a bad pointer can bring the
+		system down (docs/xcc.md).
 
 config DEVTOOLS_XCC_ROOT
 	string "Headers and libraries"

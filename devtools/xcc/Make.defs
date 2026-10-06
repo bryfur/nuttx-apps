@@ -7,4 +7,13 @@
 
 ifneq ($(CONFIG_DEVTOOLS_XCC),)
 CONFIGURED_APPS += $(APPDIR)/devtools/xcc
+
+# What xcc's native modules may call in the firmware: the C library's and
+# the run-time ABI's functions, in the firmware's symbol table
+
+ifeq ($(CONFIG_DEVTOOLS_XCC_NATIVE),y)
+ifeq ($(CONFIG_DEVTOOLS_XCC),m)
+SYMTABEXT += -a $(APPDIR)/devtools/xcc/nuttx/symtab.list
+endif
+endif
 endif

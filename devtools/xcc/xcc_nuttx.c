@@ -24,7 +24,9 @@
 /* Blocks of CHUNK bytes; a request larger than BIG gets a block of its
  * own.  Every allocation has its size in front of it (realloc needs it),
  * and the most recent one of a block can grow or shrink in place, which
- * is what xcc's growing vectors and buffers mostly do.
+ * is what xcc's growing vectors and buffers mostly do.  The blocks are
+ * listed newest first, so a nested run (xcc_run) can give back what it
+ * took: everything newer than its mark.
  */
 
 #define CHUNK  (64 * 1024)
@@ -42,13 +44,19 @@ struct chunk_s
 #define HDR  ((sizeof(size_t) + ALIGN - 1) & ~(ALIGN - 1))
 #define CHDR ((sizeof(struct chunk_s) + ALIGN - 1) & ~(ALIGN - 1))
 
-static struct chunk_s *g_chunks;       /* Newest first */
+static struct chunk_s *g_chunks;       /* All, newest first */
+static struct chunk_s *g_cur;          /* Where small allocations go */
 static size_t g_arena_bytes;           /* Bytes of blocks held */
 static size_t g_arena_peak;
 
 static struct chunk_s *chunk_of(void *p)
 {
   struct chunk_s *c;
+
+  if (g_cur != NULL && (char *)p > (char *)g_cur && (char *)p < g_cur->end)
+    {
+      return g_cur;
+    }
 
   for (c = g_chunks; c != NULL; c = c->next)
     {
@@ -74,25 +82,17 @@ static struct chunk_s *chunk_new(size_t need)
   c->end = (char *)c + size;
   c->top = (char *)c + CHDR;
   c->last = NULL;
+  c->next = g_chunks;
+  g_chunks = c;
   g_arena_bytes += size;
   if (g_arena_bytes > g_arena_peak)
     {
       g_arena_peak = g_arena_bytes;
     }
 
-  if (need > BIG && g_chunks != NULL)
+  if (need <= BIG)
     {
-      /* A block of its own: behind the current one, which stays the one
-       * small allocations come from.
-       */
-
-      c->next = g_chunks->next;
-      g_chunks->next = c;
-    }
-  else
-    {
-      c->next = g_chunks;
-      g_chunks = c;
+      g_cur = c;
     }
 
   return c;
@@ -101,7 +101,7 @@ static struct chunk_s *chunk_new(size_t need)
 void *xcc_malloc(size_t size)
 {
   size_t need = HDR + ((size + ALIGN - 1) & ~(size_t)(ALIGN - 1));
-  struct chunk_s *c = g_chunks;
+  struct chunk_s *c = g_cur;
   char *h;
 
   if (size > BIG || c == NULL || (size_t)(c->end - c->top) < need)
@@ -266,17 +266,41 @@ size_t xcc_arena_peak(void)
   return g_arena_peak;
 }
 
-static void arena_release(void)
+struct arena_mark_s
 {
-  while (g_chunks != NULL)
+  struct chunk_s *chunks;
+  struct chunk_s *cur;
+  char *top;
+  char *last;
+};
+
+static void arena_mark(struct arena_mark_s *m)
+{
+  m->chunks = g_chunks;
+  m->cur = g_cur;
+  m->top = g_cur != NULL ? g_cur->top : NULL;
+  m->last = g_cur != NULL ? g_cur->last : NULL;
+}
+
+/* Everything allocated since the mark given back */
+
+static void arena_release_to(const struct arena_mark_s *m)
+{
+  while (g_chunks != m->chunks)
     {
       struct chunk_s *c = g_chunks;
 
       g_chunks = c->next;
+      g_arena_bytes -= c->end - (char *)c;
       free(c);
     }
 
-  g_arena_bytes = 0;
+  g_cur = m->cur;
+  if (g_cur != NULL)
+    {
+      g_cur->top = m->top;
+      g_cur->last = m->last;
+    }
 }
 
 /****************************************************************************
@@ -580,23 +604,37 @@ static void memfiles_release(void)
 }
 
 /****************************************************************************
- * exit(), atexit() and the run
+ * exit(), atexit() and the runs
  ****************************************************************************/
 
-#define MAX_ATEXIT 8
+/* A run of one of xcc's programs (its main); a run may start another (the
+ * driver its compiler, assembler, linker): their exits, atexit functions
+ * and arena use nest.
+ */
 
-static jmp_buf g_exit_jmp;
-static bool g_running;
-static int g_exit_status;
-static void (*g_atexit[MAX_ATEXIT])(void);
-static int g_natexit;
+#define MAX_ATEXIT 8
+#define MAX_DEPTH  4
+
+struct level_s
+{
+  jmp_buf jmp;
+  int status;
+  void (*atexit[MAX_ATEXIT])(void);
+  int natexit;
+  struct arena_mark_s mark;
+};
+
+static struct level_s g_levels[MAX_DEPTH];
+static int g_depth;
 
 void xcc_exit(int status)
 {
-  if (g_running)
+  if (g_depth > 0)
     {
-      g_exit_status = status;
-      longjmp(g_exit_jmp, 1);
+      struct level_s *l = &g_levels[g_depth - 1];
+
+      l->status = status;
+      longjmp(l->jmp, 1);
     }
 
   exit(status);
@@ -604,78 +642,97 @@ void xcc_exit(int status)
 
 int xcc_atexit(void (*fn)(void))
 {
-  if (g_natexit >= MAX_ATEXIT)
+  struct level_s *l;
+
+  if (g_depth == 0)
+    {
+      return atexit(fn);
+    }
+
+  l = &g_levels[g_depth - 1];
+  if (l->natexit >= MAX_ATEXIT)
     {
       return -1;
     }
 
-  g_atexit[g_natexit++] = fn;
+  l->atexit[l->natexit++] = fn;
   return 0;
 }
 
-/* xcc's variables: the build puts them all between these markers
- * (xcc.ld), so that a built-in compiler can put them back as they were
- * loaded before every run.  A module is loaded afresh for every run, but
- * the same holds there.
+/* A program's variables: the build puts them all between its markers
+ * (xcc_marks.c, xcc.ld), so that a program can be put back as it was
+ * loaded before every run (a built-in compiler; a program run twice by
+ * the driver).
  */
 
-extern char xcc_data_start[];
-extern char xcc_data_end[];
-extern char xcc_bss_start[];
-extern char xcc_bss_end[];
-
-static void snapshot_restore(void)
+static void blob_restore(struct xcc_blob_s *b)
 {
-  static char *saved;
-  size_t len = xcc_data_end - xcc_data_start;
+  size_t len = b->data_end - b->data_start;
 
-  if (saved == NULL)
+  if (b->saved == NULL)
     {
-      saved = malloc(len ? len : 1);
-      if (saved != NULL)
+      b->saved = malloc(len ? len : 1);
+      if (b->saved != NULL)
         {
-          memcpy(saved, xcc_data_start, len);
+          memcpy(b->saved, b->data_start, len);
         }
     }
   else
     {
-      memcpy(xcc_data_start, saved, len);
+      memcpy(b->data_start, b->saved, len);
     }
 
-  memset(xcc_bss_start, 0, xcc_bss_end - xcc_bss_start);
+  memset(b->bss_start, 0, b->bss_end - b->bss_start);
 }
 
-int xcc_run(int (*mainfn)(int, char **), int argc, char **argv)
+int xcc_run(struct xcc_blob_s *blob, int (*mainfn)(int, char **), int argc,
+            char **argv)
 {
   volatile int status;
+  struct level_s *l;
   char *stats = getenv("XCC_STATS");
 
-  snapshot_restore();
-  g_natexit = 0;
-  g_arena_peak = 0;
-  g_running = true;
-  if (setjmp(g_exit_jmp) == 0)
+  if (g_depth >= MAX_DEPTH)
+    {
+      fprintf(stderr, "xcc: runs nested too deep\n");
+      return 1;
+    }
+
+  if (g_depth == 0)
+    {
+      g_arena_peak = g_arena_bytes;
+    }
+
+  l = &g_levels[g_depth];
+  l->natexit = 0;
+  arena_mark(&l->mark);
+  blob_restore(blob);
+  ++g_depth;
+  if (setjmp(l->jmp) == 0)
     {
       status = mainfn(argc, argv);
     }
   else
     {
-      status = g_exit_status;
+      status = l->status;
     }
 
-  g_running = false;
-  while (g_natexit > 0)
+  while (l->natexit > 0)
     {
-      g_atexit[--g_natexit]();
+      l->atexit[--l->natexit]();
     }
 
+  --g_depth;
   fflush(stdout);
   fflush(stderr);
-  memfiles_release();
-  arena_release();
-  if (stats != NULL && stats[0] == '1')
+  arena_release_to(&l->mark);
+  if (g_depth == 0)
     {
-      fprintf(stderr, "xcc: arena peak %zu KB\n", g_arena_peak / 1024);
+      memfiles_release();
+      if (stats != NULL && stats[0] == '1')
+        {
+          fprintf(stderr, "xcc: arena peak %zu KB\n", g_arena_peak / 1024);
+        }
     }
 
   return status;

@@ -12,7 +12,9 @@
 
 int xcc_wcc_main(int argc, char *argv[]);
 
+XCC_BLOB(wcc);
+
 int main(int argc, char *argv[])
 {
-  return xcc_run(xcc_wcc_main, argc, argv);
+  return xcc_run(&wcc_blob, xcc_wcc_main, argc, argv);
 }
