@@ -246,7 +246,17 @@ static int tcp_connect(struct curl_s *c, const struct url_s *u)
   ret = getaddrinfo(u->host, port, &hints, &res);
   if (ret != 0)
     {
-      err(c, "could not resolve host: %s", u->host);
+      struct ncx_state st;
+
+      if (ncx_state(&st) < 0 || st.link != NCX_LINK_READY)
+        {
+          err(c, "no network (no network coprocessor)");
+        }
+      else
+        {
+          err(c, "could not resolve host: %s", u->host);
+        }
+
       return -ENOENT;
     }
 
