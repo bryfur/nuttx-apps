@@ -24,6 +24,7 @@
 #include "fg_internal.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,6 +34,9 @@
 
 #include <nuttx/input/kbd_codec.h>
 #include <nuttx/nx/nxkeys.h>
+#ifdef CONFIG_INPUT_AJOYSTICK
+#  include <nuttx/input/ajoystick.h>
+#endif
 
 #include "fpc_gpu.h"
 
@@ -143,7 +147,40 @@ static struct
   uint32_t last;
   uint8_t  down[48];                      /* Keys held: their codes */
   int      ndown;
+  int      joyfd;                         /* /dev/ajoy0, or -1 */
 } g_pad;
+
+#ifdef CONFIG_INPUT_AJOYSTICK
+/* A real game pad, /dev/ajoy0 (the network coprocessor's BLE pads,
+ * fpc/drivers/netcop): its stick or hat as the directions, its buttons
+ * (A, B, X, Y, L, R, Select, Start) as A, B, C, D, the stick's click,
+ * the stick's click, Select, Start
+ */
+
+static uint32_t joy_bits(void)
+{
+  struct ajoy_sample_s s;
+  uint32_t bits = 0;
+
+  if (g_pad.joyfd < 0 ||
+      read(g_pad.joyfd, &s, sizeof(s)) != (ssize_t)sizeof(s))
+    {
+      return 0;
+    }
+
+  bits |= s.as_x < -16384 ? FG_PAD_LEFT : s.as_x > 16384 ? FG_PAD_RIGHT : 0;
+  bits |= s.as_y < -16384 ? FG_PAD_UP : s.as_y > 16384 ? FG_PAD_DOWN : 0;
+  bits |= (s.as_buttons & AJOY_BUTTON_1_BIT) ? FG_PAD_A : 0;
+  bits |= (s.as_buttons & AJOY_BUTTON_2_BIT) ? FG_PAD_B : 0;
+  bits |= (s.as_buttons & AJOY_BUTTON_3_BIT) ? FG_PAD_C : 0;
+  bits |= (s.as_buttons & AJOY_BUTTON_4_BIT) ? FG_PAD_D : 0;
+  bits |= (s.as_buttons & (AJOY_BUTTON_5_BIT | AJOY_BUTTON_6_BIT)) ?
+          FG_PAD_STICK : 0;
+  bits |= (s.as_buttons & AJOY_BUTTON_7_BIT) ? FG_PAD_SELECT : 0;
+  bits |= (s.as_buttons & AJOY_BUTTON_8_BIT) ? FG_PAD_START : 0;
+  return bits;
+}
+#endif
 
 static uint32_t key_bit(uint8_t code)
 {
@@ -351,6 +388,10 @@ void fg_input_frame(void)
       g_pad.held |= key_bit(g_pad.down[i]);
     }
 
+#ifdef CONFIG_INPUT_AJOYSTICK
+  g_pad.held |= joy_bits();
+#endif
+
   g_pad.last = g_pad.now;
   g_pad.now  = g_pad.held;
 }
@@ -537,6 +578,11 @@ int fg_run(FAR const struct fg_game_s *game)
   script = g_fg.script;
   memset(&g_fg, 0, sizeof(g_fg));
   memset(&g_pad, 0, sizeof(g_pad));
+#ifdef CONFIG_INPUT_AJOYSTICK
+  g_pad.joyfd   = open("/dev/ajoy0", O_RDONLY | O_NONBLOCK);
+#else
+  g_pad.joyfd   = -1;
+#endif
   g_fg.script   = script;
   g_fg.scripted = script != NULL;
   g_fg.game = game;
@@ -631,6 +677,12 @@ int fg_run(FAR const struct fg_game_s *game)
   ret = OK;
 
 out:
+  if (g_pad.joyfd >= 0)
+    {
+      close(g_pad.joyfd);
+      g_pad.joyfd = -1;
+    }
+
   g_fg.script = NULL;                     /* (globals outlive a task here) */
   fg_audio_stop();
   fg_gfx_reset();

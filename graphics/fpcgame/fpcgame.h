@@ -22,7 +22,8 @@
  * the canvas.
  *
  * Input is a game pad made of the keyboard (arrows or WASD, Z X C V for
- * A B C D, Enter, Escape to leave).  Sound is sixteen voices, each a
+ * A B C D, Enter, Escape to leave), and a real pad if there is one
+ * (/dev/ajoy0: a BLE pad through the network coprocessor).  Sound is sixteen voices, each a
  * sample or a two-operator FM instrument, and a sequencer for music
  * (TRI's sound engine), mixed into the desktop's mixer.
  *
@@ -261,7 +262,7 @@ void fg_text_color(uint16_t colour);             /* All the text */
 void fg_text_draw(void);                         /* Into the canvas */
 
 /****************************************************************************
- * Input: a pad from the keyboard
+ * Input: a pad from the keyboard, and a real one (/dev/ajoy0) if there is
  ****************************************************************************/
 
 #define FG_PAD_UP       0x0001

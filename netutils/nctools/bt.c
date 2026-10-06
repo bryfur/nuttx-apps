@@ -8,8 +8,8 @@
  *
  *   bt                     the paired devices
  *   bt scan [SECONDS]      HID devices nearby
- *   bt pair ADDR           pair one (a passkey to type or confirm is
- *                          shown or asked for)
+ *   bt pair [-y] ADDR      pair one (a passkey to type or confirm is
+ *                          shown or asked for; -y: the numbers match)
  *   bt forget ADDR|all     unpair
  *   bt disconnect ADDR
  ****************************************************************************/
@@ -81,12 +81,15 @@ static void dev_print(const struct nc_ble_dev *d)
 {
   char m[20];
 
-  printf("%s  %-8s  %-12s  battery %s%d%s  %s\n", mac_str(d->addr, m),
+  char bat[8];
+
+  snprintf(bat, sizeof(bat), d->battery == 0xff ? "?" : "%u%%",
+           d->battery);
+  printf("%s  %-8s  %-12s  battery %-4s  %s\n", mac_str(d->addr, m),
          kind_str(d->kind),
          d->state == NC_BLE_ST_CONNECTED ? "connected" :
          d->state == NC_BLE_ST_CONNECTING ? "connecting" : "disconnected",
-         d->battery == 0xff ? "?" : "", d->battery == 0xff ? 0 : d->battery,
-         d->battery == 0xff ? "" : "%", d->name);
+         bat, d->name);
 }
 
 static void list_part(void *arg, const uint8_t *p, size_t n)
@@ -131,7 +134,7 @@ static void scan_part(void *arg, const uint8_t *p, size_t n)
     }
 }
 
-static int pair(const uint8_t *addr)
+static int pair(const uint8_t *addr, bool yes)
 {
   struct nc_ble_pair pr;
   struct ncx_msg m;
@@ -203,7 +206,13 @@ static int pair(const uint8_t *addr)
               continue;
             }
 
-          if (pk.action == NC_BLE_PK_CONFIRM)
+          if (pk.action == NC_BLE_PK_CONFIRM && yes)
+            {
+              printf("the device shows %06lu: yes\n",
+                     (unsigned long)pk.passkey);
+              strlcpy(line, "yes", sizeof(line));
+            }
+          else if (pk.action == NC_BLE_PK_CONFIRM)
             {
               printf("does the device show %06lu (yes/no)? ",
                      (unsigned long)pk.passkey);
@@ -214,7 +223,8 @@ static int pair(const uint8_t *addr)
             }
 
           fflush(stdout);
-          if (fgets(line, sizeof(line), stdin) == NULL)
+          if (!(pk.action == NC_BLE_PK_CONFIRM && yes) &&
+              fgets(line, sizeof(line), stdin) == NULL)
             {
               line[0] = '\0';
             }
@@ -305,16 +315,18 @@ int main(int argc, FAR char *argv[])
       return EXIT_SUCCESS;
     }
 
-  if (argc < 3 || parse_mac(argv[2], addr) < 0)
+  bool yes = argc > 3 && strcmp(argv[2], "-y") == 0;
+
+  if (argc < 3 || parse_mac(argv[yes ? 3 : 2], addr) < 0)
     {
-      fprintf(stderr, "usage: bt [list | scan [SECONDS] | pair ADDR |\n"
+      fprintf(stderr, "usage: bt [list | scan [SECONDS] | pair [-y] ADDR |\n"
                       "           forget ADDR|all | disconnect ADDR]\n");
       return EXIT_FAILURE;
     }
 
   if (strcmp(cmd, "pair") == 0)
     {
-      return pair(addr);
+      return pair(addr, yes);
     }
 
   ret = ncx_call1(strcmp(cmd, "forget") == 0 ? NC_OP_BLE_FORGET :
