@@ -414,6 +414,29 @@ static void t_loads(void)
   out("bump", c[2] * 100 + c[3]);
 }
 
+/* Multiply-accumulate and bit fields (ARM32: mla, mls, ubfx) */
+
+static int16_t g_ma[16] = {3, -7, 120, -32768, 32767, 5, -1, 0, 9, -300, 77, 1000, -2, 4, 8, 16};
+
+static void t_fuse(void)
+{
+  int32_t acc = 0, dif = 1000000;
+  uint32_t bits = 0;
+  for (int i = 0; i < 16; i++)
+    {
+      int32_t p = (int32_t)g_ma[i] * g_ma[15 - i];
+      acc += (int32_t)g_ma[i] * g_ma[(i + 3) & 15];
+      dif -= p;
+      bits += ((p >> 2) & 15) * ((p >> 5) & 127);
+      bits ^= ((uint32_t)p >> 28) & 0xf;
+      bits += (p >> 30) & 7;
+      bits += ((int32_t)(uint32_t)p >> 31) & 1;
+    }
+  out("mla", (uint32_t)acc);
+  out("mls", (uint32_t)dif);
+  out("ubfx", bits);
+}
+
 int main(int argc, char *argv[])
 {
   (void)argv;
@@ -427,6 +450,7 @@ int main(int argc, char *argv[])
   t_conds();
   t_thread();
   t_loads();
+  t_fuse();
   printf("total %u\n", (unsigned)g_sum);
   return 0;
 }
