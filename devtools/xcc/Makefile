@@ -95,10 +95,14 @@ else
 XCC_CC = $(CC) -c $(CFLAGS)
 endif
 
+# Every object depends on all of xcc's headers (a struct or enum changed in
+# one is in many objects: one left stale miscompiles)
+XCC_HEADERS = $(wildcard $(X)/*.h $(X)/*/*.h $(X)/*/*/*.h $(X)/*/*/*/*.h)
+
 define BLOB_RULES
 $(1)_OBJS = $$(patsubst %.c,%.$(1)$(OBJEXT),$$($(1)_SRCS)) xcc_marks.c.$(1)$(OBJEXT)
 
-$$(patsubst %.c,%.$(1)$(OBJEXT),$$($(1)_SRCS)): %.$(1)$(OBJEXT): %.c xcc_nuttx.h
+$$(patsubst %.c,%.$(1)$(OBJEXT),$$($(1)_SRCS)): %.$(1)$(OBJEXT): %.c xcc_nuttx.h $(XCC_HEADERS)
 	$$(ECHO_BEGIN)"CC: $$< "
 	$$(Q) $$(XCC_CC) $$(XCCFLAGS) $$($(1)_FLAGS) \
 		$$(if $$(filter $$($(1)_MAIN),$$<),-Dmain=xcc_$(1)_main) $$< -o $$@
@@ -150,27 +154,27 @@ HOSTDIR = host
 SYSROOT = sysroot
 HOSTCFLAGS_XCC = -O2 -std=gnu11 -D_DEFAULT_SOURCE -w
 
-$(HOSTDIR)/wcc: $(wcc_SRCS)
+$(HOSTDIR)/wcc: $(wcc_SRCS) $(XCC_HEADERS)
 	$(ECHO_BEGIN)"HOSTCC: $@ "
 	$(Q) mkdir -p $(HOSTDIR)
-	$(Q) $(HOSTCC) $(HOSTCFLAGS_XCC) $(wcc_FLAGS) -o $@ $^
+	$(Q) $(HOSTCC) $(HOSTCFLAGS_XCC) $(wcc_FLAGS) -o $@ $(filter %.c,$^)
 	$(ECHO_END)
 
-$(HOSTDIR)/cpp: $(cpp_SRCS)
+$(HOSTDIR)/cpp: $(cpp_SRCS) $(XCC_HEADERS)
 	$(Q) mkdir -p $(HOSTDIR)
-	$(Q) $(HOSTCC) $(HOSTCFLAGS_XCC) $(cpp_FLAGS) -o $@ $^
+	$(Q) $(HOSTCC) $(HOSTCFLAGS_XCC) $(cpp_FLAGS) -o $@ $(filter %.c,$^)
 
-$(HOSTDIR)/cc1: $(cc1_SRCS)
+$(HOSTDIR)/cc1: $(cc1_SRCS) $(XCC_HEADERS)
 	$(Q) mkdir -p $(HOSTDIR)
-	$(Q) $(HOSTCC) $(HOSTCFLAGS_XCC) $(cc1_FLAGS) -o $@ $^
+	$(Q) $(HOSTCC) $(HOSTCFLAGS_XCC) $(cc1_FLAGS) -o $@ $(filter %.c,$^)
 
-$(HOSTDIR)/as: $(as_SRCS)
+$(HOSTDIR)/as: $(as_SRCS) $(XCC_HEADERS)
 	$(Q) mkdir -p $(HOSTDIR)
-	$(Q) $(HOSTCC) $(HOSTCFLAGS_XCC) $(as_FLAGS) -o $@ $^
+	$(Q) $(HOSTCC) $(HOSTCFLAGS_XCC) $(as_FLAGS) -o $@ $(filter %.c,$^)
 
-$(HOSTDIR)/ld: $(ld_SRCS)
+$(HOSTDIR)/ld: $(ld_SRCS) $(XCC_HEADERS)
 	$(Q) mkdir -p $(HOSTDIR)
-	$(Q) $(HOSTCC) $(HOSTCFLAGS_XCC) $(ld_FLAGS) -o $@ $^
+	$(Q) $(HOSTCC) $(HOSTCFLAGS_XCC) $(ld_FLAGS) -o $@ $(filter %.c,$^)
 
 # wcc's sysroot: xcc's headers (with the WebAssembly runtime's API,
 # docs/wasm.md: #include <fpc_wasm.h>) and its WASI C library
