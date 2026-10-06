@@ -5,7 +5,8 @@
  * What xcc's optimizations could get wrong (move coalescing, copy and cast
  * forwarding, loop rotation, constant-decided jumps, common
  * subexpressions, loop-invariant code motion, indexed loads and stores,
- * dead definitions, narrowing casts left out, inlining): computations
+ * dead definitions, narrowing casts left out, inlining, conditions as
+ * jumps, range checks, jump threading, loads known again): computations
  * printed, to be the same as a reference compiler's (tests/difftest.sh).
  * No undefined or implementation-defined behavior.
  */
@@ -257,6 +258,162 @@ static void t_inline(void)
   out("mul64hi", (uint32_t)((uint64_t)s >> 32));
 }
 
+/* Conditions: 0/1 diamonds, & and | of comparisons as jumps, range checks
+ * (signed, unsigned, narrow, at the bounds) */
+
+static uint8_t isdig(uint8_t c)
+{
+  uint8_t r;
+  r = ((c >= '0') & (c <= '9')) ? 1 : 0;
+  return r;
+}
+
+static int inrange_s(int x)
+{
+  return x >= -5 && x <= 7;
+}
+
+static int outrange_u(unsigned x)
+{
+  if (x < 10 || x > 20)
+    return 1;
+  return 0;
+}
+
+static int either(int a, int b)
+{
+  return ((a > 3) | (b < -2)) ? 11 : 22;
+}
+
+static int notboth(int8_t a, int16_t b)
+{
+  if ((a == 1) & (b != 2))
+    return 5;
+  return 6;
+}
+
+static void t_conds(void)
+{
+  uint32_t s = 0;
+  for (int i = -300; i < 300; i++)
+    {
+      s = s * 3 + isdig((uint8_t)i) + 2 * inrange_s(i) + 4 * outrange_u((unsigned)i);
+      s += either(i % 9, i % 7) + notboth((int8_t)i, (int16_t)(i / 3));
+      int8_t c = (int8_t)i;
+      if (c >= -120 && c <= -100)
+        s ^= 0x1234;
+      if ((uint16_t)i > 65000 || (uint16_t)i < 3)
+        s += 77;
+    }
+  out("conds", s);
+  out("lim", inrange_s(-2147483647 - 1) + 2 * inrange_s(2147483647) +
+             4 * outrange_u(4294967295u) + 8 * outrange_u(0));
+}
+
+/* A state machine in a loop (jump threading) */
+
+static int scan(const char *p, int *counts)
+{
+  int state = 0, n = 0;
+  for (; *p && state != 9; p++)
+    {
+      switch (state)
+        {
+        case 0:
+          if (*p >= '0' && *p <= '9')
+            state = 1;
+          else if (*p == '-')
+            state = 2;
+          else
+            state = 9;
+          counts[0]++;
+          break;
+        case 1:
+          if (*p == '.')
+            state = 3;
+          else if (!(*p >= '0' && *p <= '9'))
+            state = 9;
+          counts[1]++;
+          break;
+        case 2:
+          state = (*p >= '0' && *p <= '9') ? 1 : 9;
+          counts[2]++;
+          break;
+        default:
+          if (!(*p >= '0' && *p <= '9'))
+            state = 9;
+          counts[3]++;
+          break;
+        }
+      n++;
+    }
+  return state * 100 + n;
+}
+
+static void t_thread(void)
+{
+  static const char *in[] = {"123", "-4.5", "7.x", "--1", "", "0.25e", "-", "99.9"};
+  int counts[4] = {0, 0, 0, 0};
+  uint32_t s = 0;
+  for (int i = 0; i < 8; i++)
+    s = s * 7 + scan(in[i], counts);
+  out("scan", s);
+  out("counts", counts[0] + 10 * counts[1] + 100 * counts[2] + 1000 * counts[3]);
+}
+
+/* Loads known again in a block and the blocks after it (not across a
+ * store, a call, or a change of the address); base + offset used twice */
+
+struct node
+{
+  struct node *next;
+  int val;
+};
+
+static struct node g_nodes[8];
+
+static int walk(struct node *p, int stop)
+{
+  int s = 0;
+  while (p != NULL && p->val != stop)
+    {
+      s += p->val;
+      p = p->next;
+      if (p != NULL && p->next != NULL)
+        s += p->next->val;
+    }
+  return s;
+}
+
+static int alias(int *a, int *b)
+{
+  int x = *a;
+  *b = x + 1;
+  return x + *a;  /* a may be b */
+}
+
+static void bump(int *c)
+{
+  c[2]++;
+  c[3] += c[2];
+}
+
+static void t_loads(void)
+{
+  for (int i = 0; i < 8; i++)
+    {
+      g_nodes[i].next = i < 7 ? &g_nodes[i + 1] : NULL;
+      g_nodes[i].val = i * i + 1;
+    }
+  int c[4] = {1, 2, 3, 4};
+  int v = 5;
+  bump(c);
+  bump(c);
+  out("walk", walk(&g_nodes[0], 26) + 1000 * walk(&g_nodes[2], -1));
+  out("alias", alias(&v, &v) * 100 + alias(&c[0], &c[1]));
+  out("bump", c[2] * 100 + c[3]);
+}
+
 int main(int argc, char *argv[])
 {
   (void)argv;
@@ -267,6 +424,9 @@ int main(int argc, char *argv[])
   t_index(argc);
   out("moves", t_moves(1, 1));
   t_inline();
+  t_conds();
+  t_thread();
+  t_loads();
   printf("total %u\n", (unsigned)g_sum);
   return 0;
 }
