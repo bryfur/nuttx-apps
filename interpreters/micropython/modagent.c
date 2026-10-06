@@ -778,6 +778,16 @@ static mp_obj_t ed_run(struct ed_s *e, mp_obj_t completions)
 
           case '\r':
           case '\n':
+            if (k != K_EOF && input_pending())
+              {
+                /* More came with it: a paste, whose lines are one text
+                 * (a terminal without bracketed paste)
+                 */
+
+                ed_insert(e, "\n", 1);
+                break;
+              }
+
             if (e->buf.len > 0 && e->buf.buf[e->buf.len - 1] == '\\' &&
                 e->cur == e->buf.len && k != K_EOF)
               {

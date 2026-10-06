@@ -73,8 +73,11 @@ def setup(cfg):
                       (env, ', or none' if name == 'openai' else ''), '', mask=True)
     if key:
         s['api_key'] = key
-    config.save(cfg)
-    ui.line(ui.dim('Saved. /setup asks again; /config shows the file.'))
+    try:
+        config.save(cfg)
+        ui.line(ui.dim('Saved. /setup asks again; /config shows the file.'))
+    except OSError as e:
+        ui.error('could not save %s (%s): this session only' % (config.path(), e))
 
 
 def pick(k, items):
