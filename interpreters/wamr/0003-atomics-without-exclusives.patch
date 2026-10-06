@@ -1,0 +1,114 @@
+diff -ru a/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src/refcount.h b/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src/refcount.h
+--- a/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src/refcount.h	2026-10-06 15:02:46.749878218 +0000
++++ b/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src/refcount.h	2026-10-06 15:02:46.810109403 +0000
+@@ -21,7 +21,37 @@
+ #define PRODUCES(...) LOCKS_SHARED(__VA_ARGS__) NO_LOCK_ANALYSIS
+ #define CONSUMES(...) UNLOCKS(__VA_ARGS__) NO_LOCK_ANALYSIS
+ 
+-#if CONFIG_HAS_STD_ATOMIC != 0
++#if defined(BH_ATOMIC_RMW_CSECTION)
++
++/* No exclusive accesses (bh_atomic.h): the platform's critical section */
++
++#include "bh_atomic.h"
++
++struct LOCKABLE refcount {
++    bh_atomic_32_t count;
++};
++
++static inline void
++refcount_init(struct refcount *r, unsigned int count) PRODUCES(*r)
++{
++    BH_ATOMIC_32_STORE(r->count, count);
++}
++
++static inline void
++refcount_acquire(struct refcount *r) PRODUCES(*r)
++{
++    BH_ATOMIC_32_FETCH_ADD(r->count, 1);
++}
++
++static inline bool
++refcount_release(struct refcount *r) CONSUMES(*r)
++{
++    int old = (int)BH_ATOMIC_32_FETCH_SUB(r->count, 1);
++    bh_assert(old != 0 && "Reference count becoming negative");
++    return old == 1;
++}
++
++#elif CONFIG_HAS_STD_ATOMIC != 0
+ 
+ #include <stdatomic.h>
+ 
+diff -ru a/core/shared/platform/nuttx/nuttx_platform.c b/core/shared/platform/nuttx/nuttx_platform.c
+--- a/core/shared/platform/nuttx/nuttx_platform.c	2026-10-06 15:02:46.758704401 +0000
++++ b/core/shared/platform/nuttx/nuttx_platform.c	2026-10-06 15:02:46.810207788 +0000
+@@ -22,6 +22,24 @@
+ const char *g_wamr_text_section = ".text";
+ #endif
+ 
++#include <nuttx/irq.h>
++
++/* bh_atomic.h's read-modify-writes, with BH_ATOMIC_RMW_CSECTION (memory
++ * without exclusive accesses: the RP2350's PSRAM)
++ */
++
++uint32
++os_atomic_cs_enter(void)
++{
++    return (uint32)enter_critical_section();
++}
++
++void
++os_atomic_cs_leave(uint32 flags)
++{
++    leave_critical_section((irqstate_t)flags);
++}
++
+ int
+ bh_platform_init()
+ {
+diff -ru a/core/shared/utils/bh_atomic.h b/core/shared/utils/bh_atomic.h
+--- a/core/shared/utils/bh_atomic.h	2026-10-06 15:02:46.740635774 +0000
++++ b/core/shared/utils/bh_atomic.h	2026-10-06 15:02:46.809530811 +0000
+@@ -180,7 +180,39 @@
+ }
+ #endif
+ 
+-#if BH_ATOMIC_32_IS_ATOMIC != 0
++#if BH_ATOMIC_32_IS_ATOMIC != 0 && defined(BH_ATOMIC_RMW_CSECTION)
++
++/* Loads and stores are atomic, but read-modify-writes must not use the
++ * CPU's exclusive accesses (LDREX/STREX), which the memory the runtime
++ * allocates from may not support (a PSRAM behind a cache): they are done
++ * in the platform's critical section (os_atomic_cs_enter()/leave())
++ */
++
++uint32
++os_atomic_cs_enter(void);
++void
++os_atomic_cs_leave(uint32 flags);
++
++static inline uint32
++cs_32_rmw(volatile uint32 *p, uint32 val, int op)
++{
++    uint32 flags = os_atomic_cs_enter();
++    uint32 old = *p;
++
++    *p = op == 0 ? (old | val) : op == 1 ? (old & val) :
++         op == 2 ? (old + val) : (old - val);
++    os_atomic_cs_leave(flags);
++    return old;
++}
++
++#define BH_ATOMIC_32_LOAD(v) __atomic_load_n(&(v), __ATOMIC_SEQ_CST)
++#define BH_ATOMIC_32_STORE(v, val) __atomic_store_n(&(v), val, __ATOMIC_SEQ_CST)
++#define BH_ATOMIC_32_FETCH_OR(v, val) cs_32_rmw(&(v), (val), 0)
++#define BH_ATOMIC_32_FETCH_AND(v, val) cs_32_rmw(&(v), (val), 1)
++#define BH_ATOMIC_32_FETCH_ADD(v, val) cs_32_rmw(&(v), (val), 2)
++#define BH_ATOMIC_32_FETCH_SUB(v, val) cs_32_rmw(&(v), (val), 3)
++
++#elif BH_ATOMIC_32_IS_ATOMIC != 0
+ 
+ #define BH_ATOMIC_32_LOAD(v) __atomic_load_n(&(v), __ATOMIC_SEQ_CST)
+ #define BH_ATOMIC_32_STORE(v, val) __atomic_store_n(&(v), val, __ATOMIC_SEQ_CST)

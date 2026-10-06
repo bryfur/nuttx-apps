@@ -1,0 +1,15 @@
+--- a/core/shared/platform/common/posix/posix_file.c	2026-10-06 15:22:16.111419721 +0000
++++ b/core/shared/platform/common/posix/posix_file.c	2026-10-06 15:22:16.120218371 +0000
+@@ -679,6 +679,12 @@
+     ssize_t len = readlinkat(handle, path, bufsize == 0 ? fakebuf : buf,
+                              bufsize == 0 ? sizeof(fakebuf) : bufsize);
+ 
++#ifdef __NuttX__
++    /* A file system without links (FAT) answers ENOSYS: not a link */
++    if (len < 0 && errno == ENOSYS)
++        return __WASI_EINVAL;
++#endif
++
+     if (len < 0)
+         return convert_errno(errno);
+ 

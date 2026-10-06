@@ -8,7 +8,7 @@
  * app's C source builds both ways, as a WebAssembly app and as a native
  * one, for comparing the two (rocks: `rocksn`, docs/wasm.md) or for
  * debugging on the host's tools.  fpc_game_run() calls the app's fpc_load
- * ... fpc_quit (weak: those it lacks are skipped).
+ * ... fpc_quit (empty ones for those it lacks; fpc_draw it must have).
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -26,11 +26,27 @@
 #include "fpcgame.h"
 #include "fpc_wasm.h"
 
-void fpc_load(void) weak_function;
-void fpc_init(void) weak_function;
-void fpc_update(void) weak_function;
-void fpc_draw(void) weak_function;
-void fpc_quit(void) weak_function;
+/* The callbacks an app leaves out: empty (weak definitions, not weak
+ * references, which a loadable module cannot have unresolved)
+ */
+
+void weak_function fpc_load(void)
+{
+}
+
+void weak_function fpc_init(void)
+{
+}
+
+void weak_function fpc_update(void)
+{
+}
+
+void weak_function fpc_quit(void)
+{
+}
+
+void fpc_draw(void);
 
 static bool g_in_game;
 static const char *g_script;
@@ -113,11 +129,6 @@ int32_t fpc_game_run(int32_t width, int32_t height)
 {
   struct fg_game_s game;
   int ret;
-
-  if (fpc_draw == NULL)
-    {
-      return -ENOENT;
-    }
 
   memset(&game, 0, sizeof(game));
   game.name   = "native";

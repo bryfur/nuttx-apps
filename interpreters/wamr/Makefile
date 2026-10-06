@@ -44,13 +44,21 @@ MODULE    = $(CONFIG_INTERPRETERS_WAMR)
 
 endif
 
-# The interpreter's loop as a section of its own where the board places
-# sections by name (CONFIG_ARCH_USE_SEPARATED_SECTION: the fpc board puts
-# a module's .time_critical* in internal SRAM while it runs;
-# 0002-interp-section.patch)
+# The interpreter's loop can be a section of its own where the board
+# places sections by name (0002-interp-section.patch: the fpc board puts a
+# module's .time_critical* in internal SRAM while it runs).  Not done: on
+# the board it made no difference (Rocks -b 400 interpreted: 23.0 ms a
+# frame in SRAM, 22.5 ms from the PSRAM; its 12.5 KB fit the XIP cache)
+#
+# CFLAGS += '-DWASM_INTERP_SECTION=".time_critical.wasm_interp"'
 
-ifeq ($(CONFIG_ARCH_USE_SEPARATED_SECTION),y)
-CFLAGS += '-DWASM_INTERP_SECTION=".time_critical.wasm_interp"'
+# The RP2350's PSRAM (where the runtime's memory comes from: the user
+# heap) has no exclusive accesses: a LDREX/STREX loop on it never ends.
+# Read-modify-writes in a critical section instead
+# (0003-atomics-without-exclusives.patch)
+
+ifeq ($(CONFIG_RP23XX_PSRAM),y)
+CFLAGS += -DBH_ATOMIC_RMW_CSECTION -DWASM_UINT16_IS_ATOMIC=0
 endif
 
 # What WAMR's POSIX layer needs that this NuttX may leave out
@@ -82,13 +90,18 @@ $(WAMR_TARBALL):
 
 WAMR_PATCHED = $(WAMR_UNPACK)$(DELIM).patched
 
+# (made aside and swapped in: other directories compile against its
+# headers meanwhile)
+
 $(WAMR_PATCHED): $(WAMR_TARBALL) $(wildcard *.patch)
 	$(Q) echo "Unpacking $(WAMR_TARBALL) to $(WAMR_UNPACK)"
-	$(Q) rm -rf $(WAMR_UNPACK) wasm-micro-runtime-$(WAMR_VERSION)
+	$(Q) rm -rf wasm-micro-runtime-$(WAMR_VERSION) $(WAMR_UNPACK).old
 	$(Q) unzip -q $(WAMR_TARBALL)
+	$(Q) $(foreach p,$(sort $(wildcard *.patch)),patch -s -d wasm-micro-runtime-$(WAMR_VERSION) -p1 < $(p) &&) true
+	$(Q) touch wasm-micro-runtime-$(WAMR_VERSION)$(DELIM).patched
+	$(Q) if [ -d $(WAMR_UNPACK) ]; then mv $(WAMR_UNPACK) $(WAMR_UNPACK).old; fi
 	$(Q) mv wasm-micro-runtime-$(WAMR_VERSION) $(WAMR_UNPACK)
-	$(Q) $(foreach p,$(sort $(wildcard *.patch)),patch -s -d $(WAMR_UNPACK) -p1 < $(p) &&) true
-	$(Q) touch $(WAMR_UNPACK) $(WAMR_PATCHED)
+	$(Q) rm -rf $(WAMR_UNPACK).old
 
 $(WAMR_UNPACK): $(WAMR_PATCHED)
 
