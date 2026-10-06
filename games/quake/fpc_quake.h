@@ -35,6 +35,22 @@ size_t fpcq_hunk_size(void);
 void *fpcq_hunk(void);                  /* (Allocated before the game starts) */
 const char *fpcq_basedir(void);
 
+/* What DOS Quake's minimum memory (MINIMUM_MEMORY) had in it for the
+ * video buffers at 320 x 200 (vid_vga.c: the depth buffer and the surface
+ * cache from the hunk), which come from the game's heap here: the hunk
+ * may be that much smaller (-res makes it so to make room for its own)
+ */
+
+#define FPCQ_HUNK_VIDEO  (320 * 200 * 2 + 600 * 1024)
+
+/* The software renderer's frame (vid_null.c): 320 x 200, or -res W's
+ * W x 3W/4; and the surface cache the heap was sized for (0: the game's
+ * own reckoning, D_SurfaceCacheForRes)
+ */
+
+void fpcq_vid_size(int *w, int *h);
+size_t fpcq_surfcache_size(void);
+
 /* The game ends: the display, the keyboard and the memory given back */
 
 void fpcq_exit(int code) __attribute__((noreturn));

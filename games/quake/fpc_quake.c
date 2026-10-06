@@ -5,9 +5,10 @@
  *
  * Quake (quakegeneric: WinQuake's software renderer) on the FPC board: its
  * platform (QG_*), full screen on the GPU as Doom's is (i_fpcscreen.c):
- * the display and the keyboard taken from the desktop, 320 x 200 at 4 x 4
- * in 1280 x 800, each frame one PUT looked up in the palette on its way
- * into the link, two canvases taken in turn.
+ * the display and the keyboard taken from the desktop, 320 x 200 shown at
+ * 4:3 in the desktop's own mode (or -res W: W x 3W/4), each frame PUT8s of
+ * its 8-bit pixels (the GPU looks them up in the palette), two canvases
+ * taken in turn.
  *
  * A loadable module: the loader gives it its code and variables for the
  * time it runs.  What the game allocates (fpc_quake.h) comes from a heap
@@ -40,6 +41,7 @@
 
 extern int fpcq_gl;
 void fpcq_gl_init(void);
+size_t fpcq_gl_bytes(void);
 void fpcq_gl_report(void);
 
 /* fpc_gpu3d.c's (its qboolean is the game's: an int here) */
@@ -66,6 +68,12 @@ void fpcq_dq_wait(void);                  /* fpc_drawq.c */
 #define FS_H43        240                 /* Its rows at 4:3 */
 #define FS_MODE       FPC_GPU_MODE_1280x800   /* (-gpu3d, -gl) */
 #define FS_SCALE      4
+#define RES_MIN       320                 /* -res W */
+#define RES_MAX       1024
+#define SC_320        (600 * 1024)        /* The surface cache at 320 x 200
+                                           * (in GAMES_QUAKE_HEAPSIZE) */
+#define SC_LEAST      SC_320
+#define HEAP_SPARE    (128 * 1024)        /* PSRAM left to the system (-res) */
 
 #define SRAM_MAX      8                   /* Arrays in the SRAM at most */
 #define SRAM_RESERVE  (32 * 1024)         /* Left to the system */
@@ -86,10 +94,15 @@ static size_t g_sram_bytes;
 
 static int g_argc;
 static char **g_argv;
+static size_t g_surfcache;                /* fpcq_surfcache_size() */
+static size_t g_hunksize;                 /* -res's (else 0) */
 
 static struct
 {
   bool     on;
+  int      w;                             /* The software renderer's frame */
+  int      h;
+  bool     res;                           /* -res (else 320 x 200) */
   int      back;                          /* The canvas drawn next */
   int      x[2];
   int      y[2];
@@ -137,6 +150,55 @@ static uint8_t g_sim_heap[CONFIG_GAMES_QUAKE_HEAPSIZE * 1024] aligned_data(16);
 #  define heap_free(p)  free(p)
 #endif
 
+/* The software renderer's frame: 320 x 200, shown at 4:3 (its rows
+ * stretched, 200 as 240); or -res W: W x 3W/4 (W from RES_MIN to RES_MAX,
+ * a multiple of 8, at most what the desktop's mode shows whole), square
+ * pixels.  -gpu3d and -gl draw in 320 x 200.
+ */
+
+static void res_choose(void)
+{
+  int w = 0;
+  int mw;
+  int mh;
+  int k;
+
+  g_fs.w = FS_W;
+  g_fs.h = FS_H;
+  for (k = 1; k < g_argc; k++)
+    {
+      if (k + 1 < g_argc && strcmp(g_argv[k], "-res") == 0)
+        {
+          w = atoi(g_argv[k + 1]);
+        }
+    }
+
+  for (k = 1; k < g_argc && w > 0; k++)
+    {
+      if (strcmp(g_argv[k], "-gl") == 0 || strcmp(g_argv[k], "-gpu3d") == 0)
+        {
+          printf("quake: -res: not with %s (320 x 200)\n", g_argv[k]);
+          w = 0;
+        }
+    }
+
+  if (w <= 0)
+    {
+      return;
+    }
+
+  if (fpc_gpu_modesize(fpc_gpu_mode(), &mw, &mh) == 0)
+    {
+      w = w > mw ? mw : w;
+      w = w > mh * 4 / 3 ? mh * 4 / 3 : w;
+    }
+
+  w = w < RES_MIN ? RES_MIN : w > RES_MAX ? RES_MAX : w;
+  g_fs.w = w & ~7;
+  g_fs.h = (g_fs.w * 3 / 4) & ~1;
+  g_fs.res = true;
+}
+
 static void heap_destroy(void)
 {
   int i;
@@ -164,6 +226,73 @@ static void heap_destroy(void)
   g_hunk = NULL;
 }
 
+/* -res: the game's memory for a larger frame.  The frame and the depth
+ * buffer, from the heap where the SRAM has no room for them (as
+ * fpcq_fast_alloc() will find), and the surface cache the game would have
+ * for the size (D_SurfaceCacheForRes; -surfcachesize N in KB), in the
+ * PSRAM with the hunk, HEAP_SPARE left over: what does not fit comes off
+ * the hunk (without -mem), by at most FPCQ_HUNK_VIDEO (what the hunk holds
+ * besides the level is the models' cache), then off the surface cache,
+ * down to its size at 320 x 200
+ */
+
+static void res_memory(size_t *hunk)
+{
+  size_t px = (size_t)g_fs.w * g_fs.h;
+  size_t avail = (size_t)mallinfo().mxordblk;
+  size_t inheap = px * 3;
+  size_t fixed;
+  size_t least;
+  size_t sc;
+  bool mem = false;
+  int k;
+
+#ifdef CONFIG_GAMES_QUAKE_SRAM
+  size_t sram = (size_t)kmm_mallinfo().mxordblk;
+
+  if (sram >= px + SRAM_RESERVE)          /* The frame */
+    {
+      inheap -= px;
+      sram -= px;
+    }
+
+  if (sram >= 2 * px + SRAM_RESERVE)      /* The depth buffer */
+    {
+      inheap -= 2 * px;
+    }
+#endif
+
+  sc = SC_320 + (px - FS_W * FS_H) * 3;
+  for (k = 1; k + 1 < g_argc; k++)
+    {
+      if (strcmp(g_argv[k], "-surfcachesize") == 0)
+        {
+          sc = (size_t)atoi(g_argv[k + 1]) * 1024;
+        }
+
+      mem |= strcmp(g_argv[k], "-mem") == 0;
+    }
+
+  fixed = g_heapsize - SC_320 + inheap;
+  avail = avail > HEAP_SPARE + fixed ? avail - HEAP_SPARE - fixed : 0;
+  if (!mem && *hunk + sc > avail)
+    {
+      least = *hunk - FPCQ_HUNK_VIDEO;
+      *hunk = avail > least + sc ? avail - sc : least;
+    }
+
+  if (*hunk + sc > avail)
+    {
+      sc = avail > *hunk + SC_LEAST ? avail - *hunk : SC_LEAST;
+    }
+
+  g_surfcache = sc;
+  g_heapsize = fixed + sc;
+  printf("quake: %d x %d: a hunk of %zu KB, a heap of %zu KB with a "
+         "surface cache of %zu KB\n", g_fs.w, g_fs.h, *hunk / 1024,
+         g_heapsize / 1024, sc / 1024);
+}
+
 /* The game's memory: the hunk, and a heap of CONFIG_GAMES_QUAKE_HEAPSIZE
  * for the rest, two blocks of the user heap (one of 6 MB and more would
  * often not be had in one piece)
@@ -172,9 +301,24 @@ static void heap_destroy(void)
 static int heap_create(void)
 {
   size_t hunk = fpcq_hunk_size();
+  int k;
+
+  g_heapsize = (size_t)CONFIG_GAMES_QUAKE_HEAPSIZE * 1024;
+  for (k = 1; k < g_argc; k++)
+    {
+      if (strcmp(g_argv[k], "-gl") == 0)
+        {
+          g_heapsize += fpcq_gl_bytes();  /* (fpc_glq.c's state) */
+        }
+    }
+
+  if (g_fs.res)
+    {
+      res_memory(&hunk);
+      g_hunksize = hunk;
+    }
 
   g_hunk = hunk_alloc(hunk);
-  g_heapsize = (size_t)CONFIG_GAMES_QUAKE_HEAPSIZE * 1024;
   g_heapmem = g_hunk != NULL ? heap_alloc(g_heapsize) : NULL;
   if (g_heapmem == NULL)
     {
@@ -376,6 +520,11 @@ size_t fpcq_hunk_size(void)
 {
   int i;
 
+  if (g_hunksize != 0)
+    {
+      return g_hunksize;
+    }
+
   for (i = 1; i + 1 < g_argc; i++)
     {
       if (strcmp(g_argv[i], "-mem") == 0 && atoi(g_argv[i + 1]) > 0)
@@ -385,6 +534,17 @@ size_t fpcq_hunk_size(void)
     }
 
   return (size_t)CONFIG_GAMES_QUAKE_HUNKSIZE * 1024;
+}
+
+void fpcq_vid_size(int *w, int *h)
+{
+  *w = g_fs.w;
+  *h = g_fs.h;
+}
+
+size_t fpcq_surfcache_size(void)
+{
+  return g_surfcache;
 }
 
 const char *fpcq_basedir(void)
@@ -458,8 +618,9 @@ void QG_Init(void)
    * for, in the desktop's own display mode: 200 rows as 240 (every fifth
    * row twice), scaled the most whole times that fit (3 x 3, 960 x 720,
    * in 1280 x 800, 1280 x 720 and 1024 x 768; 2 x 2 in 800 x 600), in the
-   * middle with black around.  -gpu3d draws its world in 320 x 200 on the
-   * GPU: 1280 x 800 at 4 x 4 as before
+   * middle with black around.  -res W's frame is 4:3 itself (480 x 360:
+   * 2 x 2 in 1280 x 720 or 800; 640 x 480: 1 x 1).  -gpu3d draws its world
+   * in 320 x 200 on the GPU: 1280 x 800 at 4 x 4 as before
    */
 
   g_fs.aspect = true;
@@ -472,18 +633,20 @@ void QG_Init(void)
     }
 
   s = FS_SCALE;
-  g_fs.cw = FS_W;
-  g_fs.ch = FS_H;
+  g_fs.cw = g_fs.w;
+  g_fs.ch = g_fs.h;
   g_fs.ox = 0;
   g_fs.oy = 0;
   if (g_fs.aspect && fpc_gpu_modesize(fpc_gpu_mode(), &w, &h) == 0)
     {
-      s = w / FS_W < h / FS_H43 ? w / FS_W : h / FS_H43;
+      int h43 = g_fs.res ? g_fs.h : FS_H43;
+
+      s = w / g_fs.w < h / h43 ? w / g_fs.w : h / h43;
       s = s < 1 ? 1 : s > 4 ? 4 : s;
       g_fs.cw = (w + s - 1) / s;
       g_fs.ch = (h + s - 1) / s;
-      g_fs.ox = ((g_fs.cw - FS_W) / 2) & ~1;   /* (PUT8: x even) */
-      g_fs.oy = (g_fs.ch - FS_H43) / 2;
+      g_fs.ox = ((g_fs.cw - g_fs.w) / 2) & ~1;   /* (PUT8: x even) */
+      g_fs.oy = (g_fs.ch - h43) / 2;
     }
   else
     {
@@ -492,7 +655,21 @@ void QG_Init(void)
 
   for (k = 0; k < 2; k++)
     {
-      if (fpc_gpu_game_alloc(g_fs.cw, g_fs.ch, &g_fs.x[k], &g_fs.y[k]) < 0)
+      int r = fpc_gpu_game_alloc(g_fs.cw, g_fs.ch, &g_fs.x[k], &g_fs.y[k]);
+
+      if (r < 0 && k == 1 && g_fs.res)
+        {
+          /* -res at 1 x 1: no room for a second whole screen, the one
+           * drawn as it is shown (a frame may tear)
+           */
+
+          g_fs.x[1] = g_fs.x[0];
+          g_fs.y[1] = g_fs.y[0];
+          syslog(LOG_INFO, "quake: one canvas (no room for two)\n");
+          break;
+        }
+
+      if (r < 0)
         {
           fpc_gpu_game_free_all();
           fpc_gpu_game_display(false);
@@ -504,9 +681,10 @@ void QG_Init(void)
     }
 
   syslog(LOG_INFO, "quake: canvases at (%d, %d) (%d, %d), %d x %d at "
-         "%d x %d%s, the frame at (+%d, +%d)\n", g_fs.x[0], g_fs.y[0],
-         g_fs.x[1], g_fs.y[1], g_fs.cw, g_fs.ch, s, s,
-         g_fs.aspect ? " (4:3)" : "", g_fs.ox, g_fs.oy);   /* (grab.py) */
+         "%d x %d%s, the frame (%d x %d) at (+%d, +%d)\n", g_fs.x[0],
+         g_fs.y[0], g_fs.x[1], g_fs.y[1], g_fs.cw, g_fs.ch, s, s,
+         g_fs.aspect ? " (4:3)" : "", g_fs.w, g_fs.h, g_fs.ox,
+         g_fs.oy);                        /* (grab.py) */
   for (k = 1; k + 1 < g_argc; k++)
     {
       if (strcmp(g_argv[k], "-holdframe") == 0)
@@ -645,7 +823,7 @@ void QG_DrawFrame(void *pixels)
     }
   else
     {
-      if (g_fs.aspect)
+      if (g_fs.aspect && !g_fs.res)
         {
           int g;
 
@@ -666,8 +844,10 @@ void QG_DrawFrame(void *pixels)
         }
       else
         {
-          fpc_gpu_put8(g_fs.x[k], g_fs.y[k], FS_W, FS_H, pixels, FS_W,
-                       g_fs.lut);
+          /* (-res: 4:3 itself) */
+
+          fpc_gpu_put8(g_fs.x[k] + g_fs.ox, g_fs.y[k] + g_fs.oy, g_fs.w,
+                       g_fs.h, pixels, g_fs.w, g_fs.lut);
         }
 
       g_fs.basesent = false;              /* (the GPU has the tinted one) */
@@ -690,7 +870,7 @@ void QG_DrawFrame(void *pixels)
       uint32_t h = 2166136261u;
       int i;
 
-      for (i = 0; i < FS_W * FS_H; i++)
+      for (i = 0; i < g_fs.w * g_fs.h; i++)
         {
           h = (h ^ p[i]) * 16777619u;
         }
@@ -826,6 +1006,7 @@ int main(int argc, char *argv[])
    */
 
   fpc_gpu_game_prepare();
+  res_choose();
   if (heap_create() < 0)
     {
       return EXIT_FAILURE;

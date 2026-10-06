@@ -26,10 +26,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 viddef_t	vid;				// global video state
 
-// FPC: 320 x 200, which the GPU shows at 4 x 4 in 1280 x 800; the frame
-// in the SRAM if there is room, the depth buffer from the game's heap
-#define	BASEWIDTH	320
-#define	BASEHEIGHT	200
+// FPC: 320 x 200 (shown at 4:3), or -res W's W x 3W/4 (fpc_quake.c); the
+// frame and the depth buffer in the SRAM if there is room, else from the
+// game's heap
 
 byte	*vid_buffer;
 short	*zbuffer;
@@ -50,23 +49,32 @@ void	VID_ShiftPalette (unsigned char *palette)
 
 void	VID_Init (unsigned char *palette)
 {
-	vid.maxwarpwidth = vid.width = vid.conwidth = BASEWIDTH;
-	vid.maxwarpheight = vid.height = vid.conheight = BASEHEIGHT;
+	int	w, h;
+
+	fpcq_vid_size (&w, &h);		/* FPC */
+	vid.width = vid.conwidth = w;
+	vid.height = vid.conheight = h;
+	vid.maxwarpwidth = WARP_WIDTH;	/* (r_warpbuffer's: underwater) */
+	vid.maxwarpheight = WARP_HEIGHT;
 	vid.aspect = 1.0;
 	vid.numpages = 1;
 	vid.colormap = host_colormap;
 	vid.fullbright = 256 - LittleLong (*((int *)vid.colormap + 2048));
-	vid_buffer = fpcq_fast_alloc (BASEWIDTH*BASEHEIGHT, "the frame");
-	zbuffer = fpcq_fast_alloc (BASEWIDTH*BASEHEIGHT*sizeof(short), "the z-buffer");	/* FPC */
+	vid_buffer = fpcq_fast_alloc (w*h, "the frame");
+	zbuffer = fpcq_fast_alloc (w*h*sizeof(short), "the z-buffer");	/* FPC */
 	if (zbuffer == NULL)
 		Sys_Error ("no memory for the depth buffer");
 	vid.buffer = vid.conbuffer = vid_buffer;
-	vid.rowbytes = vid.conrowbytes = BASEWIDTH;
+	vid.rowbytes = vid.conrowbytes = w;
 	
 	d_pzbuffer = zbuffer;
 
-	surfcache_size = D_SurfaceCacheForRes(BASEWIDTH, BASEHEIGHT);
+	surfcache_size = fpcq_surfcache_size ();	/* FPC: what the heap has room for */
+	if (surfcache_size == 0)
+		surfcache_size = D_SurfaceCacheForRes(w, h);
 	surfcache = malloc(surfcache_size);
+	if (surfcache == NULL)
+		Sys_Error ("no memory for a surface cache of %d KB", (int)(surfcache_size / 1024));
 	D_InitCaches (surfcache, surfcache_size);
 
 	// quake generic

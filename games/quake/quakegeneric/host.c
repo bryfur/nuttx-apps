@@ -790,7 +790,9 @@ void Host_Init (quakeparms_t *parms)
 
 	host_parms = *parms;
 
-	if (parms->memsize < minimum_memory)
+	// FPC: the least less what DOS Quake took of it for its video buffers
+	// at 320 x 200, which are in the game's heap here (fpc_quake.h)
+	if (parms->memsize < minimum_memory - FPCQ_HUNK_VIDEO)
 		Sys_Error ("Only %4.1f megs of memory available, can't execute game", parms->memsize / (float)0x100000);
 
 	com_argc = parms->argc;

@@ -54,6 +54,8 @@
 #define MAXSPRITES   64                   /* Sprite frames kept as textures */
 #define MAXPARTS     2048                 /* Particles in a frame */
 #define CACHES       4096                 /* Lightmaps in the atlas */
+#define WARP_POOL    24                   /* warp_polys()'s pieces */
+#define WARP_VERTS   64
 
 /****************************************************************************
  * Private Types
@@ -88,7 +90,11 @@ qboolean fpcq_gl;                         /* -gl: the 3D GPU draws */
  * Private Data
  ****************************************************************************/
 
-static struct
+/* All of it (300 KB) from the game's heap, only for -gl (fpcq_gl_init();
+ * fpc_quake.c makes the heap the larger, fpcq_gl_bytes())
+ */
+
+static struct gl_s
 {
   qboolean on;
   int16_t ax;                             /* The atlas */
@@ -145,7 +151,16 @@ static struct
 
   mplane_t frustum[4];
   uint32_t surfs, lightmaps, flushes, frames;
-} g_gl;
+
+  /* Room for the functions' work */
+
+  uint8_t img[256 * 256];                 /* mip_texture() */
+  uint8_t layer[128 * 128];               /* The sky's (fpcq_gl_newmap()) */
+  float pool[WARP_POOL][WARP_VERTS][3];   /* warp_polys() */
+  int count[WARP_POOL];
+} *g_glp;
+
+#define g_gl (*g_glp)
 
 /* (fpc_quake.c's) */
 
@@ -284,8 +299,19 @@ static void table_check(void)
  * Init, a new map
  ****************************************************************************/
 
+size_t fpcq_gl_bytes(void)
+{
+  return sizeof(struct gl_s);
+}
+
 void fpcq_gl_init(void)
 {
+  g_glp = calloc(1, sizeof(*g_glp));
+  if (g_glp == NULL)
+    {
+      Sys_Error("-gl: no memory (%d bytes)", (int)sizeof(*g_glp));
+    }
+
   g_gl.on = true;
   make_factors();
 }
@@ -313,7 +339,7 @@ static void free_map(void)
 
 static GLuint mip_texture(const uint8_t *src, int w, int h, qboolean fullbright)
 {
-  static uint8_t img[256 * 256];
+  uint8_t *img = g_gl.img;
   int w2 = 1;
   int h2 = 1;
   qboolean any = false;
@@ -331,7 +357,7 @@ static GLuint mip_texture(const uint8_t *src, int w, int h, qboolean fullbright)
       h2 <<= 1;
     }
 
-  if (w2 * h2 > (int)sizeof(img))
+  if (w2 * h2 > (int)sizeof(g_gl.img))
     {
       return 0;
     }
@@ -382,7 +408,7 @@ void fpcq_gl_newmap(void)
   int i;
   int k;
 
-  if (!g_gl.on)
+  if (g_glp == NULL)
     {
       return;
     }
@@ -407,7 +433,7 @@ void fpcq_gl_newmap(void)
            * (the left half, 0 transparent: 255, the key) as textures
            */
 
-          static uint8_t layer[128 * 128];
+          uint8_t *layer = g_gl.layer;
           const uint8_t *src = (const uint8_t *)t + t->offsets[0];
           int h = t->height < 128 ? t->height : 128;
           int r;
@@ -712,14 +738,11 @@ static void warp_vertex(msurface_t *s, texture_t *tex, const float *p,
  * sky every 128
  */
 
-#define WARP_POOL    24
-#define WARP_VERTS   64
-
 static void warp_polys(msurface_t *s, texture_t *tex, const vec3_t *v0,
                        int n0, int layer)
 {
-  static float pool[WARP_POOL][WARP_VERTS][3];
-  static int count[WARP_POOL];
+  float (*pool)[WARP_VERTS][3] = g_gl.pool;
+  int *count = g_gl.count;
   float grid = (s->flags & SURF_DRAWSKY) ? 128.0f : 32.0f;
   int sp = 1;
   int i;
