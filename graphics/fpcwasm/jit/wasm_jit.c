@@ -2446,17 +2446,33 @@ static void emit_cold(jc_t *c)
           trap_if(c, CC_HS, JT_OOB);                       /* (wrapped) */
         }
 
-      e32(&c->fb, 0xf84d, 0xed08);                 /* str lr, [sp, #-8]! */
-      t_ldst(&c->fb, LS_LDR, R_LR, JR_INST, c->mem_off +
-             offsetof(WASMMemoryInstance, memory_data_size));
-      if (cs->size == 2)
-        {
-          t_dp_imm(&c->fb, DP_SUB, 1, R_LR, R_LR, 1);       /* subs */
-          trap_if(c, CC_LO, JT_OOB);
-        }
+      /* The memory's size into a scratch register: ip when the address
+       * is in lr (k = 0), else lr (saved around it)
+       */
 
-      t_cmp(&c->fb, ea, R_LR);
-      e32(&c->fb, 0xf85d, 0xeb08);                 /* ldr lr, [sp], #8 */
+      {
+        int sc = ea == R_LR ? R_IP : R_LR;
+
+        if (sc == R_LR)
+          {
+            e32(&c->fb, 0xf84d, 0xed08);           /* str lr, [sp, #-8]! */
+          }
+
+        t_ldst(&c->fb, LS_LDR, sc, JR_INST, c->mem_off +
+               offsetof(WASMMemoryInstance, memory_data_size));
+        if (cs->size == 2)
+          {
+            t_dp_imm(&c->fb, DP_SUB, 1, sc, sc, 1);         /* subs */
+            trap_if(c, CC_LO, JT_OOB);    /* (a trap restores sp) */
+          }
+
+        t_cmp(&c->fb, ea, sc);
+        if (sc == R_LR)
+          {
+            e32(&c->fb, 0xf85d, 0xeb08);           /* ldr lr, [sp], #8 */
+          }
+      }
+
       trap_if(c, CC_HS, JT_OOB);
       br_to(c, cs->back);
     }

@@ -137,3 +137,33 @@
 (assert_return (invoke "end16" (i32.const 65532)) (i32.const 0))
 (assert_trap (invoke "end16" (i32.const 65533)) "out of bounds memory access")
 (assert_trap (invoke "after-set" (i32.const 0)) "out of bounds memory access")
+
+;; The exact check of a 1 or 2-byte access in the memory's last 3 bytes,
+;; out of line, with the address in lr (the fourth temporary of a leaf):
+;; the memory's size must not be loaded into that same register
+
+(module
+  (memory 1)
+  (data (i32.const 65532) "\01\02\03\04")
+  (func (export "lr-cold8") (param i32) (result i32)
+    (i32.add (local.get 0) (i32.const 1))
+    (i32.add (local.get 0) (i32.const 2))
+    (i32.add (local.get 0) (i32.const 3))
+    (i32.add (local.get 0) (i32.const 65532))
+    i32.load8_u
+    i32.add
+    i32.add
+    i32.add)
+  (func (export "lr-cold16") (param i32) (result i32)
+    (i32.add (local.get 0) (i32.const 1))
+    (i32.add (local.get 0) (i32.const 2))
+    (i32.add (local.get 0) (i32.const 3))
+    (i32.add (local.get 0) (i32.const 65532))
+    i32.load16_u
+    i32.add
+    i32.add
+    i32.add)
+)
+(assert_return (invoke "lr-cold8" (i32.const 3)) (i32.const 19))
+(assert_return (invoke "lr-cold16" (i32.const 2)) (i32.const 1039))
+(assert_trap (invoke "lr-cold16" (i32.const 3)) "out of bounds memory access")
