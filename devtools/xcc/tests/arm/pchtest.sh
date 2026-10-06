@@ -30,5 +30,13 @@ grep -q "local 7" p1.3.out || { echo "pchtest: local.h's change not seen"; bad=$
 # Pruned: hello's output is small
 n=$($A/cpp -D__XCC --pch $A/pch -isystem $XCCDIR/xcc/include p2.c | wc -l)
 [ $n -lt 200 ] || { echo "pchtest: p2 not pruned ($n lines)"; bad=$((bad+1)); }
+# The system headers taken as they were when the key says so (--pch-key,
+# what the board's driver passes): the same output, made and from the cache
+rm -rf $A/pch
+for k in 1 2; do
+  $A/cpp -D__XCC --pch $A/pch --pch-key k1 -isystem $XCCDIR/xcc/include p2.c > p2.k$k.i
+done
+$A/cpp -D__XCC -isystem $XCCDIR/xcc/include p2.c > p2.nopch.i
+cmp -s p2.k1.i p2.k2.i && $A/cc1 -o p2.k.s p2.k2.i && [ -s p2.k.s ] || { echo "pchtest: --pch-key"; bad=$((bad+1)); }
 echo "pchtest: $bad failures"
 rm -rf $W
