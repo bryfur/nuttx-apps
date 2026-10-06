@@ -104,6 +104,13 @@ void fg_script(FAR const char *script);
 
 int fg_width(void);                       /* The canvas */
 int fg_height(void);
+
+/* The display the game has: its size, the scale the canvas is shown at,
+ * the display mode (fpc_gpu_modesize())
+ */
+
+void fg_display_info(FAR int *w, FAR int *h, FAR int *scale,
+                     FAR int *mode);
 uint32_t fg_frame(void);                  /* Frames since init() */
 uint32_t fg_time_us(void);                /* Since fg_run() */
 uint32_t fg_time_ms(void);
@@ -282,6 +289,24 @@ uint32_t fg_pad_pressed(void);            /* Went down this frame */
 uint32_t fg_pad_released(void);           /* Went up this frame */
 int fg_axis_x(void);                      /* -107 (left) .. 107 (right) */
 int fg_axis_y(void);                      /* -107 (down) .. 107 (up) */
+
+/* The key events of the keyboard (and of the script) as they came, for a
+ * game that wants more than the pad (text, menus): NX's flags (nxkeys.h:
+ * NX_KEY_RELEASE, the modifiers), the key's code (a character, or
+ * NX_KEY_SPECIAL(KEYCODE_...)) and the character it typed (0: none).  1
+ * and the next event, 0 when there are none; a game that does not read
+ * them loses the oldest
+ */
+
+int fg_key_next(FAR uint8_t *flags, FAR uint8_t *code, FAR uint8_t *ch);
+
+/* The mouse, while a game has the display (its events go to the game, not
+ * the desktop): the pointer in canvas pixels (kept on the canvas), the
+ * buttons (bit 0 left, 1 right, 2 middle) and the wheel's movement since
+ * the last call.  1, or 0 if no mouse has moved since the game started
+ */
+
+int fg_mouse(FAR int *x, FAR int *y, FAR int *buttons, FAR int *wheel);
 
 /****************************************************************************
  * Sound: sixteen voices, each a sample (8-bit signed, any rate) or a

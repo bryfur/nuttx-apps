@@ -39,6 +39,7 @@
 #include <nuttx/nx/nxbe.h>
 
 #include "desk.h"
+#include "desk_wasm.h"
 #include "desk_clock.h"
 #ifdef CONFIG_FPCDESK_SOUND
 #  include "desk_sound.h"
@@ -109,7 +110,8 @@ static struct
   int x0;                              /* The grid's top-left */
   int y0;
   int n;                               /* The apps that match */
-  int apps[APP_COUNT];
+  int apps[APP_COUNT + DESK_WASM_MAX]; /* (APP_COUNT + i: WebAssembly app
+                                        * i, desk_wasm.c) */
   uint8_t last;                        /* Buttons */
   struct ui_field_s search;
   struct ui_keys_s keys;
@@ -1537,6 +1539,14 @@ static void launcher_filter(void)
         }
     }
 
+  for (i = 0; i < desk_wasm_count(); i++)
+    {
+      if (name_matches(desk_wasm_name(i), g_l.search.text))
+        {
+          g_l.apps[g_l.n++] = APP_COUNT + i;
+        }
+    }
+
   g_l.page  = 0;
   g_l.hover = -1;
   g_l.sel   = g_l.search.len > 0 && g_l.n > 0 ? 0 : -1;
@@ -1689,9 +1699,19 @@ void desk_launcher_draw(void)
                                                   THEMED(40, 30)) / 255));
         }
 
-      icon_put(&g_ops, app, x + (TILE - TILE_ICON) / 2, y + 4, TILE_ICON,
-               a);
-      ui_fit(f, g_apps[app]->name, TILE + 16, name, sizeof(name));
+      if (app >= APP_COUNT)
+        {
+          desk_wasm_icon(&g_ops, app - APP_COUNT,
+                         x + (TILE - TILE_ICON) / 2, y + 4, TILE_ICON, a);
+        }
+      else
+        {
+          icon_put(&g_ops, app, x + (TILE - TILE_ICON) / 2, y + 4,
+                   TILE_ICON, a);
+        }
+
+      ui_fit(f, app >= APP_COUNT ? desk_wasm_name(app - APP_COUNT) :
+             g_apps[app]->name, TILE + 16, name, sizeof(name));
       ops_text_centre(&g_ops, f, x + TILE / 2, y + TILE_ICON + 12, name,
                       fg, a);
     }
@@ -1741,6 +1761,7 @@ void desk_launcher_toggle(void)
           g_l.alpha = 0;
           ui_field_set(&g_l.search, "");
           memset(&g_l.keys, 0, sizeof(g_l.keys));
+          desk_wasm_scan();
           launcher_filter();
           g_desk.launcherfade = LAUNCHER_STEPS;
           desk_launcher_draw();
@@ -1755,7 +1776,14 @@ void desk_launcher_toggle(void)
 
 static void launcher_open_app(int k)
 {
-  if (k >= 0 && k < g_l.n)
+  if (k >= 0 && k < g_l.n && g_l.apps[k] >= APP_COUNT)
+    {
+      /* A WebAssembly app: a program that takes the display */
+
+      desk_launcher_toggle();
+      desk_wasm_launch(g_l.apps[k] - APP_COUNT);
+    }
+  else if (k >= 0 && k < g_l.n)
     {
       int app = g_l.apps[k];
       struct desk_win_s *w = desk_app_window(app);
@@ -1800,7 +1828,11 @@ void desk_launcher_mouse(int x, int y, uint8_t buttons)
 
   if ((press & NX_MOUSE_RIGHTBUTTON) && hover >= 0)
     {
-      app_menu(g_l.apps[hover], x, y);
+      if (g_l.apps[hover] < APP_COUNT)   /* (a WebAssembly app: none) */
+        {
+          app_menu(g_l.apps[hover], x, y);
+        }
+
       return;
     }
 

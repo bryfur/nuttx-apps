@@ -44,6 +44,10 @@ MODULE    = $(CONFIG_INTERPRETERS_WAMR)
 
 endif
 
+# What WAMR's POSIX layer needs that this NuttX may leave out
+
+CSRCS += wamr_nuttx_stubs.c
+
 WAMR_NEED_CUSTOM_INIT = n
 
 # Check if we need to build custom init code
@@ -68,6 +72,7 @@ $(WAMR_UNPACK): $(WAMR_TARBALL)
 	$(Q) echo "Unpacking $(WAMR_TARBALL) to $(WAMR_UNPACK)"
 	$(Q) unzip $(WAMR_TARBALL)
 	$(Q) mv wasm-micro-runtime-$(WAMR_VERSION) $(WAMR_UNPACK)
+	$(Q) $(foreach p,$(sort $(wildcard *.patch)),patch -s -d $(WAMR_UNPACK) -p1 < $(p) &&) true
 	$(Q) touch $(WAMR_UNPACK)
 
 # Register the external WAMR module

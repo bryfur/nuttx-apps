@@ -182,6 +182,48 @@ static uint32_t joy_bits(void)
 }
 #endif
 
+/* The key events as they came (fg_key_next()) */
+
+#define FG_KEYQ 32                        /* A power of two */
+
+static struct
+{
+  uint8_t q[FG_KEYQ][3];                  /* flags, code, ch */
+  uint8_t head;                           /* Next written */
+  uint8_t tail;                           /* Next read */
+} g_keyq;
+
+static void keyq_put(uint8_t flags, uint8_t code, uint8_t ch)
+{
+  FAR uint8_t *k;
+
+  if ((uint8_t)(g_keyq.head - g_keyq.tail) >= FG_KEYQ)
+    {
+      g_keyq.tail++;                      /* Full: the oldest goes */
+    }
+
+  k = g_keyq.q[g_keyq.head++ & (FG_KEYQ - 1)];
+  k[0] = flags;
+  k[1] = code;
+  k[2] = ch;
+}
+
+int fg_key_next(FAR uint8_t *flags, FAR uint8_t *code, FAR uint8_t *ch)
+{
+  FAR const uint8_t *k;
+
+  if (g_keyq.tail == g_keyq.head)
+    {
+      return 0;
+    }
+
+  k = g_keyq.q[g_keyq.tail++ & (FG_KEYQ - 1)];
+  *flags = k[0];
+  *code  = k[1];
+  *ch    = k[2];
+  return 1;
+}
+
 static uint32_t key_bit(uint8_t code)
 {
   if (NX_KEY_ISSPECIAL(code))
@@ -309,6 +351,7 @@ static void script_frame(void)
 
   for (i = 0; i < ntap; i++)
     {
+      keyq_put(NX_KEY_RELEASE, tap[i], 0);
       key_event(true, tap[i]);
     }
 
@@ -352,11 +395,14 @@ static void script_frame(void)
         {
           if ((k = script_key(w + 1, n - 1)) >= 0)
             {
+              keyq_put(w[0] == '-' ? NX_KEY_RELEASE : 0, (uint8_t)k,
+                       k < 0x80 ? (uint8_t)k : 0);
               key_event(w[0] == '-', (uint8_t)k);
             }
         }
       else if ((k = script_key(w, n)) >= 0 && ntap < (int)sizeof(tap))
         {
+          keyq_put(0, (uint8_t)k, k < 0x80 ? (uint8_t)k : 0);
           key_event(false, (uint8_t)k);
           tap[ntap++] = (uint8_t)k;
         }
@@ -379,6 +425,7 @@ void fg_input_frame(void)
 
   while (fpc_gpu_game_key(&flags, &code, &ch) > 0)
     {
+      keyq_put(flags, code, ch);
       key_event((flags & NX_KEY_RELEASE) != 0, code);
     }
 
@@ -423,9 +470,48 @@ int fg_axis_y(void)
          ((g_pad.now & FG_PAD_DOWN) ? FG_AXIS : 0);
 }
 
+/* The mouse: the desktop session's pointer (drivers/gpu: in the display
+ * mode the desktop has) in the game's display, then in its canvas
+ */
+
+int fg_mouse(FAR int *x, FAR int *y, FAR int *buttons, FAR int *wheel)
+{
+  uint8_t b;
+  int px;
+  int py;
+  int wh;
+  int gw;
+  int gh;
+  int dw = fpc_gpu_xres();
+  int dh = fpc_gpu_yres();
+
+  if (!fpc_gpu_game_mouse(&px, &py, &b, &wh) ||
+      fpc_gpu_modesize(g_fg.mode, &gw, &gh) < 0 || dw <= 0 || dh <= 0)
+    {
+      return 0;
+    }
+
+  px = (int)((int64_t)px * gw / dw) / g_fg.scale - g_fg.mx;
+  py = (int)((int64_t)py * gh / dh) / g_fg.scale - g_fg.my;
+  *x = px < 0 ? 0 : px >= g_fg.w ? g_fg.w - 1 : px;
+  *y = py < 0 ? 0 : py >= g_fg.h ? g_fg.h - 1 : py;
+  *buttons = b;
+  *wheel = wh;
+  return 1;
+}
+
 /****************************************************************************
  * The display
  ****************************************************************************/
+
+void fg_display_info(FAR int *w, FAR int *h, FAR int *scale, FAR int *mode)
+{
+  *w = 0;
+  *h = 0;
+  fpc_gpu_modesize(g_fg.mode, w, h);
+  *scale = g_fg.scale;
+  *mode  = g_fg.mode;
+}
 
 /* The mode and scale that show a w x h canvas largest */
 
@@ -578,6 +664,7 @@ int fg_run(FAR const struct fg_game_s *game)
   script = g_fg.script;
   memset(&g_fg, 0, sizeof(g_fg));
   memset(&g_pad, 0, sizeof(g_pad));
+  memset(&g_keyq, 0, sizeof(g_keyq));
 #ifdef CONFIG_INPUT_AJOYSTICK
   g_pad.joyfd   = open("/dev/ajoy0", O_RDONLY | O_NONBLOCK);
 #else
