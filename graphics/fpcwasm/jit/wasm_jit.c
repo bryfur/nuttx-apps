@@ -5882,6 +5882,7 @@ bool wasm_jit_attach(wasm_module_inst_t module_inst, unsigned flags,
   jc_t c;
   uint64_t t0 = os_time_get_boot_us();
   uint32_t nfuncs;
+  uint32_t peak0;
   uint32_t i;
   uint32_t j;
   uint8_t *code;
@@ -5911,6 +5912,7 @@ bool wasm_jit_attach(wasm_module_inst_t module_inst, unsigned flags,
   c.err    = err;
   c.errlen = errlen;
   g_jit_peak = g_jit_bytes;
+  peak0 = g_jit_bytes;
 
   jm = jit_zalloc(sizeof(*jm));
   nfuncs = mod->import_function_count + mod->function_count;
@@ -6057,7 +6059,7 @@ bool wasm_jit_attach(wasm_module_inst_t module_inst, unsigned flags,
   jm->stats.in_sram = jm->in_sram;
   jm->stats.compile_us = (uint32_t)(os_time_get_boot_us() - t0);
   jc_free(&c);
-  jm->stats.peak_bytes = g_jit_peak;
+  jm->stats.peak_bytes = g_jit_peak - peak0;
 
   inst->ext_words[EXT_FUNCS] = (uint32_t)(uintptr_t)jm->funcs;
   inst->e->ext_data = jm;
@@ -6066,10 +6068,12 @@ bool wasm_jit_attach(wasm_module_inst_t module_inst, unsigned flags,
   if (flags & WASM_JIT_VERBOSE)
     {
       fprintf(stderr, "wasm: JIT: %u functions, %u bytes of wasm, %u bytes "
-              "of code (%s) in %u ms; %u imports direct, %u generic\n",
+              "of code (%s) in %u ms (%u KB of memory at most); %u imports "
+              "direct, %u generic\n",
               (unsigned)jm->stats.functions, (unsigned)jm->stats.wasm_bytes,
               (unsigned)jm->stats.code_bytes, jm->in_sram ? "SRAM" : "PSRAM",
               (unsigned)(jm->stats.compile_us / 1000),
+              (unsigned)((jm->stats.peak_bytes + 1023) / 1024),
               (unsigned)jm->stats.fast_imports,
               (unsigned)jm->stats.slow_imports);
     }
