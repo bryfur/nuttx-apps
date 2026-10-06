@@ -2192,6 +2192,7 @@ static void settings_event(struct kit_s *k, struct kit_widget_s *wg, int ev)
       case S_TZ:
         v = g_prefs.tzoff + k->arg * 30;
         g_prefs.tzoff = v < -12 * 60 ? -12 * 60 : v > 14 * 60 ? 14 * 60 : v;
+        desk_tz_apply();
         desk_topbar_draw();
         desk_prefs_save();
         break;

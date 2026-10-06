@@ -1393,6 +1393,24 @@ void desk_theme_changed(void)
     }
 }
 
+/* The time zone for the programs the desktop starts (the Terminal's
+ * shells: date, ls): TZ, as a POSIX offset (with CONFIG_LIBC_LOCALTIME;
+ * the desktop's own clocks add g_prefs.tzoff themselves)
+ */
+
+void desk_tz_apply(void)
+{
+#ifdef CONFIG_LIBC_LOCALTIME
+  int off = g_prefs.tzoff < 0 ? -g_prefs.tzoff : g_prefs.tzoff;
+  char tz[24];
+
+  snprintf(tz, sizeof(tz), "UTC%c%d:%02d", g_prefs.tzoff > 0 ? '-' : '+',
+           off / 60, off % 60);
+  setenv("TZ", tz, 1);
+  tzset();
+#endif
+}
+
 void desk_localtime(struct tm *tm)
 {
   time_t now = desk_time() + (time_t)g_prefs.tzoff * 60;
@@ -2150,6 +2168,7 @@ int main(int argc, FAR char *argv[])
   /* The display mode saved last time (the panels are made at the new size) */
 
   ret = desk_prefs_load();
+  desk_tz_apply();
   if (ret >= 0 && ret != nx_getdisplaymode(g_desk.hnx, -1, NULL))
     {
       nx_setdisplaymode(g_desk.hnx, ret);

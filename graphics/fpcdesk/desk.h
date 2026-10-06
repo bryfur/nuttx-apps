@@ -660,6 +660,7 @@ void desk_relayout(void);
 /* The time as the desktop shows it: UTC plus g_prefs.tzoff */
 
 void desk_localtime(struct tm *tm);
+void desk_tz_apply(void);                 /* TZ for the programs started */
 
 /* The wall clock the desktop shows.  Tests (deskctl freeze) stop it at a
  * fixed time and stop the text cursors blinking (they stay on), so that
