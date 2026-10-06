@@ -49,6 +49,10 @@ ifeq ($(CONFIG_FPCDESK_SOUND),y)
 CSRCS    += desk_sound.c desk_volume.c
 endif
 
+ifeq ($(CONFIG_NETUTILS_NETCOP),y)
+CSRCS    += desk_net.c
+endif
+
 ifeq ($(CONFIG_FPCDESK_MUSIC),y)
 CSRCS    += desk_music.c
 ifeq ($(CONFIG_AUDIOUTILS_LIBMAD),y)

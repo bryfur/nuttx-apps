@@ -613,6 +613,9 @@ void desk_topbar_draw(void)
   x = desk_volume_topbar(&g_ops, x, ty);
   x = x < DESK_W - 14 ? x - 12 : x;
 #endif
+#ifdef CONFIG_NETUTILS_NETCOP
+  x = desk_net_topbar(&g_ops, x, ty);       /* WiFi, if there is any */
+#endif
 
   snprintf(buf, sizeof(buf), "CPU %d%%", g_desk.cpuload);
   x -= text_width(&g_desk_font_ui, buf);
@@ -667,6 +670,14 @@ void desk_topbar_mouse(int x, int y, uint8_t buttons)
     {
       over = false;
     }
+
+#ifdef CONFIG_NETUTILS_NETCOP
+  if ((buttons & NX_MOUSE_LEFTBUTTON) && !(last & NX_MOUSE_LEFTBUTTON) &&
+      y >= 0 && y < TOPBAR_H && desk_net_topbar_click(x))
+    {
+      over = false;
+    }
+#endif
 
   if (over != g_desk.topbarhover)
     {

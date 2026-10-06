@@ -1942,6 +1942,12 @@ static void on_event(struct desk_event_s *ev)
         desk_theme_changed();
         break;
 
+#ifdef CONFIG_NETUTILS_NETCOP
+      case EV_NET:
+        desk_net_poll();
+        break;
+
+#endif
       case EV_LAUNCH:
         if (ev->part < APP_COUNT && ev->arg != NULL)
           {
@@ -2191,6 +2197,10 @@ int main(int argc, FAR char *argv[])
     {
       desk_topbar_draw();
     }
+#endif
+
+#ifdef CONFIG_NETUTILS_NETCOP
+  desk_net_start();                       /* The WiFi indicator, Settings */
 #endif
 
   desk_clock_init();                      /* Alarms ring from now on */

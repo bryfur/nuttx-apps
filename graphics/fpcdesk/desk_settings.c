@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Settings: a sidebar of pages (Appearance, Display, Dock, Mouse &
- * Keyboard, Date & Time, Sound, About this computer), built with the widget kit
+ * Keyboard, Date & Time, Sound, Wi-Fi, Bluetooth, About this computer),
+ * built with the widget kit
  * (desk_kit.h): each page a column of cards of rows, all of them built
  * when the window opens and the one chosen shown.  Everything set is kept
  * in g_prefs and saved at once (desk_prefs_save()); settings_sync() puts
@@ -40,7 +41,11 @@
 #define SIDE_W         188             /* The sidebar */
 #define SIDE_ROW       32
 #define PAD            24              /* Around a page */
-#define NWG            150             /* Widgets */
+#ifdef CONFIG_NETUTILS_NETCOP
+#  define NWG          210             /* Widgets */
+#else
+#  define NWG          150
+#endif
 #define SWATCH_W       98              /* A wallpaper's preview: four */
 #define SWATCH_H       64              /* across the page */
 #define NWALLS         4               /* The drawn ones, then the image */
@@ -106,8 +111,41 @@ enum
   S_APPNAME = S_APPROW + APPLEVELS,    /* + application */
   S_APPLEVEL = S_APPNAME + APPLEVELS,  /* + 2 x application: the slider,
                                         * its value */
-  S_PIN = S_APPLEVEL + 2 * APPLEVELS   /* + app */
+  S_PIN = S_APPLEVEL + 2 * APPLEVELS,  /* + app */
+  S_NET = S_PIN + APP_COUNT,           /* Wi-Fi and Bluetooth */
+  S_W_NOHW = S_NET,
+  S_W_CARD,
+  S_W_ONLBL,
+  S_W_ON,
+  S_W_NETROW,
+  S_W_NETLBL,
+  S_W_DISC,
+  S_W_NETHEAD,
+  S_W_SCAN,
+  S_W_LIST,
+  S_W_JOINCARD,
+  S_W_JOINLBL,
+  S_W_PASS,
+  S_W_JOIN,
+  S_W_MSG,
+  S_W_SAVEDHEAD,
+  S_W_SAVED,
+  S_W_FORGET,
+  S_B_NOHW,
+  S_B_BODY,
+  S_B_PAIRED,
+  S_B_DISC,
+  S_B_FORGET,
+  S_B_SCAN,
+  S_B_FOUND,
+  S_B_PAIR,
+  S_B_MSG,
+  S_NET_END
 };
+
+#define NAPS           24              /* Wi-Fi: networks listed */
+#define NSAVED         16
+#define NFOUND         16              /* Bluetooth: devices found */
 
 /****************************************************************************
  * Private Types
@@ -142,6 +180,36 @@ struct settings_s
   char minute[8];
   char tz[16];
 
+#ifdef CONFIG_NETUTILS_NETCOP
+  /* Wi-Fi: the networks in range, the saved ones, the one being joined */
+
+  struct kit_list_s aplist;
+  struct kit_list_s savedlist;
+  struct nc_wifi_ap aps[NAPS];
+  struct nc_wifi_saved saved[NSAVED];
+  int naps;
+  int nsaved;
+  bool scanning;
+  bool scanned;                        /* Since the hardware came */
+  bool joining;
+  struct ui_field_s pass;
+  char wonlbl[64];
+  char wnetlbl[96];
+  char joinlbl[64];
+  char wmsg[80];
+
+  /* Bluetooth: the bonded devices (g_net's), those found nearby */
+
+  struct kit_list_s pairedlist;
+  struct kit_list_s foundlist;
+  struct nc_ble_adv found[NFOUND];
+  int nfound;
+  bool bscanning;
+  bool pairing;
+  uint32_t blegen;                     /* g_net's devices as listed */
+  char bmsg[96];
+#endif
+
 #ifdef CONFIG_FPCDESK_SOUND
   /* Sound: the applications whose levels the page shows (the mixer's
    * levels but the system sounds')
@@ -171,6 +239,9 @@ static const char * const g_pages[SETTINGS_PAGES] =
 #ifdef CONFIG_FPCDESK_SOUND
   "Sound",
 #endif
+#ifdef CONFIG_NETUTILS_NETCOP
+  "Wi-Fi", "Bluetooth",
+#endif
   "About this computer"
 };
 
@@ -180,6 +251,9 @@ static const uint16_t g_pagetile[SETTINGS_PAGES] =
   RGB(0x34, 0xc7, 0x59), RGB(0xff, 0x95, 0x00),
 #ifdef CONFIG_FPCDESK_SOUND
   RGB(0xff, 0x2d, 0x55),
+#endif
+#ifdef CONFIG_NETUTILS_NETCOP
+  RGB(0x32, 0xad, 0xe6), RGB(0x00, 0x64, 0xd2),
 #endif
   RGB(0x64, 0x7a, 0x96)
 };
@@ -629,6 +703,940 @@ static bool sound_playing(const struct fpcmix_info_s *info, const char *name)
 }
 #endif
 
+#ifdef CONFIG_NETUTILS_NETCOP
+static void settings_sync(struct settings_s *st);
+static void set_text(struct settings_s *st, int id, char *buf, size_t size,
+                     const char *fmt, ...);
+
+/* Wi-Fi and Bluetooth: the network coprocessor (desk_net.c, docs/netcop.md).
+ * What it shows (the link, the WiFi's state, the bonded devices) is g_net,
+ * kept up to date by its events; scans, joins and pairing are requests
+ * whose answers come back here (desk_net_request()).  No coprocessor:
+ * "No WiFi hardware", and nothing else.
+ */
+
+/* Signal bars, and a lock for a secured network, in KIT_ICON x KIT_ICON */
+
+static void net_bars(struct desk_ops_s *o, int x, int y, int bars, bool lock,
+                     uint16_t fg)
+{
+  int i;
+
+  for (i = 0; i < 4; i++)
+    {
+      int h = 4 + 3 * i;
+
+      ops_rrect(o, x + i * 3, y + 14 - h, 2, h, LUT_R3, 1, fg,
+                i < bars ? 255 : 60);
+    }
+
+  if (lock)
+    {
+      ops_rrect(o, x + 12, y + 3, 5, 5, LUT_R3, 2, fg, 255);
+      ops_rrect(o, x + 13, y + 4, 3, 4, LUT_R3, 1, g_theme.window_bg, 255);
+      ops_fill(o, x + 11, y + 7, 7, 6, fg);
+    }
+}
+
+/* A BLE device: a keyboard (keys), a mouse (a body), a pad (a cross) */
+
+static void ble_glyph(struct desk_ops_s *o, int x, int y, uint8_t kind,
+                      uint16_t fg)
+{
+  if (kind & NC_BLE_KIND_KEYBOARD)
+    {
+      int i;
+
+      ops_rrect(o, x, y + 3, 16, 10, LUT_R3, 2, fg, 255);
+      for (i = 0; i < 4; i++)
+        {
+          ops_fill(o, x + 2 + i * 3, y + 5, 2, 2, g_theme.window_bg);
+        }
+
+      ops_fill(o, x + 4, y + 9, 8, 2, g_theme.window_bg);
+    }
+  else if (kind & NC_BLE_KIND_MOUSE)
+    {
+      ops_rrect(o, x + 3, y + 1, 10, 14, LUT_R6, 5, fg, 255);
+      ops_fill(o, x + 8, y + 2, 1, 5, g_theme.window_bg);
+    }
+  else if (kind & NC_BLE_KIND_GAMEPAD)
+    {
+      ops_rrect(o, x, y + 3, 16, 10, LUT_R6, 5, fg, 255);
+      ops_fill(o, x + 3, y + 7, 5, 2, g_theme.window_bg);
+      ops_fill(o, x + 4, y + 6, 2, 4, g_theme.window_bg);
+      ops_disc(o, x + 12, y + 8, LUT_R3, 1, g_theme.window_bg, 255);
+    }
+  else
+    {
+      ops_disc(o, x + 8, y + 8, LUT_R6, 6, fg, 255);
+    }
+}
+
+static const char *ble_kind(uint8_t kind)
+{
+  return kind & NC_BLE_KIND_KEYBOARD ? "Keyboard" :
+         kind & NC_BLE_KIND_MOUSE ? "Mouse" :
+         kind & NC_BLE_KIND_GAMEPAD ? "Game pad" : "Other";
+}
+
+static const char *ap_text(struct kit_s *k, struct kit_widget_s *wg,
+                           int row, int col, char *buf, int size)
+{
+  struct settings_s *st = k->priv;
+  const struct nc_wifi_ap *a = &st->aps[row];
+
+  if (col == 0)
+    {
+      return a->ssid[0] != '\0' ? a->ssid : "(hidden)";
+    }
+
+  return a->flags & NC_WIFI_AP_CURRENT ? "Connected" :
+         a->flags & NC_WIFI_AP_SAVED ? "Saved" :
+         ncx_wifi_auth_str(a->auth);
+}
+
+static void ap_icon(struct kit_s *k, struct kit_widget_s *wg,
+                    struct desk_ops_s *o, int row, int x, int y, uint16_t fg,
+                    uint16_t bg)
+{
+  struct settings_s *st = k->priv;
+
+  net_bars(o, x - 2, y, ncx_rssi_bars(st->aps[row].rssi),
+           st->aps[row].auth != NC_WIFI_AUTH_OPEN, fg);
+}
+
+static const char *saved_text(struct kit_s *k, struct kit_widget_s *wg,
+                              int row, int col, char *buf, int size)
+{
+  struct settings_s *st = k->priv;
+
+  if (col == 0)
+    {
+      return st->saved[row].ssid;
+    }
+
+  return st->saved[row].flags & NC_WIFI_AP_CURRENT ? "Connected" :
+         ncx_wifi_auth_str(st->saved[row].auth);
+}
+
+static const char *paired_text(struct kit_s *k, struct kit_widget_s *wg,
+                               int row, int col, char *buf, int size)
+{
+  const struct nc_ble_dev *d = &g_net.ble[row];
+
+  if (col == 0)
+    {
+      return d->name[0] != '\0' ? d->name : ble_kind(d->kind);
+    }
+
+  if (d->state != NC_BLE_ST_CONNECTED)
+    {
+      return d->state == NC_BLE_ST_CONNECTING ? "Connecting" :
+             "Not connected";
+    }
+
+  if (d->battery == 0xff)
+    {
+      return "Connected";
+    }
+
+  snprintf(buf, size, "Connected, %u%%", d->battery);
+  return buf;
+}
+
+static void paired_icon(struct kit_s *k, struct kit_widget_s *wg,
+                        struct desk_ops_s *o, int row, int x, int y,
+                        uint16_t fg, uint16_t bg)
+{
+  ble_glyph(o, x, y, g_net.ble[row].kind, fg);
+}
+
+static const char *found_text(struct kit_s *k, struct kit_widget_s *wg,
+                              int row, int col, char *buf, int size)
+{
+  struct settings_s *st = k->priv;
+  const struct nc_ble_adv *a = &st->found[row];
+
+  if (col == 0)
+    {
+      return a->name[0] != '\0' ? a->name : ble_kind(a->kind);
+    }
+
+  return a->flags & NC_BLE_DEV_BONDED ? "Paired" : ble_kind(a->kind);
+}
+
+static void found_icon(struct kit_s *k, struct kit_widget_s *wg,
+                       struct desk_ops_s *o, int row, int x, int y,
+                       uint16_t fg, uint16_t bg)
+{
+  struct settings_s *st = k->priv;
+
+  ble_glyph(o, x, y, st->found[row].kind, fg);
+}
+
+static const struct kit_col_s g_netcols[2] =
+{
+  { "Name", 0, 0, 0 },
+  { "", 130, 0, KIT_COL_DIM | KIT_COL_RIGHT }
+};
+
+static void page_wifi(struct settings_s *st)
+{
+  struct kit_s *k = &st->kit;
+  struct kit_widget_s *wg;
+
+  page_begin(k, SETTINGS_WIFI, "Wi-Fi");
+    kit_label(k, S_W_NOHW, "No WiFi hardware\nThe network coprocessor (a "
+              "XIAO ESP32-C6 on UART0) does not answer.", KIT_TEXT_DIM);
+
+    kit_card(k)->id = S_W_CARD;
+      kit_card_row(k, S_W_ONLBL, st->wonlbl);
+        kit_switch(k, S_W_ON, false);
+      kit_end(k);
+      kit_card_row(k, S_W_NETLBL, st->wnetlbl)->id = S_W_NETROW;
+        kit_button(k, S_W_DISC, "Disconnect", KIT_ICON_NONE,
+                   KIT_BTN_NORMAL);
+      kit_end(k);
+    kit_end(k);
+
+    wg = kit_row(k, KIT_BOX_NONE);
+    wg->id  = S_W_NETHEAD;
+    wg->gap = 8;
+      kit_label(k, 0, "Networks", KIT_TEXT_BOLD);
+      kit_grow(k, 1);
+      kit_button(k, S_W_SCAN, "Scan", KIT_ICON_REFRESH, KIT_BTN_NORMAL);
+    kit_end(k);
+
+    st->aplist.sel     = -1;
+    st->aplist.sortcol = -1;
+    st->aplist.ncols   = 2;
+    st->aplist.cols    = g_netcols;
+    st->aplist.text    = ap_text;
+    st->aplist.icon    = ap_icon;
+    st->aplist.empty   = "No networks found";
+    kit_list(k, S_W_LIST, &st->aplist, KIT_LIST_PLAIN);
+    kit_size(k, 0, 5 * KIT_ROW_H + 8);
+
+    kit_card(k)->id = S_W_JOINCARD;
+      kit_card_row(k, S_W_JOINLBL, st->joinlbl);
+        kit_field(k, S_W_PASS, &st->pass, "Password")->flags |=
+          KIT_F_SECRET;
+        kit_size(k, 180, 0);
+        kit_button(k, S_W_JOIN, "Join", KIT_ICON_NONE, KIT_BTN_DEFAULT);
+      kit_end(k);
+    kit_end(k);
+    kit_label(k, S_W_MSG, st->wmsg, KIT_TEXT_SMALL | KIT_TEXT_DIM);
+
+    wg = kit_row(k, KIT_BOX_NONE);
+    wg->id  = S_W_SAVEDHEAD;
+    wg->gap = 8;
+      kit_label(k, 0, "Saved networks", KIT_TEXT_BOLD);
+      kit_grow(k, 1);
+      kit_button(k, S_W_FORGET, "Forget", KIT_ICON_NONE, KIT_BTN_NORMAL);
+    kit_end(k);
+
+    st->savedlist.sel     = -1;
+    st->savedlist.sortcol = -1;
+    st->savedlist.ncols   = 2;
+    st->savedlist.cols    = g_netcols;
+    st->savedlist.text    = saved_text;
+    st->savedlist.empty   = "None";
+    kit_list(k, S_W_SAVED, &st->savedlist, KIT_LIST_PLAIN);
+    kit_size(k, 0, 3 * KIT_ROW_H + 8);
+  kit_end(k);
+}
+
+static void page_bluetooth(struct settings_s *st)
+{
+  struct kit_s *k = &st->kit;
+  struct kit_widget_s *wg;
+
+  page_begin(k, SETTINGS_BLUETOOTH, "Bluetooth");
+    kit_label(k, S_B_NOHW, "No Bluetooth hardware\nThe network coprocessor "
+              "(a XIAO ESP32-C6 on UART0) does not answer.", KIT_TEXT_DIM);
+
+    wg = kit_col(k, KIT_BOX_NONE);
+    wg->id  = S_B_BODY;
+    wg->gap = 12;
+      wg = kit_row(k, KIT_BOX_NONE);
+      wg->gap = 8;
+        kit_label(k, 0, "My devices\nKeyboards, mice and game pads (BLE)",
+                  KIT_TEXT_BOLD);
+        kit_grow(k, 1);
+        kit_button(k, S_B_DISC, "Disconnect", KIT_ICON_NONE,
+                   KIT_BTN_NORMAL);
+        kit_button(k, S_B_FORGET, "Forget", KIT_ICON_NONE, KIT_BTN_NORMAL);
+      kit_end(k);
+
+      st->pairedlist.sel     = -1;
+      st->pairedlist.sortcol = -1;
+      st->pairedlist.ncols   = 2;
+      st->pairedlist.cols    = g_netcols;
+      st->pairedlist.text    = paired_text;
+      st->pairedlist.icon    = paired_icon;
+      st->pairedlist.empty   = "None paired";
+      kit_list(k, S_B_PAIRED, &st->pairedlist, KIT_LIST_PLAIN);
+      kit_size(k, 0, 3 * KIT_ROW_H + 8);
+
+      wg = kit_row(k, KIT_BOX_NONE);
+      wg->gap = 8;
+        kit_label(k, 0, "Nearby", KIT_TEXT_BOLD);
+        kit_grow(k, 1);
+        kit_button(k, S_B_SCAN, "Scan", KIT_ICON_REFRESH, KIT_BTN_NORMAL);
+        kit_button(k, S_B_PAIR, "Pair", KIT_ICON_NONE, KIT_BTN_DEFAULT);
+      kit_end(k);
+
+      st->foundlist.sel     = -1;
+      st->foundlist.sortcol = -1;
+      st->foundlist.ncols   = 2;
+      st->foundlist.cols    = g_netcols;
+      st->foundlist.text    = found_text;
+      st->foundlist.icon    = found_icon;
+      st->foundlist.empty   = "Scan to find devices";
+      kit_list(k, S_B_FOUND, &st->foundlist, KIT_LIST_PLAIN);
+      kit_size(k, 0, 4 * KIT_ROW_H + 8);
+
+      kit_label(k, S_B_MSG, st->bmsg, KIT_TEXT_DIM);
+    kit_end(k);
+  kit_end(k);
+}
+
+static void net_msg(struct settings_s *st, int id, const char *fmt, ...)
+{
+  char *buf = id == S_W_MSG ? st->wmsg : st->bmsg;
+  size_t size = id == S_W_MSG ? sizeof(st->wmsg) : sizeof(st->bmsg);
+  char tmp[96];
+  va_list ap;
+
+  va_start(ap, fmt);
+  vsnprintf(tmp, sizeof(tmp), fmt, ap);
+  va_end(ap);
+  if (strcmp(tmp, buf) != 0)
+    {
+      strlcpy(buf, tmp, size);
+      kit_set_text(&st->kit, id, buf);
+    }
+}
+
+static void cb_scan(void *arg, const struct ncx_msg *m, const uint8_t *body,
+                    size_t n)
+{
+  struct settings_s *st = arg;
+  struct nc_rd rd;
+  int cnt;
+
+  if (m->kind == NCX_MSG_PART)
+    {
+      nc_rd_init(&rd, body, n);
+      for (cnt = nc_rd_u8(&rd); cnt > 0 && st->naps < NAPS; cnt--)
+        {
+          if (nc_dec_wifi_ap(&rd, &st->aps[st->naps]) != 0)
+            {
+              break;
+            }
+
+          st->naps++;
+        }
+
+      return;
+    }
+
+  st->scanning = false;
+  st->aplist.n = st->naps;
+  if (st->aplist.sel >= st->naps)
+    {
+      st->aplist.sel = -1;
+    }
+
+  kit_list_changed(&st->kit, S_W_LIST);
+  if (g_st == st)
+    {
+      settings_sync(st);
+      kit_flush(&st->kit);
+    }
+}
+
+static void cb_saved(void *arg, const struct ncx_msg *m, const uint8_t *body,
+                     size_t n)
+{
+  struct settings_s *st = arg;
+  struct nc_rd rd;
+  int cnt;
+
+  if (m->kind == NCX_MSG_PART)
+    {
+      nc_rd_init(&rd, body, n);
+      for (cnt = nc_rd_u8(&rd); cnt > 0 && st->nsaved < NSAVED; cnt--)
+        {
+          if (nc_dec_wifi_saved(&rd, &st->saved[st->nsaved]) != 0)
+            {
+              break;
+            }
+
+          st->nsaved++;
+        }
+
+      return;
+    }
+
+  st->savedlist.n = st->nsaved;
+  if (st->savedlist.sel >= st->nsaved)
+    {
+      st->savedlist.sel = -1;
+    }
+
+  kit_list_changed(&st->kit, S_W_SAVED);
+  kit_flush(&st->kit);
+}
+
+static void wifi_refresh(struct settings_s *st)
+{
+  struct nc_wifi_scan sc;
+  uint8_t body[4];
+  struct nc_wr w;
+
+  if (!st->scanning)
+    {
+      memset(&sc, 0, sizeof(sc));
+      nc_wr_init(&w, body, sizeof(body));
+      nc_enc_wifi_scan(&w, &sc);
+      st->naps = 0;
+      st->scanning = desk_net_request(NC_OP_WIFI_SCAN, body, w.n, cb_scan,
+                                      st) == 0;
+    }
+
+  st->nsaved = 0;
+  desk_net_request(NC_OP_WIFI_SAVED, NULL, 0, cb_saved, st);
+  st->scanned = true;
+}
+
+static void cb_wifi_done(void *arg, const struct ncx_msg *m,
+                         const uint8_t *body, size_t n)
+{
+  struct settings_s *st = arg;
+
+  if (m->kind != NCX_MSG_FINAL)
+    {
+      return;
+    }
+
+  if (m->code == NC_OP_WIFI_CONNECT)
+    {
+      st->joining = false;
+      if (m->status < 0)
+        {
+          net_msg(st, S_W_MSG, "%s", m->status == -EACCES ?
+                  "Wrong password" : m->status == -ENOENT ?
+                  "The network is not in range" : m->status == -ETIMEDOUT ?
+                  "No answer from the network" : "Could not join");
+        }
+      else
+        {
+          net_msg(st, S_W_MSG, "%s", "");
+          memset(&st->pass, 0, sizeof(st->pass));
+          st->aplist.sel = -1;
+          kit_list_changed(&st->kit, S_W_LIST);
+        }
+    }
+
+  wifi_refresh(st);
+  settings_sync(st);
+  kit_flush(&st->kit);
+}
+
+static void wifi_join(struct settings_s *st)
+{
+  const struct nc_wifi_ap *a;
+  struct nc_wifi_connect c;
+  uint8_t body[128];
+  struct nc_wr w;
+
+  if (st->aplist.sel < 0 || st->aplist.sel >= st->naps || st->joining)
+    {
+      return;
+    }
+
+  a = &st->aps[st->aplist.sel];
+  memset(&c, 0, sizeof(c));
+  c.flags     = NC_WIFI_CONN_SAVE;
+  c.timeout_s = 20;
+  strlcpy(c.ssid, a->ssid, sizeof(c.ssid));
+  strlcpy(c.password, st->pass.text, sizeof(c.password));
+  nc_wr_init(&w, body, sizeof(body));
+  nc_enc_wifi_connect(&w, &c);
+  if (desk_net_request(NC_OP_WIFI_CONNECT, body, w.n, cb_wifi_done, st) == 0)
+    {
+      st->joining = true;
+      net_msg(st, S_W_MSG, "Joining %s...", a->ssid);
+    }
+}
+
+static void wifi_onoff(struct settings_s *st, bool on)
+{
+  struct nc_wifi_config c;
+  uint8_t body[48];
+  uint8_t stay = NC_WIFI_DISC_STAY;
+  struct nc_wr w;
+  int i;
+
+  memset(&c, 0, sizeof(c));
+  c.mask        = NC_WIFI_CFG_AUTOCONNECT;
+  c.autoconnect = on;
+  nc_wr_init(&w, body, sizeof(body));
+  nc_enc_wifi_config(&w, &c);
+  desk_net_request(NC_OP_WIFI_CONFIG, body, w.n, cb_wifi_done, st);
+  if (!on)
+    {
+      desk_net_request(NC_OP_WIFI_DISCONNECT, &stay, 1, cb_wifi_done, st);
+      return;
+    }
+
+  /* On: the strongest saved network in range, now */
+
+  for (i = 0; i < st->naps; i++)
+    {
+      if (st->aps[i].flags & NC_WIFI_AP_SAVED)
+        {
+          memset(&st->pass, 0, sizeof(st->pass));
+          st->aplist.sel = i;
+          wifi_join(st);
+          break;
+        }
+    }
+}
+
+static void cb_ble_scan(void *arg, const struct ncx_msg *m,
+                        const uint8_t *body, size_t n)
+{
+  struct settings_s *st = arg;
+  struct nc_rd rd;
+  int cnt;
+
+  if (m->kind == NCX_MSG_PART)
+    {
+      nc_rd_init(&rd, body, n);
+      for (cnt = nc_rd_u8(&rd); cnt > 0 && st->nfound < NFOUND; cnt--)
+        {
+          if (nc_dec_ble_adv(&rd, &st->found[st->nfound]) != 0)
+            {
+              break;
+            }
+
+          st->nfound++;
+        }
+
+      st->foundlist.n = st->nfound;
+      kit_list_changed(&st->kit, S_B_FOUND);
+      kit_flush(&st->kit);
+      return;
+    }
+
+  st->bscanning = false;
+  if (!st->pairing)
+    {
+      net_msg(st, S_B_MSG, "%s", st->nfound > 0 ? "" :
+              "Nothing found: is it in pairing mode?");
+    }
+
+  settings_sync(st);
+  kit_flush(&st->kit);
+}
+
+static void cb_ble_done(void *arg, const struct ncx_msg *m,
+                        const uint8_t *body, size_t n)
+{
+  struct settings_s *st = arg;
+
+  if (m->kind != NCX_MSG_FINAL)
+    {
+      return;
+    }
+
+  if (m->code == NC_OP_BLE_PAIR)
+    {
+      struct nc_ble_dev d;
+      struct nc_rd rd;
+
+      st->pairing = false;
+      kit_dialog_close(&st->kit);
+      nc_rd_init(&rd, body, n);
+      if (m->status >= 0 && nc_dec_ble_dev(&rd, &d) == 0)
+        {
+          net_msg(st, S_B_MSG, "Paired with %s", d.name);
+        }
+      else
+        {
+          net_msg(st, S_B_MSG, "%s", m->status == -EACCES ?
+                  "Pairing refused (a wrong passkey?)" :
+                  m->status == -ETIMEDOUT ? "No answer from the device" :
+                  m->status == -EOPNOTSUPP ?
+                  "Not a keyboard, mouse or game pad" : "Could not pair");
+        }
+    }
+
+  settings_sync(st);
+  kit_flush(&st->kit);
+}
+
+static void ble_pair(struct settings_s *st)
+{
+  struct nc_ble_pair pr;
+  uint8_t body[16];
+  struct nc_wr w;
+  const struct nc_ble_adv *a;
+
+  if (st->foundlist.sel < 0 || st->foundlist.sel >= st->nfound ||
+      st->pairing)
+    {
+      return;
+    }
+
+  a = &st->found[st->foundlist.sel];
+  memset(&pr, 0, sizeof(pr));
+  memcpy(pr.addr, a->addr, 6);
+  pr.addr_type = a->addr_type;
+  pr.timeout_s = 30;
+  nc_wr_init(&w, body, sizeof(body));
+  nc_enc_ble_pair(&w, &pr);
+  if (desk_net_request(NC_OP_BLE_PAIR, body, w.n, cb_ble_done, st) == 0)
+    {
+      st->pairing = true;
+      net_msg(st, S_B_MSG, "Pairing with %s...", a->name);
+    }
+}
+
+/* A passkey the coprocessor says, while pairing */
+
+static char g_pktext[96];
+
+static void ble_passkey(struct settings_s *st)
+{
+  static const char * const yesno[2] =
+  {
+    "Pair", "Cancel"
+  };
+
+  const struct nc_ble_passkey *pk = &g_net.pk;
+
+  g_net.pk_pending = false;
+  if (!st->pairing)
+    {
+      return;
+    }
+
+  switch (pk->action)
+    {
+      case NC_BLE_PK_DISPLAY:
+        net_msg(st, S_B_MSG, "Type %06lu on the keyboard, then Enter",
+                (unsigned long)pk->passkey);
+        break;
+
+      case NC_BLE_PK_CONFIRM:
+        snprintf(g_pktext, sizeof(g_pktext), "Does the device show "
+                 "%06lu?", (unsigned long)pk->passkey);
+        kit_dialog(&st->kit, S_B_PAIR, KIT_DLG_CONFIRM, "Pair", g_pktext,
+                   yesno, 2);
+        break;
+
+      default:
+        kit_dialog(&st->kit, S_B_PAIR, KIT_DLG_PROMPT,
+                   "The passkey the device shows", "", yesno, 2);
+        break;
+    }
+}
+
+static void ble_reply(struct settings_s *st, bool accept, uint32_t key)
+{
+  struct nc_ble_passkey pk = g_net.pk;
+  uint8_t body[16];
+  struct nc_wr w;
+
+  pk.action  = accept;
+  pk.passkey = key;
+  nc_wr_init(&w, body, sizeof(body));
+  nc_enc_ble_passkey(&w, &pk);
+  desk_net_request(NC_OP_BLE_PASSKEY_REPLY, body, w.n, cb_ble_done, st);
+}
+
+static void ble_act(struct settings_s *st, uint16_t op)
+{
+  int sel = st->pairedlist.sel;
+
+  if (sel >= 0 && sel < g_net.nble)
+    {
+      desk_net_request(op, g_net.ble[sel].addr, 6, cb_ble_done, st);
+    }
+}
+
+/* What the pages show, from g_net and what came back */
+
+static void net_sync(struct settings_s *st)
+{
+  struct kit_s *k = &st->kit;
+  const struct nc_wifi_status *ws = &g_net.wifi;
+  bool whw = desk_net_wifi_hw();
+  bool bhw = desk_net_ble_hw();
+  bool up = g_net.have_wifi && ws->state == NC_WIFI_UP;
+  bool on = g_net.have_wifi &&
+            ((ws->flags & NC_WIFI_ST_AUTOCONNECT) != 0 ||
+             ws->state != NC_WIFI_IDLE);
+  const struct nc_wifi_ap *sel = NULL;
+  bool needpass;
+
+  /* Wi-Fi */
+
+  kit_show(k, S_W_NOHW, !whw);
+  kit_show(k, S_W_CARD, whw);
+  kit_show(k, S_W_NETHEAD, whw);
+  kit_show(k, S_W_LIST, whw);
+  kit_show(k, S_W_SAVEDHEAD, whw);
+  kit_show(k, S_W_SAVED, whw);
+  if (whw && !st->scanned && g_page == SETTINGS_WIFI)
+    {
+      wifi_refresh(st);
+    }
+  else if (!whw)
+    {
+      st->scanned = false;
+    }
+
+  kit_set_value(k, S_W_ON, on);
+  set_text(st, S_W_ONLBL, st->wonlbl, sizeof(st->wonlbl), "Wi-Fi\n%s",
+           !g_net.have_wifi ? "" :
+           up ? "Connected" :
+           ws->state == NC_WIFI_CONNECTING ||
+           ws->state == NC_WIFI_CONNECTED ? "Connecting..." :
+           ws->state == NC_WIFI_RETRYING ? "Looking for a network" :
+           on ? "Not connected" : "Off");
+  kit_show(k, S_W_NETROW, whw && g_net.have_wifi && ws->ssid[0] != '\0' &&
+           ws->state != NC_WIFI_IDLE);
+  set_text(st, S_W_NETLBL, st->wnetlbl, sizeof(st->wnetlbl),
+           up ? "%s\n%u.%u.%u.%u, signal %d dBm" : "%s\n%s", ws->ssid,
+           up ? ws->ip[0] : 0, up ? ws->ip[1] : 0, up ? ws->ip[2] : 0,
+           up ? ws->ip[3] : 0, ws->rssi);
+  if (!up)
+    {
+      set_text(st, S_W_NETLBL, st->wnetlbl, sizeof(st->wnetlbl), "%s\n%s",
+               ws->ssid, ncx_wifi_state_str(ws->state));
+    }
+
+  kit_enable(k, S_W_SCAN, !st->scanning);
+  kit_enable(k, S_W_FORGET, st->savedlist.sel >= 0);
+  if (st->aplist.sel >= 0 && st->aplist.sel < st->naps)
+    {
+      sel = &st->aps[st->aplist.sel];
+    }
+
+  needpass = sel != NULL && sel->auth != NC_WIFI_AUTH_OPEN &&
+             !(sel->flags & NC_WIFI_AP_SAVED);
+  kit_show(k, S_W_JOINCARD, whw && sel != NULL &&
+           !(sel->flags & NC_WIFI_AP_CURRENT));
+  if (sel != NULL)
+    {
+      set_text(st, S_W_JOINLBL, st->joinlbl, sizeof(st->joinlbl),
+               "Join %s\n%s", sel->ssid, needpass ?
+               ncx_wifi_auth_str(sel->auth) : sel->flags & NC_WIFI_AP_SAVED ?
+               "Saved" : "Open");
+    }
+
+  kit_show(k, S_W_PASS, needpass);
+  kit_enable(k, S_W_JOIN, !st->joining);
+  kit_show(k, S_W_MSG, whw);
+
+  /* Bluetooth */
+
+  kit_show(k, S_B_NOHW, !bhw);
+  kit_show(k, S_B_BODY, bhw);
+  if (st->pairedlist.n != g_net.nble)
+    {
+      st->pairedlist.n = g_net.nble;
+      if (st->pairedlist.sel >= g_net.nble)
+        {
+          st->pairedlist.sel = -1;
+        }
+    }
+
+  if (st->blegen != g_net.blegen)
+    {
+      st->blegen = g_net.blegen;
+      kit_list_changed(k, S_B_PAIRED);
+    }
+
+  kit_enable(k, S_B_DISC, st->pairedlist.sel >= 0);
+  kit_enable(k, S_B_FORGET, st->pairedlist.sel >= 0);
+  kit_enable(k, S_B_SCAN, !st->bscanning);
+  kit_enable(k, S_B_PAIR, st->foundlist.sel >= 0 && !st->pairing);
+  if (g_net.pk_pending)
+    {
+      ble_passkey(st);
+    }
+}
+
+/* An event of the Wi-Fi or Bluetooth pages: true if it was theirs */
+
+static bool net_event(struct settings_s *st, int id, int ev, int v)
+{
+  struct kit_s *k = &st->kit;
+
+  if (ev == KIT_EV_DIALOG && k->key == S_B_PAIR)
+    {
+      if (g_net.pk.action == NC_BLE_PK_CONFIRM)
+        {
+          ble_reply(st, k->arg == KIT_ANS_OK, g_net.pk.passkey);
+        }
+      else
+        {
+          ble_reply(st, k->arg == KIT_ANS_OK,
+                    k->answer != NULL ? strtoul(k->answer, NULL, 10) : 0);
+        }
+
+      return true;
+    }
+
+  if (id < S_NET || id >= S_NET_END)
+    {
+      return false;
+    }
+
+  switch (id)
+    {
+      case S_W_ON:
+        if (ev == KIT_EV_CHANGE)
+          {
+            wifi_onoff(st, v != 0);
+          }
+        break;
+
+      case S_W_DISC:
+        if (ev == KIT_EV_CLICK)
+          {
+            uint8_t stay = NC_WIFI_DISC_STAY;
+
+            desk_net_request(NC_OP_WIFI_DISCONNECT, &stay, 1, cb_wifi_done,
+                             st);
+          }
+        break;
+
+      case S_W_SCAN:
+        if (ev == KIT_EV_CLICK)
+          {
+            wifi_refresh(st);
+          }
+        break;
+
+      case S_W_LIST:
+        memset(&st->pass, 0, sizeof(st->pass));
+        net_msg(st, S_W_MSG, "%s", "");
+        if (ev == KIT_EV_ACTIVATE)
+          {
+            const struct nc_wifi_ap *a = st->aplist.sel >= 0 ?
+                                         &st->aps[st->aplist.sel] : NULL;
+
+            if (a != NULL && (a->auth == NC_WIFI_AUTH_OPEN ||
+                              (a->flags & NC_WIFI_AP_SAVED)))
+              {
+                wifi_join(st);
+              }
+          }
+
+        settings_sync(st);
+        if (kit_get(k, S_W_PASS) != NULL &&
+            !(kit_get(k, S_W_PASS)->flags & KIT_F_HIDDEN))
+          {
+            kit_focus(k, S_W_PASS);
+          }
+        break;
+
+      case S_W_PASS:
+        if (ev == KIT_EV_ACTIVATE)
+          {
+            wifi_join(st);
+          }
+        break;
+
+      case S_W_JOIN:
+        if (ev == KIT_EV_CLICK)
+          {
+            wifi_join(st);
+          }
+        break;
+
+      case S_W_FORGET:
+        if (ev == KIT_EV_CLICK && st->savedlist.sel >= 0 &&
+            st->savedlist.sel < st->nsaved)
+          {
+            uint8_t body[NC_SSID_MAX + 2];
+            struct nc_wr w;
+
+            nc_wr_init(&w, body, sizeof(body));
+            nc_wr_str8(&w, st->saved[st->savedlist.sel].ssid);
+            desk_net_request(NC_OP_WIFI_FORGET, body, w.n, cb_wifi_done,
+                             st);
+            st->savedlist.sel = -1;
+          }
+        break;
+
+      case S_B_SCAN:
+        if (ev == KIT_EV_CLICK && !st->bscanning)
+          {
+            struct nc_ble_scan sc;
+            uint8_t body[8];
+            struct nc_wr w;
+
+            memset(&sc, 0, sizeof(sc));
+            sc.duration_ms = 5000;
+            sc.flags = NC_BLE_SCAN_HID_ONLY;
+            nc_wr_init(&w, body, sizeof(body));
+            nc_enc_ble_scan(&w, &sc);
+            st->nfound = 0;
+            st->foundlist.n = 0;
+            st->foundlist.sel = -1;
+            kit_list_changed(k, S_B_FOUND);
+            st->bscanning = desk_net_request(NC_OP_BLE_SCAN, body, w.n,
+                                             cb_ble_scan, st) == 0;
+            net_msg(st, S_B_MSG, "%s", "Looking for devices...");
+          }
+        break;
+
+      case S_B_FOUND:
+        if (ev == KIT_EV_ACTIVATE)
+          {
+            ble_pair(st);
+          }
+        break;
+
+      case S_B_PAIR:
+        if (ev == KIT_EV_CLICK)
+          {
+            ble_pair(st);
+          }
+        break;
+
+      case S_B_DISC:
+        if (ev == KIT_EV_CLICK)
+          {
+            ble_act(st, NC_OP_BLE_DISCONNECT);
+          }
+        break;
+
+      case S_B_FORGET:
+        if (ev == KIT_EV_CLICK)
+          {
+            ble_act(st, NC_OP_BLE_FORGET);
+            st->pairedlist.sel = -1;
+          }
+        break;
+
+      default:
+        break;
+    }
+
+  settings_sync(st);
+  return true;
+}
+#endif /* CONFIG_NETUTILS_NETCOP */
+
 static void page_about(struct settings_s *st)
 {
   struct kit_s *k = &st->kit;
@@ -789,6 +1797,10 @@ static void settings_sync(struct settings_s *st)
     {
       sound_sync(st);                  /* It reads the mixer */
     }
+#endif
+
+#ifdef CONFIG_NETUTILS_NETCOP
+  net_sync(st);
 #endif
 }
 
@@ -964,6 +1976,13 @@ static void settings_event(struct kit_s *k, struct kit_widget_s *wg, int ev)
 
       return;
     }
+
+#ifdef CONFIG_NETUTILS_NETCOP
+  if (net_event(st, id, ev, v))
+    {
+      return;
+    }
+#endif
 
   if (ev == KIT_EV_CLICK)
     {
@@ -1228,6 +2247,10 @@ static void settings_build(struct settings_s *st, struct desk_win_s *w)
 #ifdef CONFIG_FPCDESK_SOUND
     page_sound(st);
 #endif
+#ifdef CONFIG_NETUTILS_NETCOP
+    page_wifi(st);
+    page_bluetooth(st);
+#endif
     page_about(st);
   kit_end(k);
 }
@@ -1313,6 +2336,9 @@ static void settings_focus(struct desk_win_s *w)
 
 static void settings_close(struct desk_win_s *w)
 {
+#ifdef CONFIG_NETUTILS_NETCOP
+  desk_net_cancel(w->priv);                    /* No more answers for it */
+#endif
   g_st = NULL;                                 /* w->priv goes after */
 }
 

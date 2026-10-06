@@ -192,8 +192,10 @@ enum desk_evtype_e
   EV_CLIENT,                       /* A program wants a window (deskwin.h) */
   EV_LAUNCH,                       /* part: the application to launch (a
                                     * program's desk_launch()) */
-  EV_LOST                          /* The GPU lost its memory (another GPU
+  EV_LOST,                         /* The GPU lost its memory (another GPU
                                     * ran: docs/gpu3d.md): all drawn again */
+  EV_NET                           /* The network coprocessor has said
+                                    * something (desk_net.c) */
 };
 
 enum desk_part_e
@@ -749,14 +751,59 @@ void icon_tile(struct desk_ops_s *o, int x, int y, int s, uint16_t top,
 #define SETTINGS_DATETIME   4
 #ifdef CONFIG_FPCDESK_SOUND
 #  define SETTINGS_SOUND    5
-#  define SETTINGS_ABOUT    6
-#  define SETTINGS_PAGES    7
+#  define SETTINGS_NET0     6
 #else
-#  define SETTINGS_ABOUT    5
-#  define SETTINGS_PAGES    6
+#  define SETTINGS_NET0     5
 #endif
+#ifdef CONFIG_NETUTILS_NETCOP
+#  define SETTINGS_WIFI      SETTINGS_NET0
+#  define SETTINGS_BLUETOOTH (SETTINGS_NET0 + 1)
+#  define SETTINGS_ABOUT     (SETTINGS_NET0 + 2)
+#else
+#  define SETTINGS_WIFI      (-1)
+#  define SETTINGS_BLUETOOTH (-1)
+#  define SETTINGS_ABOUT     SETTINGS_NET0
+#endif
+#define SETTINGS_PAGES      (SETTINGS_ABOUT + 1)
 
 void desk_settings_show(int page);
+
+/* desk_net.c: the network coprocessor (netcopd's control socket) */
+
+#ifdef CONFIG_NETUTILS_NETCOP
+#  include "netutils/netcop.h"
+
+#  define DESK_NET_NBLE 8
+
+struct desk_net_s
+{
+  bool     daemon;                          /* netcopd answers */
+  uint8_t  link;                            /* NCX_LINK_* */
+  uint32_t caps;                            /* NC_CAP_* (READY) */
+  bool     have_wifi;
+  struct nc_wifi_status wifi;
+  int      nble;                            /* The bonded BLE devices */
+  struct nc_ble_dev ble[DESK_NET_NBLE];
+  uint32_t blegen;                          /* ... changed */
+  bool     pk_pending;                      /* A passkey to show */
+  struct nc_ble_passkey pk;
+};
+
+extern struct desk_net_s g_net;
+
+typedef void (*desk_net_cb)(void *arg, const struct ncx_msg *m,
+                            const uint8_t *body, size_t n);
+
+void desk_net_start(void);
+void desk_net_poll(void);                   /* EV_NET */
+int  desk_net_request(uint16_t op, const void *body, size_t n,
+                      desk_net_cb cb, void *arg);
+void desk_net_cancel(void *arg);
+bool desk_net_wifi_hw(void);
+bool desk_net_ble_hw(void);
+int  desk_net_topbar(struct desk_ops_s *o, int x, int ty);
+bool desk_net_topbar_click(int x);
+#endif
 void desk_settings_changed(int page);       /* What the page shows has
                                              * changed: drawn again if it
                                              * is showing */

@@ -59,7 +59,7 @@
  ****************************************************************************/
 
 #ifndef CONFIG_NETCOP_DEVPATH
-#  define CONFIG_NETCOP_DEVPATH "/dev/ttyS1"
+#  define CONFIG_NETCOP_DEVPATH "/dev/ttyS0"
 #endif
 
 #ifndef CONFIG_NETCOP_BAUD
@@ -354,6 +354,18 @@ static void cb_ble_list(FAR struct nc_host *h, FAR void *arg,
 
   if (r->final)
     {
+      /* Each as an event too: who subscribed may have asked before */
+
+      for (n = 0; n < g_ncd->nble; n++)
+        {
+          uint8_t body[64];
+          struct nc_wr w;
+
+          nc_wr_init(&w, body, sizeof(body));
+          nc_enc_ble_dev(&w, &g_ncd->ble[n]);
+          ncd_ctrl_event(NCX_EVM_BLE, NC_EV_BLE_CONN, body, w.n);
+        }
+
       return;
     }
 
@@ -452,9 +464,14 @@ static void wifi_update(FAR const uint8_t *p, size_t n)
 static void cb_wifi(FAR struct nc_host *h, FAR void *arg,
                     FAR const struct nc_rsp *r)
 {
-  if (r->final && (r->status >= 0 || r->op == NC_OP_WIFI_CONNECT))
+  if (r->final && r->n > 0 &&
+      (r->status >= 0 || r->op == NC_OP_WIFI_CONNECT))
     {
       wifi_update(r->body, r->n);
+
+      /* As an event too: who subscribed may have asked before */
+
+      ncd_ctrl_event(NCX_EVM_WIFI, NC_EV_WIFI_STATE, r->body, r->n);
     }
 }
 

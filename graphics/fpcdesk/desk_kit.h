@@ -146,6 +146,8 @@
 #define KIT_F_FREE        0x4000           /* Box: its widgets are where the
                                             * application puts them (their
                                             * x, y, w, h), not laid out */
+#define KIT_F_SECRET      0x8000           /* Field: shown as dots (a
+                                            * password) */
 
 /* Box looks (style) */
 

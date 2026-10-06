@@ -19,7 +19,7 @@ if NETUTILS_NETCOP
 
 config NETCOP_DEVPATH
 	string "The coprocessor's UART"
-	default "/dev/ttyS1"
+	default "/dev/ttyS0"
 
 config NETCOP_BAUD
 	int "Baud rate asked for once the link is up (0: stay at 115200)"

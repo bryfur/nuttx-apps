@@ -392,6 +392,26 @@ static uint16_t ground(struct kit_s *k, int i)
   return k->parent != NULL ? g_theme.card : g_theme.window_bg;
 }
 
+/* A password field as it is shown: a dot for each character (one copy,
+ * the main thread's)
+ */
+
+static struct ui_field_s *secret_field(struct ui_field_s *f)
+{
+  static struct ui_field_s shown;
+  int i;
+
+  for (i = 0; i < f->len && i < UI_FIELD_MAX - 1; i++)
+    {
+      shown.text[i] = '*';
+    }
+
+  shown.text[i] = '\0';
+  shown.len = f->len;
+  shown.cur = f->cur;
+  return &shown;
+}
+
 static bool enabled(struct kit_widget_s *wg)
 {
   return !(wg->flags & KIT_F_DISABLED);
@@ -2110,7 +2130,14 @@ static void widget_draw(struct kit_s *k, int i,
       case KIT_FIELD:
         if (wg->data != NULL)
           {
-            kit_paint_field(o, wg->data, x, y, w, h, wg->text,
+            struct ui_field_s *f = wg->data;
+
+            if (wg->flags & KIT_F_SECRET)
+              {
+                f = secret_field(f);
+              }
+
+            kit_paint_field(o, f, x, y, w, h, wg->text,
                             k->focus == i && enabled(wg) &&
                             (k->w->active || (wg->flags & KIT_F_RING)),
                             k->caret && !(wg->flags & KIT_F_SELECTED),
@@ -2994,7 +3021,8 @@ static void press_at(struct kit_s *k, int i, int part, int x, int y)
             struct ui_field_s *f = wg->data;
 
             set_focus(k, i);
-            f->cur = kit_field_pos(f, wg->x, wg->w, x);
+            f->cur = kit_field_pos((wg->flags & KIT_F_SECRET) ?
+                                   secret_field(f) : f, wg->x, wg->w, x);
             wg->flags &= ~KIT_F_SELECTED;
             k->caret = true;
           }
