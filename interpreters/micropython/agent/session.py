@@ -8,6 +8,7 @@
 # prefix); compaction replaces it all with a summary.
 
 import gc
+import json
 import time
 
 import _agent
@@ -49,6 +50,7 @@ class Session:
         self.spinner = ui.Spinner()
         self.tools.spinner = self.spinner
         self.allow = []                  # "always" this session
+        self.seen = (None, 0)            # The tool input last previewed
         self.clear()
         self.requests = 0
         self.tok_in = 0
@@ -114,7 +116,10 @@ class Session:
                 self.spinner.start('Thinking')
 
             def ev(kind, data):
-                if kind == 'wait' or kind == 'tool_delta':
+                if kind == 'tool_delta':
+                    if show:
+                        self.preview(data)
+                elif kind == 'wait':
                     self.spinner.tick()
                 elif kind == 'text':
                     if not show:
@@ -192,6 +197,31 @@ class Session:
         if content and not no_tools:
             self.messages.append({'role': 'assistant', 'content': content})
         return res
+
+    def preview(self, b):
+        # A tool's input as it streams: what it will act on, how much is
+        # written (the input closed by _agent.json_repair and parsed)
+        now = time.ticks_ms()
+        if self.seen[0] == b[0]['id'] and time.ticks_diff(now, self.seen[1]) < 400:
+            self.spinner.tick()
+            return
+        self.seen = (b[0]['id'], now)
+        src = ''.join(b[1])
+        name = b[0]['name']
+        label = ''
+        try:
+            a = json.loads(_agent.json_repair(src))
+            if isinstance(a, dict):
+                label = self.tools.label(name, a) if name in self.tools.by_name else ''
+        except ValueError:
+            pass
+        text = 'Writing ' + NAMES.get(name, name)
+        if label:
+            text += '(' + util.oneline(label, 40) + ')'
+        if len(src) > 400:
+            text += ' ' + util.size(len(src))
+        self.spinner.text = text
+        self.spinner.tick(True)
 
     def sleep(self, s):
         t0 = time.ticks_ms()
