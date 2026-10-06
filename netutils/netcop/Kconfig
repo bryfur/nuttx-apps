@@ -1,0 +1,68 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+config NETUTILS_NETCOP
+	bool "netcop: the network coprocessor's daemon (netcopd)"
+	default n
+	depends on NET_USRSOCK && NET_USRSOCK_DEVICE
+	---help---
+		netcopd makes ordinary sockets work through the fpc's network
+		coprocessor (a XIAO ESP32-C6 on a UART, fpc/docs/netcop.md):
+		WiFi, TLS and SSH done by the coprocessor, its BLE keyboards,
+		mice and game pads into /dev/vinput (fpc/drivers/netcop).  The
+		library (netutils/netcop.h) gives programs TLS on a socket, SSH
+		sessions and the control socket for WiFi, BLE and the rest.
+
+if NETUTILS_NETCOP
+
+config NETCOP_DEVPATH
+	string "The coprocessor's UART"
+	default "/dev/ttyS1"
+
+config NETCOP_BAUD
+	int "Baud rate asked for once the link is up (0: stay at 115200)"
+	default 3000000
+
+config NETCOP_FLOWCONTROL
+	bool "RTS/CTS flow control on the UART"
+	default y
+
+config NETCOP_WINDOW
+	int "Receive window per socket (bytes, in the heap)"
+	default 8192
+
+config NETCOP_NTP_SERVERS
+	string "NTP servers (separated by ;)"
+	default "pool.ntp.org"
+	depends on NETUTILS_NTPCLIENT
+	---help---
+		NuttX's NTP client is started with these once WiFi is up; the
+		port is CONFIG_NETUTILS_NTPCLIENT_PORTNO.
+
+config NETCOP_HOSTNAME
+	string "Name given in HELLO"
+	default "fpc"
+
+config NETCOP_CLOCK_VALID
+	bool "The clock is right at boot"
+	default n
+	---help---
+		The coprocessor gets the time (TIME_SET, its fallback) at link
+		up only if the clock is known to be right (a battery-backed
+		RTC); otherwise once NTP has set it.
+
+config NETCOP_DEBUG
+	bool "Log every usrsock request"
+	default n
+
+config NETCOP_PRIORITY
+	int "netcopd priority"
+	default 110
+
+config NETCOP_STACKSIZE
+	int "netcopd stack size"
+	default 3072
+
+endif # NETUTILS_NETCOP
