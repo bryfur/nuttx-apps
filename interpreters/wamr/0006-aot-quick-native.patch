@@ -1,0 +1,58 @@
+diff -ru a/core/iwasm/aot/aot_runtime.c b/core/iwasm/aot/aot_runtime.c
+--- a/core/iwasm/aot/aot_runtime.c	2026-10-06 17:32:32.563541558 +0000
++++ b/core/iwasm/aot/aot_runtime.c	2026-10-06 17:32:32.573771362 +0000
+@@ -3195,6 +3195,42 @@
+     return wasm_enlarge_memory_with_idx(module_inst, inc_page_count, memidx);
+ }
+ 
++/* A host function whose parameters and result are i32s (nothing for the
++ * runtime to convert: no pointers, lengths or strings) is called straight,
++ * not through wasm_runtime_invoke_native's generic marshalling, which
++ * parses the signature on every call.  False if it is not one.
++ */
++static bool
++aot_quick_native(WASMExecEnv *exec_env, void *func_ptr, AOTFuncType *type,
++                 AOTImportFunc *import_func, uint32 argc, uint32 *argv)
++{
++    typedef uint32 (*F)(WASMExecEnv *, uint32, uint32, uint32, uint32,
++                        uint32, uint32, uint32, uint32, uint32, uint32);
++    const char *sig = import_func->signature;
++    uint32 a[10] = { 0 };
++    uint32 i, r;
++
++    if (import_func->attachment || argc > 10 || type->param_count != argc
++        || type->result_count > 1)
++        return false;
++    for (i = 0; i < (uint32)type->param_count + type->result_count; i++) {
++        if (type->types[i] != VALUE_TYPE_I32)
++            return false;
++    }
++    for (; sig && *sig; sig++) {
++        if (*sig != '(' && *sig != ')' && *sig != 'i')
++            return false;
++    }
++    for (i = 0; i < argc; i++)
++        a[i] = argv[i];
++    /* (the extra arguments are ignored by the callee: AAPCS) */
++    r = ((F)func_ptr)(exec_env, a[0], a[1], a[2], a[3], a[4], a[5], a[6],
++                      a[7], a[8], a[9]);
++    if (type->result_count)
++        argv[0] = r;
++    return true;
++}
++
+ bool
+ aot_invoke_native(WASMExecEnv *exec_env, uint32 func_idx, uint32 argc,
+                   uint32 *argv)
+@@ -3237,6 +3273,11 @@
+             (WASMModuleInstanceCommon *)module_inst, func_ptr, func_type, argc,
+             argv, c_api_func_import->with_env_arg, c_api_func_import->env_arg);
+     }
++    else if (!import_func->call_conv_raw && aot_quick_native(
++                 exec_env, func_ptr, func_type, import_func, argc, argv)) {
++        /* A host function of i32s, called directly (patch 0006) */
++        ret = !aot_copy_exception(module_inst, NULL);
++    }
+     else if (!import_func->call_conv_raw) {
+         signature = import_func->signature;
+ #if WASM_ENABLE_MULTI_MODULE != 0
