@@ -1,0 +1,16 @@
+--- a/core/iwasm/interpreter/wasm_interp_fast.c	2026-10-06 14:12:21.798864650 +0000
++++ b/core/iwasm/interpreter/wasm_interp_fast.c	2026-10-06 14:12:21.808803499 +0000
+@@ -1492,6 +1492,13 @@
+ #endif
+ }
+ 
++/* The embedder may place the interpreter's loop in a section of its own
++ * (fast internal RAM, say): WASM_INTERP_SECTION, the section's name
++ */
++
++#ifdef WASM_INTERP_SECTION
++__attribute__((section(WASM_INTERP_SECTION)))
++#endif
+ static void
+ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
+                                WASMExecEnv *exec_env,

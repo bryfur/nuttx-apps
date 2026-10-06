@@ -44,6 +44,15 @@ MODULE    = $(CONFIG_INTERPRETERS_WAMR)
 
 endif
 
+# The interpreter's loop as a section of its own where the board places
+# sections by name (CONFIG_ARCH_USE_SEPARATED_SECTION: the fpc board puts
+# a module's .time_critical* in internal SRAM while it runs;
+# 0002-interp-section.patch)
+
+ifeq ($(CONFIG_ARCH_USE_SEPARATED_SECTION),y)
+CFLAGS += '-DWASM_INTERP_SECTION=".time_critical.wasm_interp"'
+endif
+
 # What WAMR's POSIX layer needs that this NuttX may leave out
 
 CSRCS += wamr_nuttx_stubs.c
@@ -68,12 +77,20 @@ $(WAMR_TARBALL):
 	$(Q) echo "Downloading $(WAMR_TARBALL)"
 	$(Q) curl -O -L $(WAMR_URL)
 
-$(WAMR_UNPACK): $(WAMR_TARBALL)
+# Unpacked, and patched (*.patch, in order); again when a patch changes
+# (the stamp: every object waits for it)
+
+WAMR_PATCHED = $(WAMR_UNPACK)$(DELIM).patched
+
+$(WAMR_PATCHED): $(WAMR_TARBALL) $(wildcard *.patch)
 	$(Q) echo "Unpacking $(WAMR_TARBALL) to $(WAMR_UNPACK)"
-	$(Q) unzip $(WAMR_TARBALL)
+	$(Q) rm -rf $(WAMR_UNPACK) wasm-micro-runtime-$(WAMR_VERSION)
+	$(Q) unzip -q $(WAMR_TARBALL)
 	$(Q) mv wasm-micro-runtime-$(WAMR_VERSION) $(WAMR_UNPACK)
 	$(Q) $(foreach p,$(sort $(wildcard *.patch)),patch -s -d $(WAMR_UNPACK) -p1 < $(p) &&) true
-	$(Q) touch $(WAMR_UNPACK)
+	$(Q) touch $(WAMR_UNPACK) $(WAMR_PATCHED)
+
+$(WAMR_UNPACK): $(WAMR_PATCHED)
 
 # Register the external WAMR module
 
@@ -124,3 +141,7 @@ ifeq ($(wildcard $(WAMR_UNPACK)/.git),)
 endif
 
 include $(APPDIR)/Application.mk
+
+ifeq ($(wildcard $(WAMR_UNPACK)/.git),)
+$(OBJS) $(MAINCOBJ): $(WAMR_PATCHED)
+endif

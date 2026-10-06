@@ -10,8 +10,9 @@
  * sounds are FM.  Everything is made here: 8-bit sheets through palettes.
  *
  *   wasm run rocks             the game
- *   wasm run rocks -b 400      a benchmark: 400 rocks (no deaths), the
- *                              frame times on the screen and at the end
+ *   wasm run rocks -b 400      a benchmark: 400 rocks (no deaths) for
+ *                              600 frames, the frame times on the screen
+ *                              and the average at the end
  *
  * The same source builds as a native NuttX program on fpc_native.c (the
  * fpc API straight onto the game SDK: `rocksn`), for comparisons.
@@ -364,6 +365,11 @@ FPC_EXPORT(fpc_update) void fpc_update(void)
   if (g_flash)
     {
       g_flash--;
+    }
+
+  if (g_bench && g_t >= 600)
+    {
+      fpc_game_exit();                    /* The benchmark: 10 s */
     }
 
   g_t++;
