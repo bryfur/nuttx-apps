@@ -4591,6 +4591,259 @@ static bool calls_helper(uint8_t op, const uint8_t *p, uint8_t prev)
  * not support
  */
 
+/* Which locals are set on every path before they are read (definite
+ * assignment over the structured control flow, forward): those need no
+ * starting value (c->lfirst[l] = 2).  The state is a set of the locals
+ * assigned; a block's end gets the intersection of the states of the
+ * branches to it and of its fall through; a loop's body starts with its
+ * entry's (its back edges only add to that); unreachable code has every
+ * local (neutral).
+ */
+
+struct da_s
+{
+  uint8_t kind;                   /* CK_* */
+  bool any;                       /* Something reached its end */
+  uint32_t *acc;                  /* The end's state (intersection) */
+  uint32_t *cond;                 /* An if's state at its condition */
+};
+
+static void defassign(jc_t *c)
+{
+  const uint8_t *p = c->code;
+  uint32_t nw = (c->nlocals + 31) / 32;
+  uint32_t depth = 0;
+  uint32_t cap = 16;
+  struct da_s *st;
+  uint32_t *pool;
+  uint32_t *a;
+  uint32_t i;
+  bool unreach = false;
+
+  /* (the state, then two sets a level: cap levels, more when nested) */
+
+  st   = jit_zalloc(cap * sizeof(*st));
+  pool = jit_zalloc((1 + 2 * cap) * nw * 4);
+  if (st == NULL || pool == NULL)
+    {
+      jit_free(st);
+      jit_free(pool);
+      return;                       /* (everything zeroed, as before) */
+    }
+
+  a = pool;
+  for (i = 0; i < nw; i++)
+    {
+      a[i] = 0;
+    }
+
+  for (i = 0; i < c->nparams; i++)
+    {
+      a[i / 32] |= 1u << (i % 32);
+    }
+
+#define DA_SET(x, l)  ((x)[(l) / 32] |= 1u << ((l) % 32))
+#define DA_HAS(x, l)  (((x)[(l) / 32] >> ((l) % 32)) & 1)
+
+  while (p < c->code_end)
+    {
+      uint8_t op = *p++;
+      const uint8_t *q = p;
+      struct da_s *t;
+      uint32_t l;
+      uint32_t k;
+
+      switch (op)
+        {
+          case WASM_OP_GET_LOCAL:
+            l = rd_u32(&q);
+            if (l < c->nlocals && !DA_HAS(a, l))
+              {
+                c->lfirst[l] = 1;
+              }
+            break;
+
+          case WASM_OP_SET_LOCAL:
+          case WASM_OP_TEE_LOCAL:
+            l = rd_u32(&q);
+            if (l < c->nlocals)
+              {
+                DA_SET(a, l);
+              }
+            break;
+
+          case WASM_OP_BLOCK:
+          case WASM_OP_LOOP:
+          case WASM_OP_IF:
+            if (depth == cap)
+              {
+                struct da_s *ns = jit_realloc(st, 2 * cap * sizeof(*st));
+                uint32_t *np = ns != NULL ?
+                               jit_realloc(pool, (1 + 4 * cap) * nw * 4) :
+                               NULL;
+
+                if (np == NULL)
+                  {
+                    jit_free(ns != NULL ? ns : st);
+                    jit_free(pool);
+                    for (i = c->nparams; i < c->nlocals; i++)
+                      {
+                        c->lfirst[i] = 1;     /* (all zeroed) */
+                      }
+
+                    return;
+                  }
+
+                st   = ns;
+                pool = np;
+                cap *= 2;
+                a = pool;
+                for (k = 0; k < depth; k++)
+                  {
+                    st[k].acc  = pool + (1 + 2 * k) * nw;
+                    st[k].cond = pool + (2 + 2 * k) * nw;
+                  }
+              }
+
+            t = &st[depth++];
+            t->kind = op == WASM_OP_BLOCK ? CK_BLOCK :
+                      op == WASM_OP_LOOP ? CK_LOOP : CK_IF;
+            t->any  = false;
+            t->acc  = pool + (1 + 2 * (depth - 1)) * nw;
+            t->cond = pool + (2 + 2 * (depth - 1)) * nw;
+            for (i = 0; i < nw; i++)
+              {
+                t->acc[i]  = 0xffffffffu;
+                t->cond[i] = a[i];
+              }
+            break;
+
+          case WASM_OP_ELSE:
+            if (depth > 0)
+              {
+                t = &st[depth - 1];
+                for (i = 0; i < nw; i++)
+                  {
+                    t->acc[i] &= a[i];          /* (the then's end) */
+                    a[i] = t->cond[i];
+                  }
+
+                t->any = t->any || !unreach;
+                t->kind = CK_ELSE;
+                unreach = false;
+              }
+            break;
+
+          case WASM_OP_END:
+            if (depth == 0)
+              {
+                break;                          /* (the function's) */
+              }
+
+            t = &st[--depth];
+            if (t->kind == CK_LOOP)
+              {
+                break;                          /* (its body's end) */
+              }
+
+            for (i = 0; i < nw; i++)
+              {
+                a[i] &= t->acc[i];
+                if (t->kind == CK_IF)
+                  {
+                    a[i] &= t->cond[i];         /* (no else: skipped) */
+                  }
+              }
+
+            unreach = unreach && !t->any && t->kind != CK_IF;
+            if (unreach)
+              {
+                for (i = 0; i < nw; i++)
+                  {
+                    a[i] = 0xffffffffu;
+                  }
+              }
+            break;
+
+          case WASM_OP_BR:
+          case WASM_OP_BR_IF:
+            k = rd_u32(&q);
+            if (k < depth && st[depth - 1 - k].kind != CK_LOOP)
+              {
+                t = &st[depth - 1 - k];
+                for (i = 0; i < nw; i++)
+                  {
+                    t->acc[i] &= a[i];
+                  }
+
+                t->any = t->any || !unreach;
+              }
+
+            if (op == WASM_OP_BR)
+              {
+                unreach = true;
+              }
+            break;
+
+          case WASM_OP_BR_TABLE:
+            {
+              uint32_t n = rd_u32(&q);
+              uint32_t j;
+
+              for (j = 0; j <= n; j++)
+                {
+                  k = rd_u32(&q);
+                  if (k < depth && st[depth - 1 - k].kind != CK_LOOP)
+                    {
+                      t = &st[depth - 1 - k];
+                      for (i = 0; i < nw; i++)
+                        {
+                          t->acc[i] &= a[i];
+                        }
+
+                      t->any = t->any || !unreach;
+                    }
+                }
+
+              unreach = true;
+            }
+            break;
+
+          case WASM_OP_RETURN:
+          case WASM_OP_UNREACHABLE:
+            unreach = true;
+            break;
+
+          default:
+            break;
+        }
+
+      if (unreach && op != WASM_OP_END)
+        {
+          for (i = 0; i < nw; i++)
+            {
+              a[i] = 0xffffffffu;           /* (neutral) */
+            }
+        }
+
+      if (!skip_imm(op, &p))
+        {
+          break;
+        }
+    }
+
+#undef DA_SET
+#undef DA_HAS
+
+  for (i = c->nparams; i < c->nlocals; i++)
+    {
+      c->lfirst[i] = c->lfirst[i] == 1 ? 1 : 2;
+    }
+
+  jit_free(st);
+  jit_free(pool);
+}
+
 static bool prescan(jc_t *c)
 {
   const uint8_t *p = c->code;
@@ -4655,15 +4908,6 @@ static bool prescan(jc_t *c)
           if (l < c->nlocals)
             {
               c->lweight[l] += w;
-              if (c->lfirst[l] == 0)
-                {
-                  /* Set at the function's top level before anything
-                   * reads it: that set comes first on every path
-                   */
-
-                  c->lfirst[l] = op != WASM_OP_GET_LOCAL && depth == 0 ?
-                                 2 : 1;
-                }
             }
         }
       else if (ld > 0 && (op == WASM_OP_I32_CONST || op == WASM_OP_F32_CONST))
@@ -6426,6 +6670,7 @@ static bool compile_function1(jc_t *c, uint32_t fidx)
       return false;
     }
 
+  defassign(c);
   if (c->wide && c->loc_max > 5)
     {
       c->loc_max = 5;               /* (64-bit operands: 4 temporaries) */

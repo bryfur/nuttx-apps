@@ -260,3 +260,24 @@
 )
 (assert_return (invoke "lfirst" (i32.const 0)) (i32.const 16))
 (assert_return (invoke "lfirst" (i32.const 1)) (i32.const 9))
+
+;; ... set on every path before a read (both arms of an if, a block every
+;; way out of which sets it): no starting value; set on some paths only:
+;; 0 on the others
+
+(module
+  (func (export "defassign") (param i32) (result i32)
+    (local i32 i32 i32 i32)
+    (if (local.get 0)
+      (then (local.set 1 (i32.const 10)) (local.set 3 (i32.const 1)))
+      (else (local.set 1 (i32.const 20))))
+    (block $b
+      (local.set 2 (i32.const 3))
+      (br_if $b (local.get 0))
+      (local.set 2 (i32.const 4))
+      (local.set 4 (i32.const 100)))
+    (i32.add (i32.add (local.get 1) (local.get 2))
+             (i32.add (local.get 3) (local.get 4))))
+)
+(assert_return (invoke "defassign" (i32.const 1)) (i32.const 14))
+(assert_return (invoke "defassign" (i32.const 0)) (i32.const 124))
