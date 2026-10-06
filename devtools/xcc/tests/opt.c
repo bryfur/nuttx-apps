@@ -592,6 +592,30 @@ static void t_loopsr(int n)
   out("loopsr", s);
 }
 
+/* Narrow loop counters (no cast when they can't wrap), bit operations
+ * simplified ((a & m) ^ (b & m), x & m with x within m, b == 1) */
+
+static void t_narrowloop(void)
+{
+  uint32_t s = 0;
+  for (uint8_t i = 0; i < 200; i += 3)
+    s = s * 3 + i;
+  for (uint16_t i = 7; i <= 65000; i += 1000)
+    s ^= i;
+  int guard = 0;
+  for (uint8_t i = 250; i < 255 && guard < 100; i += 4, guard++)  /* wraps */
+    s += i;
+  for (uint8_t a = 0, b = 0; a < 40; a++, b += 7)
+    {
+      uint8_t x = (uint8_t)((a & 1) ^ (b & 1));
+      if (x == 1)
+        s += 5;
+      uint16_t h = (uint16_t)(s >> 1) & 0x7fff;
+      s ^= h | ((a | b) & 6);
+    }
+  out("narrowloop", s);
+}
+
 int main(int argc, char *argv[])
 {
   (void)argv;
@@ -610,6 +634,7 @@ int main(int argc, char *argv[])
   t_thread2();
   t_loopload();
   t_loopsr(argc + 59);
+  t_narrowloop();
   printf("total %u\n", (unsigned)g_sum);
   return 0;
 }
