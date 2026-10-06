@@ -466,6 +466,61 @@ static void t_shift(void)
   out("float", (uint32_t)(int32_t)(acc * 100.0f));
 }
 
+/* A state machine whose states stay (threading on a test's edge, with the
+ * value switched on known in its case), offset and repeated cases */
+
+enum st { ST_A = 3, ST_B, ST_C, ST_D, ST_E, ST_X = 11 };
+
+static int scan2(const unsigned char *p, int *cnt)
+{
+  enum st s = ST_A;
+  int n = 0;
+  for (; *p; p++, n++)
+    {
+      switch (s)
+        {
+        case ST_A:
+          if (*p >= 'a' && *p <= 'z')
+            break;
+          s = *p == '_' ? ST_B : ST_C;
+          cnt[0]++;
+          break;
+        case ST_B:
+        case ST_D:
+          if (*p == '_')
+            break;
+          s = (*p & 1) ? ST_D : ST_E;
+          cnt[1]++;
+          break;
+        case ST_C:
+          if (*p >= '0' && *p <= '9')
+            s = ST_A;
+          cnt[2]++;
+          break;
+        case ST_E:
+          s = *p == 'q' ? ST_X : ST_A;
+          break;
+        default:
+          cnt[3]++;
+          if (*p == '!')
+            return n;
+          break;
+        }
+    }
+  return n * 16 + (int)s;
+}
+
+static void t_thread2(void)
+{
+  static const char *in[] = {"abc_def", "x__y1z", "q!r", "hello_world_42", "a1b2c3", "__", "eqz!w", "zz9_q"};
+  int cnt[4] = {0, 0, 0, 0};
+  uint32_t s = 0;
+  for (int i = 0; i < 8; i++)
+    s = s * 13 + scan2((const unsigned char *)in[i], cnt);
+  out("scan2", s);
+  out("cnt2", cnt[0] + 10 * cnt[1] + 100 * cnt[2] + 1000 * cnt[3]);
+}
+
 int main(int argc, char *argv[])
 {
   (void)argv;
@@ -481,6 +536,7 @@ int main(int argc, char *argv[])
   t_loads();
   t_fuse();
   t_shift();
+  t_thread2();
   printf("total %u\n", (unsigned)g_sum);
   return 0;
 }
