@@ -630,4 +630,82 @@ fail:
   return 1;
 }
 
+
+/****************************************************************************
+ * deskctl bw: the blitter's throughput in the display mode now
+ ****************************************************************************/
+
+void fpc_gpu_copy(int sx, int sy, int dx, int dy, int w, int h);
+
+/* N COPYs of 2048 x 32 pixels inside the space's last lines (deskctl
+ * test's), timed by the GPU's clock (STATS), with the scanout of the mode
+ * now competing; and where the SDRAM's cycles went meanwhile (words 36-39:
+ * granted to the scanout, the blitter, the PUT DMA, the soft CPU; the
+ * rest idle), the line fetches that came late and the frames
+ */
+
+int desk_gpubw(int n)
+{
+  uint32_t a[ST_WORDS];
+  uint32_t z[ST_WORDS];
+  uint16_t px[2];
+  uint64_t cyc;
+  uint64_t pix;
+  uint32_t us;
+  int i;
+
+  n = n > 0 ? n : 100;
+  fpc_gpu_read(0, TY, 2, 1, px, sizeof(px));           /* (idle) */
+  if (fpc_gpu_hwstats(a) < 0 || a[1] == 0)
+    {
+      printf("bw: no STATS (a v6 GPU with a clock needed)\n");
+      return 1;
+    }
+
+  for (i = 0; i < n; i++)
+    {
+      fpc_gpu_copy(0, (i & 1) ? 2014 : 1980, 0, (i & 1) ? 1980 : 2014,
+                   2048, 32);
+      if (i % 32 == 31)
+        {
+          fpc_gpu_flush();                             /* (a READ waits */
+          fpc_gpu_read(0, TY, 2, 1, px, sizeof(px));   /* at most ~40 ms) */
+        }
+    }
+
+  fpc_gpu_flush();
+  fpc_gpu_read(0, TY, 2, 1, px, sizeof(px));           /* (all drawn) */
+  if (fpc_gpu_hwstats(z) < 0)
+    {
+      printf("bw: no STATS after\n");
+      return 1;
+    }
+
+  cyc = (uint32_t)(z[2] - a[2]);
+  cyc = cyc > 0 ? cyc : 1;
+  us  = (uint32_t)((uint64_t)(z[29] - a[29]) * 1000 / z[1]);   /* busy */
+  us  = us > 0 ? us : 1;
+  pix = (uint64_t)n * 2048 * 32;
+  printf("bw: mode %" PRIu32 ": %d COPYs of 2048 x 32 in %" PRIu32 " us of the blitter's time: "
+         "%" PRIu32 ".%" PRIu32 " Mpixel/s copied (%" PRIu32 " MB/s read "
+         "and written); blitter busy %" PRIu32 "%% of the %" PRIu32
+         " us\n",
+         z[5] & 0xff, n, us, (uint32_t)(pix / us),
+         (uint32_t)(pix * 10 / us % 10), (uint32_t)(pix * 4 / us),
+         (uint32_t)((uint64_t)(z[29] - a[29]) * 100 / cyc),
+         (uint32_t)(cyc * 1000 / z[1]));
+  printf("bw: SDRAM: scanout %" PRIu32 "%%, blitter %" PRIu32 "%%, DMA %"
+         PRIu32 "%%, CPU %" PRIu32 "%%, idle %" PRIu32 "%%; late line "
+         "fetches %" PRIu32 ", frames %" PRIu32 " (%" PRIu32 " Hz)\n",
+         (uint32_t)((uint64_t)(z[36] - a[36]) * 100 / cyc),
+         (uint32_t)((uint64_t)(z[37] - a[37]) * 100 / cyc),
+         (uint32_t)((uint64_t)(z[38] - a[38]) * 100 / cyc),
+         (uint32_t)((uint64_t)(z[39] - a[39]) * 100 / cyc),
+         (uint32_t)(100 - ((uint64_t)(z[36] - a[36]) + (z[37] - a[37]) +
+                           (z[38] - a[38]) + (z[39] - a[39])) * 100 / cyc),
+         z[4] - a[4], z[3] - a[3],
+         (uint32_t)((uint64_t)(z[3] - a[3]) * 1000 * z[1] / cyc));
+  return z[4] != a[4];
+}
+
 #endif

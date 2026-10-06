@@ -51,7 +51,10 @@
 #define NWALLS         4               /* The drawn ones, then the image */
 #define THEME_W        132             /* A theme's preview */
 #define THEME_H        80
-#define RES_MAX        4
+#define RES_MAX        6               /* Display modes listed */
+#define RES_STD        4               /* ... the first row: every monitor's;
+                                        * then the experimental ones */
+#define MODE_TRIAL_S   20              /* A new mode reverts unless kept */
 #define APPLEVELS      3               /* Sound: applications' levels */
 
 /* The widgets' ids */
@@ -72,6 +75,9 @@ enum
   S_CLOCKDATE,
   S_CLOCKSECS,
   S_MODE,
+  S_MODEXLBL,                          /* The experimental modes */
+  S_MODEX,
+  S_MODEASK,                           /* Keep this mode? */
   S_WALL,                              /* + wallpaper */
   S_DOCKSIZE = S_WALL + NWALLS,
   S_DOCKSIZEV,
@@ -162,7 +168,7 @@ struct settings_s
   uint32_t pinned;                     /* Pinned apps as drawn, a bit each */
   uint16_t accents[ACCENT_COUNT];
   int nmodes;
-  char modes[RES_MAX][16];
+  char modes[RES_MAX][24];
   const char *modep[RES_MAX];
 
   /* The texts the widgets show */
@@ -233,6 +239,36 @@ struct settings_s
 
 static struct settings_s *g_st;        /* While the window is open */
 static int g_page;
+
+/* A display mode on trial: every change from Settings is undone after
+ * MODE_TRIAL_S seconds unless the user keeps it (a monitor that does not
+ * take the new mode shows nothing, not even the question); saved only
+ * when kept.  Not while the desktop is frozen (tests), except when
+ * deskctl mode expire says so.
+ */
+
+static struct
+{
+  int mode;                            /* On trial, or -1 */
+  int prev;                            /* ... the one it replaced */
+  int left;                            /* Seconds */
+  volatile bool expire;                /* deskctl: run out now */
+} g_trial =
+{
+  -1, -1, 0, false
+};
+
+static char g_trialtext[80];
+
+static void mode_values(struct settings_s *st, int mode);
+
+#ifdef CONFIG_FPC_GPU
+/* drivers/gpu (fpc_gpu.h) */
+
+int fpc_gpu_modeinfo(int mode, int *w, int *h, int *hz, int *flags);
+#  define MODEF_Y420  0x01             /* FPC_GPU_MODEF_* */
+#  define MODEF_EXPERIMENTAL 0x02
+#endif
 
 static const char * const g_pages[SETTINGS_PAGES] =
 {
@@ -559,7 +595,9 @@ static void page_display(struct settings_s *st)
     kit_label(k, 0, "Resolution", KIT_TEXT_BOLD);
     if (st->nmodes > 0)
       {
-        kit_tabs(k, S_MODE, st->modep, st->nmodes, 0, KIT_TABS_SEGMENTS);
+        kit_tabs(k, S_MODE, st->modep,
+                 st->nmodes < RES_STD ? st->nmodes : RES_STD, 0,
+                 KIT_TABS_SEGMENTS);
         kit_size(k, 0, 30);
       }
     else
@@ -589,6 +627,20 @@ static void page_display(struct settings_s *st)
     kit_label(k, 0, "No wallpaper in this build (CONFIG_FPCDESK_WALLPAPER).",
               KIT_TEXT_DIM);
 #endif
+
+    /* 1920 x 1080 (v12 GPUs): not every monitor takes these */
+
+    if (st->nmodes > RES_STD)
+      {
+        kit_spacer(k, 0);
+        kit_label(k, 0, "1920 x 1080 (experimental)", KIT_TEXT_BOLD);
+        kit_label(k, S_MODEXLBL, "Not every monitor shows these: "
+                  "a new mode goes back after 20 s unless kept",
+                  KIT_TEXT_DIM);
+        kit_tabs(k, S_MODEX, st->modep + RES_STD, st->nmodes - RES_STD, -1,
+                 KIT_TABS_SEGMENTS);
+        kit_size(k, 0, 30);
+      }
   kit_end(k);
 }
 
@@ -1765,11 +1817,18 @@ static void settings_sync(struct settings_s *st)
   for (i = 0; i < st->nmodes && nx_getdisplaymode(g_desk.hnx, i, &size) >= 0;
        i++)
     {
-      snprintf(st->modes[i], sizeof(st->modes[i]), "%d x %d", size.w,
-               size.h);
+      if (i < RES_STD)
+        {
+          snprintf(st->modes[i], sizeof(st->modes[i]), "%d x %d", size.w,
+                   size.h);
+        }
+      else
+        {
+          desk_mode_label(i, st->modes[i], sizeof(st->modes[i]), true);
+        }
     }
 
-  kit_set_value(k, S_MODE, nx_getdisplaymode(g_desk.hnx, -1, NULL));
+  mode_values(st, nx_getdisplaymode(g_desk.hnx, -1, NULL));
 #ifdef CONFIG_FPCDESK_WALLPAPER
   for (i = 0; i < NWALLS; i++)
     {
@@ -2002,11 +2061,110 @@ static void time_step(int id, int d)
   desk_topbar_draw();
 }
 
+/* Display modes on trial (g_trial) */
+
+/* The resolution rows' segments for a mode (the server's answer may not
+ * have the latest change yet: the mode just set is given)
+ */
+
+static void mode_values(struct settings_s *st, int mode)
+{
+  kit_set_value(&st->kit, S_MODE, mode >= 0 && mode < RES_STD ? mode : -1);
+  kit_set_value(&st->kit, S_MODEX, mode >= RES_STD ? mode - RES_STD : -1);
+}
+
+static void trial_text(void)
+{
+  char prev[40];
+
+  desk_mode_label(g_trial.prev, prev, sizeof(prev), false);
+  snprintf(g_trialtext, sizeof(g_trialtext), "Going back to %s in %d s",
+           prev, g_trial.left);
+}
+
+static void trial_start(struct settings_s *st, int mode)
+{
+  static const char * const keep[] =
+  {
+    "Keep", "Revert"
+  };
+
+  int cur = nx_getdisplaymode(g_desk.hnx, -1, NULL);
+
+  if (mode == cur)
+    {
+      return;
+    }
+
+  /* A trial on top of a trial: back to the mode kept last, if this one
+   * is not kept either
+   */
+
+  if (nx_setdisplaymode(g_desk.hnx, mode) < 0)
+    {
+      settings_sync(st);                       /* (as it was) */
+      return;
+    }
+
+  g_trial.prev   = g_trial.mode >= 0 ? g_trial.prev : cur;
+  g_trial.mode   = mode;
+  g_trial.left   = MODE_TRIAL_S;
+  g_trial.expire = false;
+  trial_text();
+  kit_dialog(&st->kit, S_MODEASK, KIT_DLG_CONFIRM, "Keep this display mode?",
+             g_trialtext, keep, 2);
+}
+
+/* The answer: kept (saved), or the mode before it back */
+
+static void trial_end(bool keep)
+{
+  int mode = g_trial.mode;
+  int now = mode;
+
+  if (mode < 0)
+    {
+      return;
+    }
+
+  g_trial.mode = -1;
+  if (g_st != NULL && kit_dialog_open(&g_st->kit))
+    {
+      kit_dialog_close(&g_st->kit);
+      kit_flush(&g_st->kit);
+    }
+
+  if (keep)
+    {
+      desk_prefs_save();
+    }
+  else if (nx_getdisplaymode(g_desk.hnx, -1, NULL) == mode &&
+           nx_setdisplaymode(g_desk.hnx, g_trial.prev) >= 0)   /* (deskctl
+                                                                * may have
+                                                                * set another) */
+    {
+      now = g_trial.prev;
+    }
+
+  if (g_st != NULL)
+    {
+      settings_sync(g_st);
+      mode_values(g_st, now);
+      kit_flush(&g_st->kit);
+    }
+}
+
 static void settings_event(struct kit_s *k, struct kit_widget_s *wg, int ev)
 {
   struct settings_s *st = k->priv;
   int id = wg != NULL ? wg->id : 0;
   int v = wg != NULL ? wg->value : 0;
+
+  if (ev == KIT_EV_DIALOG && k->key == S_MODEASK)
+    {
+      trial_end(k->arg == KIT_ANS_OK);
+      return;
+    }
 
   if (ev == KIT_EV_KEY)
     {
@@ -2124,11 +2282,8 @@ static void settings_event(struct kit_s *k, struct kit_widget_s *wg, int ev)
        */
 
       case S_MODE:
-        if (v != nx_getdisplaymode(g_desk.hnx, -1, NULL) &&
-            nx_setdisplaymode(g_desk.hnx, v) >= 0)
-          {
-            desk_prefs_save();
-          }
+      case S_MODEX:
+        trial_start(st, id == S_MODEX ? RES_STD + v : v);
         break;
 
       case S_DOCKSIZE:
@@ -2399,6 +2554,7 @@ static void settings_close(struct desk_win_s *w)
   desk_net_cancel(w->priv);                    /* No more answers for it */
 #endif
   g_st = NULL;                                 /* w->priv goes after */
+  trial_end(false);                            /* Not kept */
 }
 
 static struct desk_win_s *settings_open(void)
@@ -2496,6 +2652,116 @@ void desk_settings_changed(int page)
     {
       settings_sync(g_st);
       kit_flush(&g_st->kit);
+    }
+}
+
+/* A display mode's name: "1280 x 800"; the experimental ones with their
+ * rate (and the segments' short form, without the size)
+ */
+
+void desk_mode_label(int mode, char *buf, size_t n, bool brief)
+{
+  struct nxgl_size_s size;
+#ifdef CONFIG_FPC_GPU
+  int w;
+  int h;
+  int hz;
+  int flags;
+
+  if (fpc_gpu_modeinfo(mode, &w, &h, &hz, &flags) >= 0 &&
+      (flags & MODEF_EXPERIMENTAL) != 0)
+    {
+      if (brief)
+        {
+          snprintf(buf, n, "%d Hz%s", hz,
+                   (flags & MODEF_Y420) ? ", YCbCr 4:2:0" : "");
+        }
+      else
+        {
+          snprintf(buf, n, "%d x %d at %d Hz%s", w, h, hz,
+                   (flags & MODEF_Y420) ? " (4:2:0)" : "");
+        }
+
+      return;
+    }
+#endif
+
+  if (nx_getdisplaymode(g_desk.hnx, mode, &size) >= 0)
+    {
+      snprintf(buf, n, "%d x %d", size.w, size.h);
+    }
+  else
+    {
+      snprintf(buf, n, "mode %d", mode);
+    }
+}
+
+/* The mode to save: the one on trial is not saved until kept */
+
+int desk_mode_saved(void)
+{
+  return g_trial.mode >= 0 ? g_trial.prev : nx_getdisplaymode(g_desk.hnx, -1,
+                                                              NULL);
+}
+
+/* Every second (desk_main.c): the trial's countdown; at 0 the mode before
+ * it comes back
+ */
+
+void desk_mode_tick(void)
+{
+  if (g_trial.mode < 0 || (desk_frozen() && !g_trial.expire))
+    {
+      return;
+    }
+
+  if (g_trial.expire || --g_trial.left <= 0)
+    {
+      trial_end(false);
+      return;
+    }
+
+  trial_text();
+  if (g_st != NULL)
+    {
+      kit_dialog_text(&g_st->kit, g_trialtext);
+    }
+}
+
+/* deskctl mode expire: the trial runs out at the next tick; and its state */
+
+void desk_mode_expire(void)
+{
+  g_trial.expire = true;
+}
+
+int desk_mode_trial(int *prev, int *left)
+{
+  *prev = g_trial.prev;
+  *left = g_trial.left;
+  return g_trial.mode;
+}
+
+/* Ctrl-Alt-Backspace: a mode on trial goes back at once; else 1024 x 768
+ * (mode 0, which every monitor takes), saved
+ */
+
+void desk_mode_rescue(void)
+{
+  if (g_trial.mode >= 0)
+    {
+      trial_end(false);
+    }
+  else if (nx_getdisplaymode(g_desk.hnx, -1, NULL) != 0 &&
+           nx_setdisplaymode(g_desk.hnx, 0) >= 0)
+    {
+      desk_prefs_save();
+      if (g_st != NULL)
+        {
+          settings_sync(g_st);
+          mode_values(g_st, 0);
+          kit_flush(&g_st->kit);
+        }
     }
 }
 

@@ -46,7 +46,15 @@
  *   deskctl stats [clear|N]       GPU commands and pixels since the last
  *                                 clear, with the GPU time they take (the
  *                                 costs in docs/desktop.md); N: per N steps
- *   deskctl mode [N]              the display mode (N: change it)
+ *   deskctl bw [N]                N COPYs of 2048 x 32 off-screen timed by
+ *                                 the GPU's clock: the blitter's rate in
+ *                                 the mode now, the SDRAM's cycles by
+ *                                 client, late line fetches
+ *   deskctl mode [N|expire]       the display modes (N: change it at once,
+ *                                 not saved: the way back from the shell
+ *                                 when the monitor shows nothing; expire:
+ *                                 a mode on trial from Settings goes back
+ *                                 now, as after its 20 s)
  *   deskctl redraw                composite all of the display again (a
  *                                 check: the result must not change)
  *   deskctl freeze [SECONDS|off]  stop the desktop's clock at SECONDS
@@ -114,6 +122,7 @@ void fpc_gpu_stats(struct fpc_gpu_stats_s *st, bool clear);
 int fpc_simgpu_screenshot(FAR const char *path);
 #endif
 int desk_gputest(void);
+int desk_gpubw(int n);
 int desk_linktest(int mb, int setup, int cycles, bool rb);
 int desk_rlinktest(int mb, int n, int half, bool psram, bool copy);
 
@@ -569,7 +578,7 @@ static void deskctl_usage(void)
   fprintf(stderr,
           "usage: deskctl m X Y [BUTTONS] | c X Y | d X0 Y0 X1 Y1 [N] |\n"
           "               k TEXT | key [+|-]NAME|@MS... | shot FILE |\n"
-          "               stats [clear|N] | mode [N] | redraw | test | link [MB [S C [rb]]] |\n"
+          "               stats [clear|N] | bw [N] | mode [N|expire] | redraw | test | link [MB [S C [rb]]] |\n"
           "               rlink [MB [N HALF]] [psram|copy] |\n"
           "               freeze [SECONDS|off] | dock APP [r] | wins |\n"
           "               fx hold PERMILLE|off | fx [EFFECT] on|off\n"
@@ -595,6 +604,12 @@ int main(int argc, FAR char *argv[])
   if (strcmp(argv[1], "test") == 0)
     {
       return desk_gputest() ? EXIT_FAILURE : EXIT_SUCCESS;
+    }
+
+  if (strcmp(argv[1], "bw") == 0)
+    {
+      return desk_gpubw(argc >= 3 ? atoi(argv[2]) : 100) ? EXIT_FAILURE :
+             EXIT_SUCCESS;
     }
 
   if (strcmp(argv[1], "link") == 0)
@@ -760,10 +775,22 @@ int main(int argc, FAR char *argv[])
   else if (strcmp(argv[1], "mode") == 0)
     {
       struct nxgl_size_s size;
+      char label[48];
       int mode;
+      int prev;
+      int left;
       int i;
 
-      if (argc >= 3)
+      /* expire: a mode on trial (Settings' "Keep this display mode?")
+       * runs out now, as after its 20 s.  N: that mode at once, no
+       * question, not saved (the way back from the shell)
+       */
+
+      if (argc >= 3 && strcmp(argv[2], "expire") == 0)
+        {
+          desk_mode_expire();
+        }
+      else if (argc >= 3)
         {
           mode = nx_setdisplaymode(h, atoi(argv[2]));
           if (mode < 0)
@@ -775,9 +802,17 @@ int main(int argc, FAR char *argv[])
 
       for (i = 0; nx_getdisplaymode(h, i, &size) >= 0; i++)
         {
-          printf("%c %d  %d x %d\n",
-                 nx_getdisplaymode(h, -1, NULL) == i ? '*' : ' ', i,
-                 size.w, size.h);
+          desk_mode_label(i, label, sizeof(label), false);
+          printf("%c %d  %s%s\n",
+                 nx_getdisplaymode(h, -1, NULL) == i ? '*' : ' ', i, label,
+                 i >= 4 ? " (experimental)" : "");
+        }
+
+      mode = desk_mode_trial(&prev, &left);
+      if (mode >= 0)
+        {
+          printf("trial: mode %d, back to %d in %d s unless kept\n", mode,
+                 prev, left);
         }
     }
   else if (strcmp(argv[1], "dock") == 0 && argc >= 3)

@@ -91,7 +91,7 @@ static void icon_about(struct desk_ops_s *o, int x, int y, int s,
 
 void desk_about_draw(NXWINDOW hwnd, int x, int y, int w)
 {
-  static char display[40];
+  static char display[64];
   static char graphics[40];
   static const char * const rows[][2] =
   {
@@ -105,8 +105,10 @@ void desk_about_draw(NXWINDOW hwnd, int x, int y, int w)
   int cx = x + w / 2;
   int i;
 
-  snprintf(display, sizeof(display), "%d x %d, %s", DESK_W, DESK_H,
-           g_desk.composited ? "composited" : "not composited");
+  desk_mode_label(nx_getdisplaymode(g_desk.hnx, -1, NULL), display,
+                  sizeof(display), false);
+  snprintf(display + strlen(display), sizeof(display) - strlen(display),
+           ", %s", g_desk.composited ? "composited" : "not composited");
   snprintf(graphics, sizeof(graphics), "Tang Nano 20K, GPU protocol v%d",
            (nx_compositor(g_desk.hnx) & NX_CAP_BC1) != 0 ? 6 : 5);
 
@@ -471,8 +473,8 @@ void desk_prefs_save(void)
       return;
     }
 
-  fprintf(f, "mode %d\nwallpaper %d\n",
-          nx_getdisplaymode(g_desk.hnx, -1, NULL), g_desk.wallstyle);
+  fprintf(f, "mode %d\nwallpaper %d\n", desk_mode_saved(),
+          g_desk.wallstyle);
   fprintf(f, "theme %d\naccent %d\nshadow %d\nborder %d\neffects %d\n",
           g_prefs.theme, g_prefs.accent, g_prefs.shadow, g_prefs.border,
           g_prefs.effects);

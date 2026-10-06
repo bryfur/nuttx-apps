@@ -517,14 +517,18 @@ void fg_display_info(FAR int *w, FAR int *h, FAR int *scale, FAR int *mode)
 
 static void pick_display(int w, int h, FAR int *mode, FAR int *scale)
 {
-  static const int order[FPC_GPU_NMODES] = { 2, 0, 3, 1 };
+  /* The 60 Hz modes every monitor takes (not v12's 1920 x 1080 ones: 30
+   * Hz, or 4:2:0 that not every monitor shows)
+   */
+
+  static const int order[] = { 2, 0, 3, 1 };
   int best = -1;
   int bestcov = 0;
   int i;
 
   *mode  = 2;
   *scale = 1;
-  for (i = 0; i < FPC_GPU_NMODES; i++)
+  for (i = 0; i < (int)(sizeof(order) / sizeof(order[0])); i++)
     {
       int mw;
       int mh;

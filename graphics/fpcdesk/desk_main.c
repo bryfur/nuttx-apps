@@ -1340,10 +1340,29 @@ void desk_relayout(void)
 static void on_mode(void)
 {
   struct nxgl_size_s size;
+  struct desk_win_s *w;
 
-  if (nx_displaysize(g_desk.hnx, &size) < 0 ||
-      (size.w == g_desk.w && size.h == g_desk.h))
+  if (nx_displaysize(g_desk.hnx, &size) < 0)
     {
+      return;
+    }
+
+  /* Another mode of the same size (1920 x 1080 at 30 Hz, and at 60 Hz in
+   * 4:2:0): only what shows the mode
+   */
+
+  if (size.w == g_desk.w && size.h == g_desk.h)
+    {
+      for (w = g_desk.wins; w != NULL; w = w->next)
+        {
+          if (!w->closing &&
+              (w->app == APP_SETTINGS || w->app == APP_ABOUT) &&
+              desk_win_app(w)->draw != NULL)
+            {
+              desk_win_app(w)->draw(w);
+            }
+        }
+
       return;
     }
 
@@ -1840,6 +1859,18 @@ static void on_kbd(struct desk_event_s *ev)
       kbd_bytes(w, bytes, nb);
       nb = 0;
 
+      /* Ctrl-Alt-Backspace: a display mode the monitor does not show
+       * undone (desk_mode_rescue())
+       */
+
+      if (key.code == NX_KEY_BACKSPACE &&
+          (key.flags & (NX_KEY_RELEASE | NX_KEY_CTRL | NX_KEY_ALT)) ==
+          (NX_KEY_CTRL | NX_KEY_ALT))
+        {
+          desk_mode_rescue();
+          continue;
+        }
+
       /* Alt-Tab: the switcher (and while it is open, every key).  An
        * application that had the modifier's press hears it let go now
        */
@@ -2092,6 +2123,7 @@ static void tick(void)
   desk_load_sample();
   desk_panels_tick();
   desk_clock_tick();
+  desk_mode_tick();                    /* A display mode on trial */
   for (w = g_desk.wins; w != NULL; w = next)
     {
       next = w->next;

@@ -703,6 +703,8 @@ void kit_dialog(struct kit_s *k, int id, int kind, const char *title,
                 const char *text, const char * const *buttons, int n);
 void kit_dialog_close(struct kit_s *k);
 bool kit_dialog_open(struct kit_s *k);
+void kit_dialog_text(struct kit_s *k, const char *text);   /* A new text (a
+                                                         * countdown) */
 void kit_dialog_reap(void);                        /* The kit's: frees
                                                     * closed dialogs when
                                                     * it is done with an

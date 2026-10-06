@@ -579,6 +579,8 @@ void kit_dialog(struct kit_s *k, int id, int kind, const char *title,
   files = kind == KIT_DLG_OPEN || kind == KIT_DLG_SAVE;
   kit_dialog_close(k);
   kit_menu_close(k);
+  k->down = KIT_NONE;          /* (a widget whose press opened it, a tab:
+                                * its release goes to the dialog) */
 
   d = calloc(1, sizeof(*d));
   if (d == NULL)
@@ -760,4 +762,22 @@ void kit_dialog_close(struct kit_s *k)
 bool kit_dialog_open(struct kit_s *k)
 {
   return k->dlg != NULL;
+}
+
+/* The open dialog's text, changed in place (it keeps its size: a text
+ * about as long as the first)
+ */
+
+void kit_dialog_text(struct kit_s *k, const char *text)
+{
+  struct dlg_s *d = (struct dlg_s *)k->dlg;
+
+  if (d == NULL || d->text[0] == '\0')
+    {
+      return;
+    }
+
+  strlcpy(d->text, text, sizeof(d->text));
+  kit_invalidate(&d->kit, D_TEXT);
+  kit_flush(&d->kit);
 }

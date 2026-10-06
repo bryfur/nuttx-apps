@@ -787,6 +787,19 @@ void icon_tile(struct desk_ops_s *o, int x, int y, int s, uint16_t top,
 
 void desk_settings_show(int page);
 
+/* Display modes (desk_settings.c): a mode's name (brief: the
+ * experimental ones' rate only); a change from Settings is on trial, kept
+ * only when the user says so (desk_mode_tick() counts down, every second);
+ * the mode to save; deskctl mode expire; Ctrl-Alt-Backspace
+ */
+
+void desk_mode_label(int mode, char *buf, size_t n, bool brief);
+int  desk_mode_saved(void);
+void desk_mode_tick(void);
+void desk_mode_expire(void);
+int  desk_mode_trial(int *prev, int *left);  /* The mode on trial, or -1 */
+void desk_mode_rescue(void);
+
 /* desk_net.c: the network coprocessor (netcopd's control socket) */
 
 #ifdef CONFIG_NETUTILS_NETCOP
