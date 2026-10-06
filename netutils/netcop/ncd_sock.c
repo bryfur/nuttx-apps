@@ -1081,10 +1081,17 @@ static void req_recvfrom(FAR const struct usrsock_request_recvfrom_s *rq)
     }
   else
     {
+      /* No more than the answer carries: us_dack() would cut what does
+       * not fit, and it is taken from the ring here (a program asking for
+       * more than about 2 KB at once lost bytes)
+       */
+
       n = s->len < req->max_buflen ? s->len : req->max_buflen;
-      if (n > sizeof(g_ncd->req))
+      if (n > sizeof(g_ncd->out) -
+              sizeof(struct usrsock_message_datareq_ack_s) - sizeof(ss))
         {
-          n = sizeof(g_ncd->req);
+          n = sizeof(g_ncd->out) -
+              sizeof(struct usrsock_message_datareq_ack_s) - sizeof(ss);
         }
 
       rx_get(s, buf, n);
