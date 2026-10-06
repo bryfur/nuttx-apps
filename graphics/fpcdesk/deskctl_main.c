@@ -61,6 +61,14 @@
  *                                 has it; APP: a part of its name
  *   deskctl wins                  the windows, the top one first: the
  *                                 application, position, size, state
+ *   deskctl fx hold PERMILLE|off  hold the 3D effects that far of the way
+ *                                 (maximising, the switcher opening,
+ *                                 windows opening, closing, minimising,
+ *                                 restoring), a drag at its last move's
+ *                                 swing, for screenshots
+ *   deskctl fx [EFFECT] on|off    the 3D effects on or off, all of them
+ *                                 or one (open genie swing zoom flow),
+ *                                 not saved
  ****************************************************************************/
 
 #include <nuttx/config.h>
@@ -564,7 +572,8 @@ static void deskctl_usage(void)
           "               stats [clear|N] | mode [N] | redraw | test | link [MB [S C [rb]]] |\n"
           "               rlink [MB [N HALF]] [psram|copy] |\n"
           "               freeze [SECONDS|off] | dock APP [r] | wins |\n"
-          "               fx hold PERMILLE|off | fx on|off\n");
+          "               fx hold PERMILLE|off | fx [EFFECT] on|off\n"
+          "               (EFFECT: open genie swing zoom flow)\n");
 }
 
 /****************************************************************************
@@ -636,8 +645,9 @@ int main(int argc, FAR char *argv[])
     }
 
   /* The 3D effects held at a point (permille of the way), for
-   * screenshots: maximising, the switcher opening; a drag's swing as its
-   * last move's velocity gives it
+   * screenshots: maximising, the switcher opening, windows' fades
+   * (opening, closing, minimising, restoring); a drag's swing as its last
+   * move's velocity gives it
    */
 
   if (strcmp(argv[1], "fx") == 0 && argc >= 4 &&
@@ -647,13 +657,35 @@ int main(int argc, FAR char *argv[])
       return EXIT_SUCCESS;
     }
 
-  /* ... on or off, not saved (Settings has the setting) */
+  /* ... on or off, all of them (the master switch) or one, not saved
+   * (Settings has the settings)
+   */
 
   if (strcmp(argv[1], "fx") == 0 && argc >= 3 &&
-      (strcmp(argv[2], "on") == 0 || strcmp(argv[2], "off") == 0))
+      (strcmp(argv[argc - 1], "on") == 0 ||
+       strcmp(argv[argc - 1], "off") == 0))
     {
-      g_prefs.effects = strcmp(argv[2], "on") == 0;
-      return EXIT_SUCCESS;
+      bool on = strcmp(argv[argc - 1], "on") == 0;
+      int i;
+
+      if (argc == 3)
+        {
+          g_prefs.effects = on;
+          return EXIT_SUCCESS;
+        }
+
+      for (i = 0; argc == 4 && i < FX_COUNT; i++)
+        {
+          if (strcmp(argv[2], g_fx_names[i]) == 0)
+            {
+              g_prefs.fx = on ? g_prefs.fx | (1 << i) :
+                                g_prefs.fx & ~(1 << i);
+              return EXIT_SUCCESS;
+            }
+        }
+
+      fprintf(stderr, "deskctl: no effect %s\n", argv[2]);
+      return EXIT_FAILURE;
     }
 
   if (strcmp(argv[1], "shot") == 0)

@@ -484,22 +484,23 @@ static void win_effects(struct desk_win_s *w, uint8_t opacity)
   fx.shadowdy = w->active ? 8 : 4;
   fx.border   = g_prefs.border ? (uint8_t)(g_theme.border * opacity / 255) :
                                  0;
-  if (!desk_fx_on())
-    {
-      /* Only the opacity changes */
-    }
-  else if (w->fade > 0 && !w->closing)    /* Opening, restoring: t 1 to 0 */
+  /* (Each effect only where Settings have it on; else only the opacity
+   * changes)
+   */
+
+  if (w->fade > 0 && !w->closing)         /* Opening, restoring: t 1 to 0 */
     {
       float t = (float)w->fade / (FADE_STEPS + 1);
 
-      fx.flags |= NX_FX_QUAD;
-      if (w->restoring)
+      if (w->restoring && desk_fx_on(FX_GENIE))
         {
+          fx.flags |= NX_FX_QUAD;
           quad_genie(w, t, fx.quad);
           keep = false;
         }
-      else
+      else if (!w->restoring && desk_fx_on(FX_OPEN))
         {
+          fx.flags |= NX_FX_QUAD;
           quad_tilt(w, t, fx.quad);
         }
     }
@@ -507,14 +508,15 @@ static void win_effects(struct desk_win_s *w, uint8_t opacity)
     {
       float t = 1.0f - (float)w->fadeout / (FADE_STEPS + 1);
 
-      fx.flags |= NX_FX_QUAD;
-      if (w->minimizing)
+      if (w->minimizing && desk_fx_on(FX_GENIE))
         {
+          fx.flags |= NX_FX_QUAD;
           quad_genie(w, t, fx.quad);
           keep = false;
         }
-      else
+      else if (!w->minimizing && desk_fx_on(FX_OPEN))
         {
+          fx.flags |= NX_FX_QUAD;
           quad_tilt(w, t, fx.quad);
         }
     }
@@ -2010,11 +2012,17 @@ static void on_event(struct desk_event_s *ev)
 static bool animate(void)
 {
   struct desk_win_s *w;
+  int stop = desk_fx_fadestop(FADE_STEPS);   /* Held: they stop there */
   bool more = false;
 
   for (w = g_desk.wins; w != NULL; w = w->next)
     {
-      if (w->fade > 0 && !w->closing)
+      if ((w->fade > 0 && !w->closing && w->fade <= stop) ||
+          (w->fadeout > 0 && w->fadeout <= stop))
+        {
+          more = true;                       /* Held (deskctl fx hold) */
+        }
+      else if (w->fade > 0 && !w->closing)
         {
           w->fade--;
           w->restoring &= w->fade > 0;

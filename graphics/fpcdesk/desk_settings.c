@@ -67,7 +67,8 @@ enum
   S_SHADOW,
   S_BORDER,
   S_FX3D,
-  S_CLOCK24,
+  S_FXEACH,                            /* + effect (FX_* bit number) */
+  S_CLOCK24 = S_FXEACH + FX_COUNT,
   S_CLOCKDATE,
   S_CLOCKSECS,
   S_MODE,
@@ -470,6 +471,50 @@ static void row_switch(struct kit_s *k, int id, const char *label)
   kit_end(k);
 }
 
+/* The 3D effects' row: the master switch, each effect a check box below
+ * its label (disabled while the switch is off)
+ */
+
+static void row_effects(struct kit_s *k)
+{
+  static const char *const name[FX_COUNT] =
+  {
+    "Open", "Minimise", "Drag", "Maximise", "Alt-Tab"
+  };
+
+  static const char *const tip[FX_COUNT] =
+  {
+    "Windows open and close with a tilt",
+    "Minimised windows go into the Dock with a genie",
+    "A window swings as it is dragged",
+    "Maximising and restoring zoom",
+    "Alt-Tab shows a cover flow, else a row of icons"
+  };
+
+  struct kit_widget_s *wg;
+  int i;
+
+  wg = kit_row(k, KIT_BOX_NONE);
+  wg->padx = 14;
+  wg->pady = 9;
+  wg->gap  = 12;
+    wg = kit_col(k, KIT_BOX_NONE);
+    wg->gap = 5;
+    kit_grow(k, 1);
+      kit_label(k, 0, "3D effects", KIT_TEXT_BODY);
+      wg = kit_row(k, KIT_BOX_NONE);
+      wg->gap = 10;
+        for (i = 0; i < FX_COUNT; i++)
+          {
+            kit_check(k, S_FXEACH + i, name[i], false);
+            kit_tip(k, tip[i]);
+          }
+      kit_end(k);
+    kit_end(k);
+    kit_switch(k, S_FX3D, false);
+  kit_end(k);
+}
+
 static void page_appearance(struct settings_s *st)
 {
   struct kit_s *k = &st->kit;
@@ -495,7 +540,7 @@ static void page_appearance(struct settings_s *st)
         kit_size(k, 260, 28);
       kit_end(k);
       row_switch(k, S_BORDER, "Window edges\nA hairline around each window");
-      row_switch(k, S_FX3D, "3D effects\nWindows move in perspective");
+      row_effects(k);
     kit_end(k);
 
     kit_card(k);
@@ -1705,6 +1750,12 @@ static void settings_sync(struct settings_s *st)
   kit_set_value(k, S_BORDER, g_prefs.border);
   kit_set_value(k, S_FX3D, g_prefs.effects && g_desk.quad);
   kit_enable(k, S_FX3D, g_desk.quad);
+  for (i = 0; i < FX_COUNT; i++)
+    {
+      kit_set_value(k, S_FXEACH + i, (g_prefs.fx >> i) & 1);
+      kit_enable(k, S_FXEACH + i, g_desk.quad && g_prefs.effects);
+    }
+
   kit_set_value(k, S_CLOCK24, g_prefs.clock24);
   kit_set_value(k, S_CLOCKDATE, g_prefs.clockdate);
   kit_set_value(k, S_CLOCKSECS, g_prefs.clocksecs);
@@ -2054,8 +2105,8 @@ static void settings_event(struct kit_s *k, struct kit_widget_s *wg, int ev)
         desk_prefs_save();
         break;
 
-      case S_FX3D:
-        g_prefs.effects = v;
+      case S_FX3D:                     /* (settings_sync() enables the */
+        g_prefs.effects = v;           /* effects' check boxes) */
         desk_prefs_save();
         break;
 
@@ -2198,6 +2249,12 @@ static void settings_event(struct kit_s *k, struct kit_widget_s *wg, int ev)
         break;
 
       default:
+        if (id >= S_FXEACH && id < S_FXEACH + FX_COUNT)
+          {
+            g_prefs.fx = v ? g_prefs.fx | (1 << (id - S_FXEACH)) :
+                             g_prefs.fx & ~(1 << (id - S_FXEACH));
+            desk_prefs_save();
+          }
         break;
     }
 
@@ -2331,7 +2388,8 @@ static void settings_focus(struct desk_win_s *w)
 
   if (st != NULL)
     {
-      kit_activate(&st->kit);
+      settings_sync(st);               /* (deskctl fx may have changed the */
+      kit_activate(&st->kit);          /* effects) */
     }
 }
 

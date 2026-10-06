@@ -266,6 +266,7 @@ static void prefs_defaults(void)
   g_prefs.reprate   = 40;
   g_prefs.ptrspeed  = 100;
   g_prefs.effects   = true;
+  g_prefs.fx        = FX_ALL;
   g_prefs.npinned   = sizeof(pinned);
   memcpy(g_prefs.pinned, pinned, sizeof(pinned));
 }
@@ -349,7 +350,28 @@ int desk_prefs_load(void)
         }
       else if (strcmp(line, "effects") == 0)
         {
-          g_prefs.effects = n != 0;
+          g_prefs.effects = n != 0;          /* All of them (the master) */
+        }
+      else if (strcmp(line, "fx") == 0)      /* "fx NAME 0|1": each one */
+        {
+          char *on = strchr(v, ' ');
+          int i;
+
+          for (i = 0; on != NULL && i < FX_COUNT; i++)
+            {
+              if (strncmp(v, g_fx_names[i], on - v) == 0 &&
+                  g_fx_names[i][on - v] == '\0')
+                {
+                  if (atoi(on + 1) != 0)
+                    {
+                      g_prefs.fx |= 1 << i;
+                    }
+                  else
+                    {
+                      g_prefs.fx &= ~(1 << i);
+                    }
+                }
+            }
         }
       else if (strcmp(line, "clock24") == 0)
         {
@@ -454,6 +476,11 @@ void desk_prefs_save(void)
   fprintf(f, "theme %d\naccent %d\nshadow %d\nborder %d\neffects %d\n",
           g_prefs.theme, g_prefs.accent, g_prefs.shadow, g_prefs.border,
           g_prefs.effects);
+  for (i = 0; i < FX_COUNT; i++)
+    {
+      fprintf(f, "fx %s %d\n", g_fx_names[i], (g_prefs.fx >> i) & 1);
+    }
+
   fprintf(f, "clock24 %d\nclockdate %d\nclocksecs %d\n",
           g_prefs.clock24, g_prefs.clockdate, g_prefs.clocksecs);
   fprintf(f, "dockicon %d\ndockpos %d\ndockhide %d\n",

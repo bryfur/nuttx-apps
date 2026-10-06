@@ -5,7 +5,7 @@
  *
  * The desktop's 3D effects, where the compositor shows windows in
  * perspective (NX_FX_QUAD: NX_CAP_QUAD, a v10 GPU) and Settings have them
- * on (g_prefs.effects):
+ * on (g_prefs.effects, and each of them in g_prefs.fx):
  *
  *   - a window being dragged swings with its velocity, like a card held
  *     by its title bar: it turns away on the side it moves from, its
@@ -89,6 +89,15 @@ struct sw_card_s
   float y[4];
   float xc[4];                     /* ... were, closing */
   float yc[4];
+};
+
+/****************************************************************************
+ * Public Data
+ ****************************************************************************/
+
+const char *const g_fx_names[FX_COUNT] =
+{
+  "open", "genie", "swing", "zoom", "flow"   /* FX_OPEN ... FX_FLOW */
 };
 
 /****************************************************************************
@@ -837,7 +846,7 @@ static void sw_open(uint8_t mods, bool back)
   g_desk.resize = NULL;
   g_sw.open    = true;
   g_sw.closing = false;
-  g_sw.flat    = !desk_fx_on();
+  g_sw.flat    = !desk_fx_on(FX_FLOW);
   g_sw.mods    = mods;
   g_sw.chosen  = NULL;
   g_sw.sel     = g_sw.n > 1 ? (back ? g_sw.n - 1 : 1) : 0;
@@ -995,14 +1004,23 @@ static bool sw_step(uint32_t now)
  * Public Functions
  ****************************************************************************/
 
-bool desk_fx_on(void)
+bool desk_fx_on(int fx)
 {
-  return g_desk.quad && g_prefs.effects;
+  return g_desk.quad && g_prefs.effects && (g_prefs.fx & fx) != 0;
 }
 
 void desk_fx_hold(int t)
 {
   g_hold = t < 0 ? 0 : t > 1000 ? 1000 : t;
+}
+
+/* Held: the step at which windows' fades (opening, closing, minimising,
+ * restoring: steps down to 0) stop, that far of the way; else 0
+ */
+
+int desk_fx_fadestop(int steps)
+{
+  return g_hold > 0 ? (steps + 1) * (1000 - g_hold) / 1000 : 0;
 }
 
 /* The quadrilateral an effect shows w as, if any (shadow: whether its
@@ -1013,11 +1031,6 @@ bool desk_fx_quad(struct desk_win_s *w, int16_t q[8], bool *shadow)
 {
   int i;
 
-  if (!desk_fx_on())
-    {
-      return false;
-    }
-
   if (g_sw.open && !g_sw.flat && (i = sw_find(w)) >= 0)
     {
       corners_to_quad(w, g_sw.card[i].x, g_sw.card[i].y, q);
@@ -1025,14 +1038,14 @@ bool desk_fx_quad(struct desk_win_s *w, int16_t q[8], bool *shadow)
       return true;
     }
 
-  if (w->fxzoom)
+  if (w->fxzoom && desk_fx_on(FX_ZOOM))
     {
       zoom_quad(w, zoom_t(w, desk_ms()), q);
       *shadow = true;
       return true;
     }
 
-  if (w->fxswing)
+  if (w->fxswing && desk_fx_on(FX_SWING))
     {
       swing_quad(w, q);
       *shadow = true;
@@ -1053,7 +1066,7 @@ bool desk_fx_shows(struct desk_win_s *w)
 
 void desk_fx_drag(struct desk_win_s *w, int how)
 {
-  if (!desk_fx_on())
+  if (!desk_fx_on(FX_SWING))
     {
       return;
     }
@@ -1095,7 +1108,7 @@ void desk_fx_drag(struct desk_win_s *w, int how)
 
 void desk_fx_zoom(struct desk_win_s *w, const struct nxgl_rect_s *from)
 {
-  if (!desk_fx_on() || desk_fx_shows(w))
+  if (!desk_fx_on(FX_ZOOM) || desk_fx_shows(w))
     {
       return;
     }

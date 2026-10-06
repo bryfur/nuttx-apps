@@ -400,6 +400,7 @@ struct desk_prefs_s
   uint8_t npinned;                 /* The dock's favourites, in order */
   uint8_t pinned[APP_COUNT];
   bool effects;                    /* 3D effects (where the GPU can) */
+  uint8_t fx;                      /* ... which of them (FX_*) */
 };
 
 /* The desktop */
@@ -605,6 +606,7 @@ void desk_win_effects(struct desk_win_s *w);  /* Its effects again, as its
 
 /* desk_fx.c: 3D effects (NX_FX_QUAD), where the GPU can and Settings have
  * them on: a dragged window swings, maximising zooms, Alt-Tab's switcher
+ * (opening, closing and the genie are win_effects()'s, desk_main.c)
  */
 
 enum
@@ -614,13 +616,29 @@ enum
   FX_DRAG_END
 };
 
-bool desk_fx_on(void);
+/* The effects, each a setting of its own (g_prefs.fx) under the master
+ * switch (g_prefs.effects); g_fx_names: their names in fpcdesk.conf
+ * ("fx NAME 0|1") and for deskctl, in the order of these bits
+ */
+
+#define FX_OPEN        0x01            /* Opening, closing: a tilt */
+#define FX_GENIE       0x02            /* Minimising, restoring: the dock */
+#define FX_SWING       0x04            /* A dragged window swings */
+#define FX_ZOOM        0x08            /* Maximising, restoring: a zoom */
+#define FX_FLOW        0x10            /* Alt-Tab: a cover flow */
+#define FX_COUNT       5
+#define FX_ALL         0x1f
+
+extern const char *const g_fx_names[FX_COUNT];
+
+bool desk_fx_on(int fx);                   /* Effect fx (FX_*) shows */
 bool desk_fx_quad(struct desk_win_s *w, int16_t q[8], bool *shadow);
 bool desk_fx_shows(struct desk_win_s *w);  /* In the switcher */
 void desk_fx_drag(struct desk_win_s *w, int how);
 void desk_fx_zoom(struct desk_win_s *w, const struct nxgl_rect_s *from);
 bool desk_fx_animate(void);                /* A frame: true while moving */
 void desk_fx_hold(int t);                  /* deskctl fx hold: permille */
+int  desk_fx_fadestop(int steps);          /* ... where fades stop, else 0 */
 bool desk_switch_key(const struct nx_key_s *k);
 bool desk_switch_mouse(int x, int y, bool press);
 bool desk_switch_open(void);
