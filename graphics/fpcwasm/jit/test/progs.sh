@@ -46,8 +46,11 @@ for c in "$here"/progs/*.c; do
 done
 for k in f s l d i c m t; do run kernels.c "$out/kernels.wasm" $k; done
 
-if [ -n "$CM" ] && [ -f "$CM/core_main.c" ]; then
-  port=$apps/devtools/xcc/bench/coremark
+port=$apps/devtools/xcc/bench/coremark
+if [ -z "$CM" ] || [ ! -f "$CM/core_main.c" ]; then
+  echo "progs: no CoreMark sources (CMSRC): CoreMark left out"
+  bad=1
+else
   $CC -I"$port" -I"$CM" -DITERATIONS=20 -DPERFORMANCE_RUN=1 \
       -DFLAGS_STR='"clang -O2"' "$CM"/core_list_join.c "$CM"/core_main.c \
       "$CM"/core_matrix.c "$CM"/core_state.c "$CM"/core_util.c \
@@ -67,6 +70,13 @@ if [ -n "$WCC" ] && [ -x "$WCC" ]; then
   done
   $WCC -o "$out/wkernels.wasm" "$here/progs/kernels.c" && \
     for k in f s l d i c m t; do run wcc-kernels "$out/wkernels.wasm" $k; done
+  if [ -n "$CM" ] && [ -f "$CM/core_main.c" ]; then
+    $WCC -I"$port" -I"$CM" -DITERATIONS=20 -DPERFORMANCE_RUN=1 \
+        -DCOMPILER_VERSION='"wcc"' "$CM"/core_list_join.c "$CM"/core_main.c \
+        "$CM"/core_matrix.c "$CM"/core_state.c "$CM"/core_util.c \
+        "$port/core_portme.c" -o "$out/wcoremark.wasm" && \
+      run wcc-coremark "$out/wcoremark.wasm"
+  fi
 fi
 
 echo "progs: $n runs, $([ $bad = 0 ] && echo "all the same" || echo "DIFFERENCES")"

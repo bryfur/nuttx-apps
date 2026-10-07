@@ -281,3 +281,71 @@
 )
 (assert_return (invoke "defassign" (i32.const 1)) (i32.const 14))
 (assert_return (invoke "defassign" (i32.const 0)) (i32.const 124))
+
+;; Bounds proofs at a loop's start: one coming in, of a local the loop
+;; writes, is assumed and checked at the branch back (here it does not
+;; hold there: compiled again without it, the second iteration's access
+;; traps); of a local the loop never writes, kept after the labels in it
+;; (a larger offset still checked)
+
+(module
+  (memory 1)
+  (func (export "lspec") (param $p i32) (param $n i32) (result i32)
+    (local $s i32)
+    (drop (i32.load (local.get $p)))
+    (loop $l
+      (local.set $s (i32.add (local.get $s) (i32.load (local.get $p))))
+      (local.set $p (i32.add (local.get $p) (i32.const 0x10000)))
+      (br_if $l (local.tee $n (i32.sub (local.get $n) (i32.const 1)))))
+    (local.get $s))
+  (func (export "lspec2") (param $p i32) (param $n i32) (result i32)
+    (local $s i32)
+    (drop (i32.load (local.get $p)))
+    (block $out
+      (loop $l
+        (local.set $s (i32.add (local.get $s) (i32.load (local.get $p))))
+        (local.set $p (i32.add (local.get $p) (i32.const 4)))
+        (drop (i32.load (local.get $p)))
+        (br_table $out $l $l (local.tee $n (i32.sub (local.get $n) (i32.const 1))))))
+    (local.get $s))
+  (func (export "linv") (param $p i32) (param $n i32) (result i32)
+    (local $s i32)
+    (drop (i32.load offset=8 (local.get $p)))
+    (loop $l
+      (if (i32.and (local.get $n) (i32.const 1))
+        (then (local.set $s (i32.add (local.get $s) (i32.const 1))))
+        (else (local.set $s (i32.add (local.get $s) (i32.const 2)))))
+      (local.set $s (i32.add (local.get $s) (i32.load offset=4 (local.get $p))))
+      (local.set $s (i32.add (local.get $s) (i32.load offset=100 (local.get $p))))
+      (br_if $l (local.tee $n (i32.sub (local.get $n) (i32.const 1)))))
+    (local.get $s))
+)
+(assert_return (invoke "lspec" (i32.const 0) (i32.const 1)) (i32.const 0))
+(assert_trap (invoke "lspec" (i32.const 0) (i32.const 2)) "out of bounds memory access")
+(assert_trap (invoke "lspec" (i32.const 65532) (i32.const 2)) "out of bounds memory access")
+(assert_return (invoke "lspec2" (i32.const 0) (i32.const 5)) (i32.const 0))
+(assert_trap (invoke "lspec2" (i32.const 65520) (i32.const 9)) "out of bounds memory access")
+(assert_return (invoke "linv" (i32.const 0) (i32.const 4)) (i32.const 6))
+(assert_return (invoke "linv" (i32.const 65400) (i32.const 3)) (i32.const 4))
+(assert_trap (invoke "linv" (i32.const 65480) (i32.const 3)) "out of bounds memory access")
+
+;; Shifted operands: a shift by a constant (or a multiplication by a power
+;; of two) into an add, sub, and, or, xor; a local after the shift; sub
+;; the other way round; a result only tested
+
+(module
+  (func (export "shop") (param $a i32) (param $x i32) (result i32)
+    (local $r i32)
+    (local.set $r (i32.add (local.get $a) (i32.shl (local.get $x) (i32.const 3))))
+    (local.set $r (i32.xor (local.get $r) (i32.sub (local.get $a) (i32.shr_s (local.get $x) (i32.const 2)))))
+    (local.set $r (i32.add (local.get $r) (i32.or (local.get $a) (i32.shr_u (local.get $x) (i32.const 31)))))
+    (local.set $r (i32.add (local.get $r) (i32.and (local.get $a) (i32.mul (i32.const 16) (local.get $x)))))
+    (local.set $r (i32.add (local.get $r) (i32.sub (i32.shl (local.get $x) (i32.const 1)) (local.get $a))))
+    (local.set $r (i32.add (local.get $r) (i32.add (i32.mul (local.get $x) (i32.const 4)) (local.get $a))))
+    (local.set $r (i32.add (local.get $r) (i32.shl (local.get $x) (i32.const 33))))
+    (if (i32.eqz (i32.sub (local.get $a) (i32.shl (local.get $x) (i32.const 1))))
+      (then (local.set $r (i32.add (local.get $r) (i32.const 1000)))))
+    (local.get $r))
+)
+(assert_return (invoke "shop" (i32.const 10) (i32.const 5)) (i32.const 1109))
+(assert_return (invoke "shop" (i32.const -7) (i32.const -123456)) (i32.const -3973271))

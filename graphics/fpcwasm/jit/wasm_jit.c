@@ -118,6 +118,21 @@ typedef struct ctrl_s
   int else_label;
   int8_t rreg;                    /* Its one i32 result's register, -1: its
                                    * results go through their slots */
+
+  /* A loop's bounds proofs at its start (as c->bc): of locals it never
+   * writes (inv: they hold all through it), of others (spec: assumed,
+   * checked at every branch back; compiled again without them when one
+   * does not hold there)
+   */
+
+  uint8_t ninv;
+  uint8_t nspec;
+  uint8_t ord;                    /* The loop's number in the function */
+  struct
+  {
+    int8_t reg;
+    uint32_t end;
+  } inv[4], spec[4];
 } ctrl_t;
 
 /* Labels and the branches waiting for them */
@@ -225,6 +240,8 @@ typedef struct jc_s
   int8_t *lreg2;                  /* An i64 local's high word's register */
   uint32_t *loff;
   uint32_t *lweight;
+  uint32_t *lkmax;                /* An i32 local only ever set to constants:
+                                   * the largest (unsigned), or UINT32_MAX */
   uint8_t *lfirst;                /* 0 untouched, 1 read (or set inside a
                                    * block) first, 2 set first at the top
                                    * level: no starting value needed */
@@ -278,6 +295,13 @@ typedef struct jc_s
   bool tbh_far;                   /* A br_table entry was out of reach */
   bool wide;                      /* 64-bit values: pairs of temporaries */
   bool regs_out;                  /* Out of registers: compiled again */
+  bool spec_out;                  /* A loop's assumed proof did not hold */
+  uint64_t nospec;                /* Loops (by number) assuming nothing */
+  uint32_t opno;                  /* Instructions compiled (numbering) */
+  uint32_t bound_at;              /* Where the last label was bound */
+  uint32_t mask_op;               /* The last i32.and of a constant: its */
+  uint32_t mask_k;                /* number and its constant */
+  uint32_t nloop;                 /* Loops so far (numbering them) */
   uint8_t loc_max;                /* Core registers for locals at most */
   int hint;                       /* local.set/tee follows: its local, or -1 */
   int shint;                      /* ... of an f32 local in an S register */
@@ -337,7 +361,16 @@ static const uint8_t g_alloc_order[] =
 };
 
 #define CALLER_SAVED  0x400f              /* r0-r3, lr */
-#define LOCAL_HOT     16                  /* A local's weight in a loop */
+#ifndef LOOP_SHIFT
+#  define LOOP_SHIFT  3                   /* A loop level weighs 1 << this */
+#endif
+#define LOOP_W(d)     (1u << (LOOP_SHIFT * (d)))
+#define LOCAL_HOT     (4 * LOOP_W(1))     /* A local's weight in a loop */
+#ifndef PIN_MIN
+#  define PIN_MIN     4                   /* A constant kept in a register:
+                                           * used more (5 times, once in a
+                                           * loop) */
+#endif
 #define CALLEE_TEMPS  0x01f0              /* r4-r8 */
 
 static uint32_t g_jit_bytes;               /* The compiler's memory now */
@@ -730,6 +763,80 @@ static void patch(jc_t *c, fixup_t *f, uint32_t target)
     }
 }
 
+/* Add a proof [reg, reg + end) to c->bc */
+
+static void bc_add(jc_t *c, int reg, uint32_t end)
+{
+  uint32_t i;
+
+  for (i = 0; i < c->nbc && c->bc[i].reg != reg; i++);
+  if (i == c->nbc && c->nbc < sizeof(c->bc) / sizeof(c->bc[0]))
+    {
+      c->bc[c->nbc].reg = (int8_t)reg;
+      c->bc[c->nbc].end = 0;
+      c->nbc++;
+    }
+
+  if (i < c->nbc && end > c->bc[i].end)
+    {
+      c->bc[i].end = end;
+    }
+}
+
+/* The proofs that hold all through the loops open here */
+
+static void bc_loops(jc_t *c)
+{
+  uint32_t i;
+  uint32_t k;
+
+  for (i = 0; i < c->csp; i++)
+    {
+      ctrl_t *ct = &c->cs[i];
+
+      if (ct->kind == CK_LOOP && !ct->dead)
+        {
+          for (k = 0; k < ct->ninv; k++)
+            {
+              bc_add(c, ct->inv[k].reg, ct->inv[k].end);
+            }
+        }
+    }
+}
+
+/* A branch back to a loop's start: does what it assumed hold here? */
+
+static void bc_back(jc_t *c, ctrl_t *ct)
+{
+  uint32_t k;
+  uint32_t i;
+
+  if (ct->kind != CK_LOOP)
+    {
+      return;
+    }
+
+  for (k = 0; k < ct->nspec; k++)
+    {
+      for (i = 0; i < c->nbc; i++)
+        {
+          if (c->bc[i].reg == ct->spec[k].reg &&
+              c->bc[i].end >= ct->spec[k].end)
+            {
+              break;
+            }
+        }
+
+      if (i == c->nbc)
+        {
+          c->nospec |= (uint64_t)1 << ct->ord;
+          c->spec_out = true;       /* (compiled again without them) */
+          fail(c, "a loop's assumed proof failed", 0);
+          return;
+        }
+    }
+}
+
 static void lbind(jc_t *c, int l)
 {
   label_t *lb = &c->labels[l];
@@ -738,7 +845,24 @@ static void lbind(jc_t *c, int l)
   c->nbc = 0;                   /* (other ways in: nothing proven) */
   c->kvalid = 0;                /* (nor known) */
   c->lvalid = 0;
+  bc_loops(c);                  /* (but what the loops around keep) */
+
+  /* A b.w just before, to here: left out (a label bound at it now means
+   * here, the same; not when one is bound after it, here: branches to
+   * that one are patched already)
+   */
+
+  if (lb->fix >= 0 && (uint32_t)lb->fix == c->nfix - 1 &&
+      c->bound_at != c->fb.len &&
+      c->fix[lb->fix].kind == F_B && c->fix[lb->fix].pos + 4 == c->fb.len)
+    {
+      c->fb.len -= 4;
+      lb->fix = c->fix[lb->fix].next;
+      c->nfix--;
+    }
+
   lb->pos = (int32_t)c->fb.len;
+  c->bound_at = c->fb.len;
   for (i = lb->fix; i >= 0; i = c->fix[i].next)
     {
       if (!c->fb.oom)
@@ -1469,6 +1593,25 @@ static int alloc_dest(jc_t *c)
   return alloc_core(c);
 }
 
+/* A 64-bit result's pair: the local's that a local.set or tee right after
+ * stores it in (as alloc_dest), or two temporaries
+ */
+
+static void alloc_dest64(jc_t *c, int *lo, int *hi)
+{
+  if (c->hint >= 0 && !c->hint_used && c->ltype[c->hint] == T_I64)
+    {
+      local_changing(c, (uint32_t)c->hint, false);
+      c->hint_used = true;
+      *lo = c->lreg[c->hint];
+      *hi = c->lreg2[c->hint];
+      return;
+    }
+
+  *lo = alloc_core(c);
+  *hi = alloc_core(c);
+}
+
 /* Whether the next instruction is a local.set or tee of a local in a core
  * register
  */
@@ -1505,7 +1648,8 @@ static const uint8_t *finish_hint(jc_t *c, const uint8_t *p)
       uint32_t l = rd_u32(&p);
       val_t v = pop(c);
 
-      if (v.kind != V_REG || v.r != c->lreg[l])
+      if (v.kind != V_REG || v.r != c->lreg[l] ||
+          (IS64(c->ltype[l]) && v.r2 != c->lreg2[l]))
         {
           fail(c, "hint", 0);
         }
@@ -2422,6 +2566,7 @@ static void op_br(jc_t *c, uint32_t depth)
     }
   else
     {
+      bc_back(c, ct);
       br_moves(c, ct);
       br_to(c, ct->label);
     }
@@ -2436,6 +2581,7 @@ static void br_cond(jc_t *c, uint32_t depth, int cond)
   ctrl_t *ct = ctrl_at(c, depth);
   int skip;
 
+  bc_back(c, ct);
   if (ct->kind != CK_FUNC && !br_needs_moves(c, ct))
     {
       bcc_to(c, cond, ct->label);
@@ -2837,21 +2983,7 @@ static void mem_addr(jc_t *c, val_t *addr, uint32_t offset, uint32_t size,
 proved:
   if (addr->kind == V_LOCAL && c->lkind[addr->local] == L_CORE)
     {
-      uint32_t end = offset + size;     /* (no wrap: k <= 2^32 - 1) */
-      uint32_t i;
-
-      for (i = 0; i < c->nbc && c->bc[i].reg != ra; i++);
-      if (i == c->nbc && c->nbc < sizeof(c->bc) / sizeof(c->bc[0]))
-        {
-          c->bc[c->nbc].reg = (int8_t)ra;
-          c->bc[c->nbc].end = 0;
-          c->nbc++;
-        }
-
-      if (i < c->nbc && end > c->bc[i].end)
-        {
-          c->bc[i].end = end;
-        }
+      bc_add(c, ra, offset + size);     /* (no wrap: k <= 2^32 - 1) */
     }
 }
 
@@ -3404,6 +3536,12 @@ static void op_i32_bin(jc_t *c, uint8_t op)
                   rd = alloc_dest(c);
                   t_dp_imm(&c->fb, dp, 0, rd, ra, enc);
                   push_reg(c, T_I32, rd, -1);
+                  if (op == WASM_OP_I32_AND)
+                    {
+                      c->mask_op = c->opno;
+                      c->mask_k  = k;
+                    }
+
                   return;
                 }
             }
@@ -3810,8 +3948,32 @@ static void op_i64_bin(jc_t *c, uint8_t op)
       if (b.kind == V_CONST && op <= WASM_OP_I64_SHR_U)
         {
           uint32_t k = (uint32_t)b.c & 63;
+          int dlo;
+          int dhi;
 
-          vreg64(c, &a, &alo, &ahi);
+          /* From a local's pair as it is, or a pair of its own; into the
+           * pair of the local set next, a new one, or the same
+           */
+
+          if (k != 0 && a.kind == V_LOCAL && c->lkind[a.local] == L_CORE)
+            {
+              alo = c->lreg[a.local];
+              ahi = c->lreg2[a.local];
+              alloc_dest64(c, &dlo, &dhi);
+            }
+          else
+            {
+              vreg64(c, &a, &alo, &ahi);
+              dlo = alo;
+              dhi = ahi;
+              if (k != 0 && c->hint >= 0 && !c->hint_used &&
+                  c->ltype[c->hint] == T_I64)
+                {
+                  alloc_dest64(c, &dlo, &dhi);
+                  free_val(c, &a);
+                }
+            }
+
           if (k == 0)
             {
             }
@@ -3819,22 +3981,22 @@ static void op_i64_bin(jc_t *c, uint8_t op)
             {
               if (k < 32)
                 {
-                  t_shi(&c->fb, SH_LSL, ahi, ahi, k);
-                  t_dp_reg(&c->fb, DP_ORR, 0, ahi, ahi, alo, SH_LSR, 32 - k);
-                  t_shi(&c->fb, SH_LSL, alo, alo, k);
+                  t_shi(&c->fb, SH_LSL, dhi, ahi, k);
+                  t_dp_reg(&c->fb, DP_ORR, 0, dhi, dhi, alo, SH_LSR, 32 - k);
+                  t_shi(&c->fb, SH_LSL, dlo, alo, k);
                 }
               else
                 {
                   if (k == 32)
                     {
-                      t_mov(&c->fb, ahi, alo);
+                      t_mov(&c->fb, dhi, alo);
                     }
                   else
                     {
-                      t_shi(&c->fb, SH_LSL, ahi, alo, k - 32);
+                      t_shi(&c->fb, SH_LSL, dhi, alo, k - 32);
                     }
 
-                  t_movi(&c->fb, alo, 0);
+                  t_movi(&c->fb, dlo, 0);
                 }
             }
           else
@@ -3843,33 +4005,33 @@ static void op_i64_bin(jc_t *c, uint8_t op)
 
               if (k < 32)
                 {
-                  t_shi(&c->fb, SH_LSR, alo, alo, k);
-                  t_dp_reg(&c->fb, DP_ORR, 0, alo, alo, ahi, SH_LSL, 32 - k);
-                  t_shi(&c->fb, s ? SH_ASR : SH_LSR, ahi, ahi, k);
+                  t_shi(&c->fb, SH_LSR, dlo, alo, k);
+                  t_dp_reg(&c->fb, DP_ORR, 0, dlo, dlo, ahi, SH_LSL, 32 - k);
+                  t_shi(&c->fb, s ? SH_ASR : SH_LSR, dhi, ahi, k);
                 }
               else
                 {
                   if (k == 32)
                     {
-                      t_mov(&c->fb, alo, ahi);
+                      t_mov(&c->fb, dlo, ahi);
                     }
                   else
                     {
-                      t_shi(&c->fb, s ? SH_ASR : SH_LSR, alo, ahi, k - 32);
+                      t_shi(&c->fb, s ? SH_ASR : SH_LSR, dlo, ahi, k - 32);
                     }
 
                   if (s)
                     {
-                      t_shi(&c->fb, SH_ASR, ahi, ahi, 31);
+                      t_shi(&c->fb, SH_ASR, dhi, ahi, 31);
                     }
                   else
                     {
-                      t_movi(&c->fb, ahi, 0);
+                      t_movi(&c->fb, dhi, 0);
                     }
                 }
             }
 
-          push_reg(c, T_I64, alo, ahi);
+          push_reg(c, T_I64, dlo, dhi);
           return;
         }
 
@@ -3918,6 +4080,7 @@ static void op_i64_bin(jc_t *c, uint8_t op)
     int ehi = -1;
     int dlo;
     int dhi;
+    bool aown = false;
     uint32_t avoid;
 
     if (ro)
@@ -3942,8 +4105,17 @@ static void op_i64_bin(jc_t *c, uint8_t op)
 
     if (ro)
       {
-        dlo = alloc_core(c);
-        dhi = alloc_core(c);
+        alloc_dest64(c, &dlo, &dhi);
+      }
+    else if (c->hint >= 0 && !c->hint_used && c->ltype[c->hint] == T_I64)
+      {
+        alloc_dest64(c, &dlo, &dhi);
+        a.kind = V_REG;                 /* (its pair freed below) */
+        a.type = T_I64;
+        a.r = (int8_t)alo;
+        a.r2 = (int8_t)ahi;
+        ro = false;
+        aown = true;
       }
     else
       {
@@ -4044,6 +4216,11 @@ static void op_i64_bin(jc_t *c, uint8_t op)
     if (b.kind == V_REG)
       {
         free_val(c, &b);
+      }
+
+    if (aown)
+      {
+        free_val(c, &a);
       }
 
     push_reg(c, T_I64, dlo, dhi);
@@ -4765,6 +4942,168 @@ static bool fuse_test(jc_t *c, uint8_t op, const uint8_t **pp)
   return true;
 }
 
+/* A shift by a constant (or a multiplication by a power of two) whose
+ * result an add, sub, and, or, xor takes next: one instruction with a
+ * shifted operand ("a; x; k; shl; add": add rd, ra, rx, lsl #k; "x; k;
+ * shl; local.get a; add" the same, with a local's register; sub the other
+ * way round is rsb).  An and, or, xor, sub whose result is only tested is
+ * left to fuse_test.
+ */
+
+static bool fuse_shift(jc_t *c, uint8_t op, const uint8_t **pp)
+{
+  const uint8_t *q = *pp;
+  val_t *vk;
+  val_t *vx;
+  uint32_t k;
+  int sh;
+  int la = -1;
+  uint8_t op2;
+  int dp;
+  val_t x;
+  val_t a;
+  int ra;
+  int rx;
+  int rd;
+
+  if (c->vsp < 2 || q >= c->code_end)
+    {
+      return false;
+    }
+
+  vk = peek(c, 0);
+  vx = peek(c, 1);
+  if (op == WASM_OP_I32_MUL && vx->kind == V_CONST && vk->kind != V_CONST)
+    {
+      vk = peek(c, 1);
+      vx = peek(c, 0);
+    }
+
+  if (vk->kind != V_CONST || vx->kind == V_CONST)
+    {
+      return false;
+    }
+
+  k = (uint32_t)vk->c;
+  if (op == WASM_OP_I32_MUL)
+    {
+      if (k < 2 || (k & (k - 1)) != 0)
+        {
+          return false;
+        }
+
+      k = (uint32_t)__builtin_ctz(k);
+      sh = SH_LSL;
+    }
+  else
+    {
+      k &= 31;
+      sh = op == WASM_OP_I32_SHL ? SH_LSL :
+           op == WASM_OP_I32_SHR_S ? SH_ASR : SH_LSR;
+    }
+
+  if (k == 0)
+    {
+      return false;
+    }
+
+  /* "x; k; shl; local.get a; op2" */
+
+  if (*q == WASM_OP_GET_LOCAL)
+    {
+      const uint8_t *r = q + 1;
+      uint32_t l = rd_u32(&r);
+
+      if (l >= c->nlocals || c->lkind[l] != L_CORE ||
+          c->ltype[l] != T_I32 || r >= c->code_end)
+        {
+          return false;
+        }
+
+      la = (int)l;
+      q = r;
+    }
+  else if (c->vsp < 3 || (peek(c, 2)->kind == V_CONST &&
+                          pinned(c, (uint32_t)peek(c, 2)->c, false) < 0))
+    {
+      return false;
+    }
+
+  op2 = *q;
+  switch (op2)
+    {
+      case WASM_OP_I32_ADD:
+        dp = DP_ADD;
+        break;
+
+      case WASM_OP_I32_SUB:
+        dp = la >= 0 ? DP_RSB : DP_SUB;
+        break;
+
+      case WASM_OP_I32_AND:
+        dp = DP_AND;
+        break;
+
+      case WASM_OP_I32_OR:
+        dp = DP_ORR;
+        break;
+
+      case WASM_OP_I32_XOR:
+        dp = DP_EOR;
+        break;
+
+      default:
+        return false;
+    }
+
+  q++;
+  if (op2 != WASM_OP_I32_ADD && q < c->code_end &&
+      (*q == WASM_OP_I32_EQZ || next_use(q) != 0))
+    {
+      return false;                     /* (fuse_test's: only tested) */
+    }
+
+  /* The operands: x (and its constant), then a */
+
+  if (peek(c, 0)->kind == V_CONST)
+    {
+      pop(c);
+      x = pop(c);
+    }
+  else
+    {
+      x = pop(c);
+      pop(c);
+    }
+
+  if (la >= 0)
+    {
+      a.kind = V_LOCAL;
+      a.type = T_I32;
+      a.local = (uint32_t)la;
+      ra = c->lreg[la];
+    }
+  else
+    {
+      a = pop(c);
+      ra = vreg(c, &a);
+    }
+
+  rx = vreg(c, &x);
+  free_val(c, &x);
+  if (la < 0)
+    {
+      free_val(c, &a);
+    }
+
+  set_hint(c, q);
+  rd = alloc_dest(c);
+  t_dp_reg(&c->fb, dp, 0, rd, ra, rx, sh, (int)k);
+  push_reg(c, T_I32, rd, -1);
+  *pp = q;
+  return true;
+}
+
 /****************************************************************************
  * Functions
  ****************************************************************************/
@@ -4795,7 +5134,26 @@ static void count_const(jc_t *c, uint32_t v, bool f32, uint32_t w)
       c->kc[c->nkc].w = w;
       c->kc[c->nkc].f32 = f32;
       c->nkc++;
+      return;
     }
+
+  /* Full: in place of the lightest, when lighter than this use */
+
+  {
+    uint32_t m = 0;
+
+    for (i = 1; i < c->nkc; i++)
+      {
+        m = c->kc[i].w < c->kc[m].w ? i : m;
+      }
+
+    if (c->kc[m].w < w)
+      {
+        c->kc[m].v = v;
+        c->kc[m].w = w;
+        c->kc[m].f32 = f32;
+      }
+  }
 }
 
 /* A constant's register, or -1 */
@@ -5124,20 +5482,116 @@ static void defassign(jc_t *c)
   jit_free(pool);
 }
 
-static bool prescan(jc_t *c)
+/* Where each loop's last back edge ends (the first PS_LOOPS loops, in the
+ * order they open; code offsets): the code after it in the loop's body
+ * runs once as the loop is left, not at every iteration (wcc's loops end
+ * with a br_if back and the code after the loop still inside them)
+ */
+
+#define PS_LOOPS     128
+#define PS_DEPTH     64
+
+static void loop_tails(jc_t *c, uint32_t *lastback)
 {
   const uint8_t *p = c->code;
-  uint8_t loops[64];
+  int32_t ids[PS_DEPTH];          /* Each open construct: its loop or -1 */
   uint32_t depth = 0;
-  uint32_t ld = 0;
-  uint8_t prev = WASM_OP_NOP;
-  bool helpers = false;
+  uint32_t nloops = 0;
 
   while (p < c->code_end)
     {
       uint8_t op = *p++;
       const uint8_t *q = p;
-      uint32_t w = 1u << (2 * (ld < 5 ? ld : 5));
+
+      if (op == WASM_OP_BLOCK || op == WASM_OP_LOOP || op == WASM_OP_IF)
+        {
+          int32_t id = -1;
+
+          if (op == WASM_OP_LOOP && nloops < PS_LOOPS)
+            {
+              id = (int32_t)nloops;
+              lastback[nloops++] = 0;
+            }
+          else if (op == WASM_OP_LOOP)
+            {
+              nloops++;
+            }
+
+          if (depth < PS_DEPTH)
+            {
+              ids[depth] = id;
+            }
+
+          depth++;
+        }
+      else if (op == WASM_OP_END && depth > 0)
+        {
+          depth--;
+        }
+
+      if (!skip_imm(op, &p))
+        {
+          return;                   /* (prescan says so) */
+        }
+
+      if (op == WASM_OP_BR || op == WASM_OP_BR_IF || op == WASM_OP_BR_TABLE)
+        {
+          uint32_t n = op == WASM_OP_BR_TABLE ? rd_u32(&q) + 1 : 1;
+
+          while (n-- > 0)
+            {
+              uint32_t d = rd_u32(&q);
+
+              if (d < depth && depth - 1 - d < PS_DEPTH &&
+                  ids[depth - 1 - d] >= 0)
+                {
+                  lastback[ids[depth - 1 - d]] = (uint32_t)(p - c->code);
+                }
+            }
+        }
+    }
+}
+
+static bool prescan(jc_t *c)
+{
+  const uint8_t *p = c->code;
+  uint32_t i0;
+  uint32_t lastback[PS_LOOPS];
+  int32_t open[PS_DEPTH];         /* Each open construct: its loop or -1 */
+  uint32_t depth = 0;
+  uint32_t nloops = 0;
+  uint8_t prev = WASM_OP_NOP;
+  uint32_t prevk = 0;             /* prev an i32.const: its value */
+  bool helpers = false;
+
+  for (i0 = 0; i0 < c->nlocals; i0++)
+    {
+      c->lkmax[i0] = i0 < c->nparams || c->ltype[i0] != T_I32 ?
+                     UINT32_MAX : 0;
+    }
+
+  loop_tails(c, lastback);
+  while (p < c->code_end)
+    {
+      uint8_t op = *p++;
+      const uint8_t *q = p;
+      uint32_t off = (uint32_t)(p - 1 - c->code);
+      uint8_t before;
+      uint32_t beforek;
+      uint32_t ld = 0;
+      uint32_t w;
+      uint32_t i;
+
+      /* The loops this instruction repeats with: those open, before
+       * their last back edge (a loop past PS_LOOPS: all of it)
+       */
+
+      for (i = 0; i < depth && i < PS_DEPTH; i++)
+        {
+          ld += open[i] == -2 || (open[i] >= 0 && off < lastback[open[i]]);
+        }
+
+      w = 1u << (LOOP_SHIFT * (ld < 5 ? ld : 5));
 
       if (calls_helper(op, p, prev))
         {
@@ -5160,25 +5614,30 @@ static bool prescan(jc_t *c)
           c->wide = true;
         }
 
+      before = prev;
+      beforek = prevk;
       prev = op;
+      if (op == WASM_OP_I32_CONST)
+        {
+          const uint8_t *r = p;
+
+          prevk = (uint32_t)rd_s64(&r, 32);
+        }
 
       if (op == WASM_OP_BLOCK || op == WASM_OP_LOOP || op == WASM_OP_IF)
         {
-          if (depth < sizeof(loops))
+          if (depth < PS_DEPTH)
             {
-              loops[depth] = op == WASM_OP_LOOP;
+              open[depth] = op != WASM_OP_LOOP ? -1 :
+                            nloops < PS_LOOPS ? (int32_t)nloops : -2;
             }
 
+          nloops += op == WASM_OP_LOOP;
           depth++;
-          ld += op == WASM_OP_LOOP;
         }
       else if (op == WASM_OP_END && depth > 0)
         {
           depth--;
-          if (depth < sizeof(loops) && loops[depth])
-            {
-              ld--;
-            }
         }
       else if (op == WASM_OP_GET_LOCAL || op == WASM_OP_SET_LOCAL ||
                op == WASM_OP_TEE_LOCAL)
@@ -5187,10 +5646,21 @@ static bool prescan(jc_t *c)
 
           if (l < c->nlocals)
             {
-              c->lweight[l] += w;
+              c->lweight[l] = c->lweight[l] + w < c->lweight[l] ?
+                              UINT32_MAX : c->lweight[l] + w;
+              if (op != WASM_OP_GET_LOCAL && c->lkmax[l] != UINT32_MAX)
+                {
+                  c->lkmax[l] = before != WASM_OP_I32_CONST ? UINT32_MAX :
+                                beforek > c->lkmax[l] ? beforek :
+                                c->lkmax[l];
+                  if (c->lkmax[l] == UINT32_MAX - 1)
+                    {
+                      c->lkmax[l] = UINT32_MAX;
+                    }
+                }
             }
         }
-      else if (ld > 0 && (op == WASM_OP_I32_CONST || op == WASM_OP_F32_CONST))
+      else if (op == WASM_OP_I32_CONST || op == WASM_OP_F32_CONST)
         {
           uint32_t v = op == WASM_OP_I32_CONST ? (uint32_t)rd_s64(&q, 32) :
                        rd_le32(&q);
@@ -5309,7 +5779,10 @@ static void assign_locals(jc_t *c)
   int ncr = c->leaf ? 9 : 5;
   int nsr = c->leaf ? 24 : 16;
   uint32_t taken = 0;           /* Core registers of locals, constants */
-  uint32_t reserved = 0;        /* ... and parameters' until the prologue */
+  uint32_t reserved = 0;        /* (none now: the prologue's moves are
+                                 * parallel) */
+  uint32_t pend = 0;            /* Arrival registers of parameters used */
+  int8_t parw[4];               /* A leaf's parameters' first words */
   uint32_t staken = 0;
   uint32_t ncore = 0;
   uint32_t lim5 = c->loc_max < 5 ? c->loc_max : 5;
@@ -5322,34 +5795,19 @@ static void assign_locals(jc_t *c)
       c->lkind[i] = L_FRAME;
     }
 
-  /* A leaf's parameters where they come */
+  /* A leaf's parameters' arrival registers (r0-r3): a parameter in a
+   * register takes its own when it is free; another local takes one of a
+   * parameter still waiting only when no other register is left
+   */
 
-  for (i = 0; c->leaf && i < c->nparams; i++)
+  for (i = 0; c->leaf && i < c->nparams && i < 4; i++)
     {
       int ty = c->ltype[i];
 
-      if (c->lweight[i] > 0 && ty == T_I32 && w < 4 && ncore < lim5)
+      parw[i] = (int8_t)(w < 4 ? w : -1);
+      if (c->lweight[i] > 0 && w < 4 && (ty == T_I32 || ty == T_I64))
         {
-          c->lkind[i] = L_CORE;
-          c->lreg[i] = (int8_t)w;
-          taken |= 1u << w;
-          ncore++;
-        }
-      else if (c->lweight[i] > 0 && ty == T_I64 && w + 1 < 4 &&
-               ncore + 1 < lim5)
-        {
-          c->lkind[i] = L_CORE;
-          c->lreg[i] = (int8_t)w;
-          c->lreg2[i] = (int8_t)(w + 1);
-          taken |= 3u << w;
-          ncore += 2;
-        }
-      else if (c->lweight[i] > 0)
-        {
-          /* (its registers hold it until the prologue has moved it) */
-
-          reserved |= (w < 4 ? 1u << w : 0) |
-                      (IS64(ty) && w + 1 < 4 ? 1u << (w + 1) : 0);
+          pend |= (IS64(ty) && w + 1 < 4 ? 3u : 1u) << w;
         }
 
       w += TWORDS(ty);
@@ -5402,12 +5860,43 @@ static void assign_locals(jc_t *c)
         }
       else
         {
-          int r = free_reg(cr, ncr, taken | reserved);
+          int r = -1;
           int r2 = -1;
 
-          if (r >= 0 && c->ltype[bi] == T_I64)
+          if (c->leaf && (uint32_t)bi < c->nparams && bi < 4 && parw[bi] >= 0)
             {
-              r2 = free_reg(cr, ncr, taken | reserved | 1u << r);
+              int a = parw[bi];
+              uint32_t m = (c->ltype[bi] == T_I64 ? 3u : 1u) << a;
+
+              if (c->ltype[bi] == T_I32 && !(taken & m))
+                {
+                  r = a;
+                }
+              else if (c->ltype[bi] == T_I64 && a + 1 < 4 && !(taken & m))
+                {
+                  r = a;
+                  r2 = a + 1;
+                }
+
+              pend &= ~((c->ltype[bi] == T_I64 ? 3u : 1u) << a);
+            }
+
+          if (r < 0)
+            {
+              r = free_reg(cr, ncr, taken | reserved | pend);
+              if (r < 0)
+                {
+                  r = free_reg(cr, ncr, taken | reserved);
+                }
+
+              if (r >= 0 && c->ltype[bi] == T_I64)
+                {
+                  r2 = free_reg(cr, ncr, taken | reserved | pend | 1u << r);
+                  if (r2 < 0)
+                    {
+                      r2 = free_reg(cr, ncr, taken | reserved | 1u << r);
+                    }
+                }
             }
 
           if (r < 0 && !c->leaf && c->ltype[bi] == T_I32 &&
@@ -5452,7 +5941,7 @@ static void assign_locals(jc_t *c)
   c->npin = 0;
   for (;;)
     {
-      uint32_t best = 7;
+      uint32_t best = PIN_MIN;
       int bi = -1;
       int r;
 
@@ -5543,6 +6032,27 @@ static void assign_locals(jc_t *c)
 
   /* The temporaries: what no local or constant holds */
 
+#ifndef __NuttX__
+  if (getenv("WASM_JIT_LOCALS") != NULL &&
+      (uint32_t)atoi(getenv("WASM_JIT_LOCALS")) ==
+      c->mod->import_function_count + c->fidx)
+    {
+      fprintf(stderr, "f%u leaf %d loc_max %u callw %u:",
+              c->mod->import_function_count + c->fidx, c->leaf,
+              c->loc_max, c->callw);
+      for (i = 0; i < c->nlocals; i++)
+        {
+          fprintf(stderr, " %u:%u%s%d", i, c->lweight[i],
+                  c->lkind[i] == L_CORE ? "r" :
+                  c->lkind[i] == L_SREG ? "s" : "-",
+                  c->lkind[i] == L_CORE || c->lkind[i] == L_SREG ?
+                  c->lreg[i] : 0);
+        }
+
+      fprintf(stderr, "\n");
+    }
+#endif
+
   c->ctemp = (CALLER_SAVED | CALLEE_TEMPS) & ~taken;
   c->cfree = c->ctemp;
   c->stemp = 0xffffu & ~staken;
@@ -5595,8 +6105,95 @@ static uint32_t emit_prologue(jc_t *c, uint32_t push)
         }
     }
 
-  /* The parameters to their homes */
+  /* The parameters to their homes: those in r0-r3 going to the frame or
+   * an S register first, then those going to core registers (a parallel
+   * move: a leaf's parameters may trade registers), then those on the
+   * stack
+   */
 
+  {
+    int8_t mdst[4];
+    int8_t msrc[4];
+    int nm = 0;
+
+    for (i = 0; i < c->nparams; i++)
+      {
+        int ty = c->ltype[i];
+        uint32_t k;
+
+        for (k = 0; k < (uint32_t)TWORDS(ty); k++, w++)
+          {
+            if (w >= 4 || c->lkind[i] == L_NONE)
+              {
+                continue;
+              }
+
+            if (c->lkind[i] == L_CORE)
+              {
+                int dst = k ? c->lreg2[i] : c->lreg[i];
+
+                if (dst != (int)(R0 + w))
+                  {
+                    mdst[nm] = (int8_t)dst;
+                    msrc[nm++] = (int8_t)(R0 + w);
+                  }
+              }
+            else if (c->lkind[i] == L_SREG)
+              {
+                t_vmov_sr(b, c->lreg[i], R0 + w);
+              }
+            else
+              {
+                t_ldst(b, LS_STR, R0 + w, R_SP, c->loff[i] + 4 * k);
+              }
+          }
+      }
+
+    while (nm > 0)
+      {
+        int j;
+        int m;
+        bool moved = false;
+
+        for (j = 0; j < nm; j++)
+          {
+            bool busy = false;
+
+            for (m = 0; m < nm; m++)
+              {
+                busy = busy || (m != j && msrc[m] == mdst[j]);
+              }
+
+            if (!busy)
+              {
+                t_mov(b, mdst[j], msrc[j]);
+                mdst[j] = mdst[nm - 1];
+                msrc[j] = msrc[nm - 1];
+                nm--;
+                moved = true;
+                break;
+              }
+          }
+
+        if (!moved)
+          {
+            /* A cycle: its first source to ip, read from there */
+
+            int s0 = msrc[0];
+
+            t_mov(b, R_IP, s0);
+            for (m = 0; m < nm; m++)
+              {
+                if (msrc[m] == s0)
+                  {
+                    msrc[m] = R_IP;
+                  }
+              }
+          }
+      }
+  }
+
+  w = 0;
   for (i = 0; i < c->nparams; i++)
     {
       int ty = c->ltype[i];
@@ -5604,9 +6201,9 @@ static uint32_t emit_prologue(jc_t *c, uint32_t push)
 
       for (k = 0; k < (uint32_t)TWORDS(ty); k++, w++)
         {
-          int src = w < 4 ? (int)(R0 + w) : -1;
+          int src = -1;
 
-          if (c->lkind[i] == L_NONE)
+          if (w < 4 || c->lkind[i] == L_NONE)
             {
               continue;
             }
@@ -5615,14 +6212,7 @@ static uint32_t emit_prologue(jc_t *c, uint32_t push)
             {
               int dst = k ? c->lreg2[i] : c->lreg[i];
 
-              if (src >= 0)
-                {
-                  t_mov(b, dst, src);
-                }
-              else
-                {
-                  t_ldst(b, LS_LDR, dst, R_SP, in_base + 4 * (w - 4));
-                }
+              t_ldst(b, LS_LDR, dst, R_SP, in_base + 4 * (w - 4));
             }
           else if (c->lkind[i] == L_SREG)
             {
@@ -6077,9 +6667,19 @@ static void op_br_table(jc_t *c, const uint8_t **pp)
         }
     }
 
+  /* The index's range check, unless it is never out of the table: a
+   * local only ever set to constants within it, an and with a mask
+   * within it just before
+   */
+
   dflt = frag[n] < 0 ? -1 - frag[n] : frag[n];
-  cmp_imm(c, ri, n);
-  bcc_to(c, CC_HS, dflt);
+  if (!(vi.kind == V_LOCAL && c->lkmax[vi.local] < n) &&
+      !(vi.kind == V_REG && c->mask_op + 1 == c->opno && c->mask_k < n))
+    {
+      cmp_imm(c, ri, n);
+      bcc_to(c, CC_HS, dflt);
+    }
+
   free_val(c, &vi);
 
   /* tbh [pc, ri, lsl #1] and the table */
@@ -6266,6 +6866,101 @@ static void op_else(jc_t *c)
  * either instruction whole
  */
 
+/* A loop's proofs at its start (p: its body): those coming in, of the
+ * locals in core registers; kept where the loop never writes the local,
+ * assumed where it does (and its number allows)
+ */
+
+static void loop_proofs(jc_t *c, ctrl_t *ct, const uint8_t *p)
+{
+  int32_t lof[4];
+  uint32_t written = 0;
+  uint32_t depth = 1;
+  uint32_t i;
+  uint32_t l;
+
+  ct->ord = c->nloop < 64 ? (uint8_t)c->nloop : 64;
+  c->nloop++;
+  if (c->nbc == 0)
+    {
+      return;
+    }
+
+  for (i = 0; i < c->nbc; i++)
+    {
+      lof[i] = -1;
+      for (l = 0; l < c->nlocals; l++)
+        {
+          if (c->lkind[l] == L_CORE && c->ltype[l] == T_I32 &&
+              c->lreg[l] == c->bc[i].reg)
+            {
+              lof[i] = (int32_t)l;
+            }
+        }
+    }
+
+  /* Which of them the loop writes */
+
+  while (p < c->code_end && depth > 0)
+    {
+      uint8_t op = *p++;
+      const uint8_t *q = p;
+
+      if (op == WASM_OP_BLOCK || op == WASM_OP_LOOP || op == WASM_OP_IF)
+        {
+          depth++;
+        }
+      else if (op == WASM_OP_END)
+        {
+          depth--;
+        }
+      else if (op == WASM_OP_SET_LOCAL || op == WASM_OP_TEE_LOCAL)
+        {
+          l = rd_u32(&q);
+          for (i = 0; i < c->nbc; i++)
+            {
+              written |= (uint32_t)(lof[i] == (int32_t)l) << i;
+            }
+        }
+
+      if (!skip_imm(op, &p))
+        {
+          return;
+        }
+    }
+
+  for (i = 0; i < c->nbc; i++)
+    {
+      if (lof[i] < 0)
+        {
+          continue;
+        }
+
+      if (!(written & (1u << i)))
+        {
+          ct->inv[ct->ninv].reg = c->bc[i].reg;
+          ct->inv[ct->ninv++].end = c->bc[i].end;
+        }
+      else if (ct->ord < 64 && !(c->nospec & ((uint64_t)1 << ct->ord)))
+        {
+          ct->spec[ct->nspec].reg = c->bc[i].reg;
+          ct->spec[ct->nspec++].end = c->bc[i].end;
+        }
+    }
+}
+
+/* lbind() then keeps the invariant ones: the assumed ones back too */
+
+static void loop_specs(jc_t *c, ctrl_t *ct)
+{
+  uint32_t k;
+
+  for (k = 0; k < ct->nspec; k++)
+    {
+      bc_add(c, ct->spec[k].reg, ct->spec[k].end);
+    }
+}
+
 static void loop_head(jc_t *c)
 {
   if (!GROW(c, c->lheads, c->nlheads, c->lhcap))
@@ -6298,6 +6993,8 @@ static void compile_body(jc_t *c)
     {
       uint8_t op = *p++;
       ctrl_t *top = &c->cs[c->csp - 1];
+
+      c->opno++;
       val_t a;
       uint32_t x;
       uint32_t y;
@@ -6342,7 +7039,10 @@ static void compile_body(jc_t *c)
           (op >= WASM_OP_I32_CLZ && op <= WASM_OP_I32_ROTR) ||
           op == WASM_OP_I32_EXTEND8_S || op == WASM_OP_I32_EXTEND16_S ||
           (op >= WASM_OP_F32_ABS && op <= WASM_OP_F32_DIV) ||
-          op == WASM_OP_F32_CONVERT_S_I32 || op == WASM_OP_F32_CONVERT_U_I32)
+          op == WASM_OP_F32_CONVERT_S_I32 || op == WASM_OP_F32_CONVERT_U_I32 ||
+          (op >= WASM_OP_I64_ADD && op <= WASM_OP_I64_SHR_U &&
+           op != WASM_OP_I64_DIV_S && op != WASM_OP_I64_DIV_U &&
+           op != WASM_OP_I64_REM_S && op != WASM_OP_I64_REM_U))
         {
           set_hint(c, p);
         }
@@ -6376,7 +7076,9 @@ static void compile_body(jc_t *c)
                 e16(&c->fb, 0xbf00);          /* (the loop's start aligned) */
               }
 
+            loop_proofs(c, ct, p);
             lbind(c, ct->label);
+            loop_specs(c, ct);
             loop_head(c);
             break;
 
@@ -6714,7 +7416,10 @@ static void compile_body(jc_t *c)
               {
                 if (!((op == WASM_OP_I32_AND || op == WASM_OP_I32_OR ||
                        op == WASM_OP_I32_XOR || op == WASM_OP_I32_SUB) &&
-                      fuse_test(c, op, &p)))
+                      fuse_test(c, op, &p)) &&
+                    !((op == WASM_OP_I32_SHL || op == WASM_OP_I32_SHR_S ||
+                       op == WASM_OP_I32_SHR_U || op == WASM_OP_I32_MUL) &&
+                      fuse_shift(c, op, &p)))
                   {
                     op_i32_bin(c, op);
                   }
@@ -6937,7 +7642,9 @@ static bool compile_function1(jc_t *c, uint32_t fidx)
   jit_free(c->lreg2);
   jit_free(c->loff);
   jit_free(c->lweight);
+  jit_free(c->lkmax);
   jit_free(c->lfirst);
+  c->lkmax   = jit_zalloc(n * sizeof(uint32_t));
   c->lfirst  = jit_zalloc(n);
   c->lreg2   = jit_zalloc(n);
   c->ltype   = jit_zalloc(n);
@@ -6947,7 +7654,8 @@ static bool compile_function1(jc_t *c, uint32_t fidx)
   c->lweight = jit_zalloc(n * sizeof(uint32_t));
   if (c->ltype == NULL || c->lkind == NULL || c->lreg == NULL ||
       c->lreg2 == NULL ||
-      c->loff == NULL || c->lweight == NULL || c->lfirst == NULL)
+      c->loff == NULL || c->lweight == NULL || c->lfirst == NULL ||
+      c->lkmax == NULL)
     {
       fail(c, "out of memory", 0);
       return false;
@@ -7001,6 +7709,8 @@ static bool compile_function1(jc_t *c, uint32_t fidx)
   c->ncold = 0;
   c->nlheads = 0;
   c->nbc = 0;
+  c->nloop = 0;
+  c->bound_at = UINT32_MAX;
   c->kvalid = 0;
   c->lvalid = 0;
   c->cused = 0;
@@ -7088,18 +7798,23 @@ static bool compile_function1(jc_t *c, uint32_t fidx)
 
 static bool compile_function(jc_t *c, uint32_t fidx)
 {
+  uint32_t specs = 0;
+
   c->tbh_near = false;
   c->loc_max  = 7;
+  c->nospec   = 0;
   for (; ; )
     {
       c->tbh_far  = false;
       c->regs_out = false;
+      c->spec_out = false;
       if (compile_function1(c, fidx))
         {
           return true;
         }
 
-      if (c->fb.oom || c->mb.oom || (!c->tbh_far && !c->regs_out) ||
+      if (c->fb.oom || c->mb.oom ||
+          (!c->tbh_far && !c->regs_out && !c->spec_out) ||
           (c->regs_out && c->loc_max <= 3))
         {
           return false;
@@ -7111,6 +7826,20 @@ static bool compile_function(jc_t *c, uint32_t fidx)
 
       c->failed   = false;
       c->tbh_near = c->tbh_near || c->tbh_far;
+#ifndef __NuttX__
+      if (c->spec_out && getenv("WASM_JIT_SPECLOG") != NULL)
+        {
+          fprintf(stderr, "f%u: loop proofs again (%llx)\n",
+                  fidx + c->mod->import_function_count,
+                  (unsigned long long)c->nospec);
+        }
+#endif
+
+      if (c->spec_out && ++specs >= 3)
+        {
+          c->nospec = ~(uint64_t)0;     /* (no more tries) */
+        }
+
       if (c->regs_out)
         {
           c->loc_max -= 2;
@@ -7442,6 +8171,7 @@ static void jc_free(jc_t *c)
   jit_free(c->lreg2);
   jit_free(c->loff);
   jit_free(c->lweight);
+  jit_free(c->lkmax);
   jit_free(c->lfirst);
   jit_free(c->vs);
   jit_free(c->cs);

@@ -172,8 +172,9 @@ fuzz: $(OUT)/jitrun
 WAT2WASM ?= $(TOOLS)/wabt-1.0.42/bin/wat2wasm
 WASI_SDK ?= $(HOME)/tools/wasm/wasi-sdk-34.0-x86_64-linux
 WCC      ?= $(HOME)/fpcwork/xcc/hroot/wcc
-CMSRC    ?= $(firstword $(wildcard $(CURDIR)/../../../../benchmarks/coremark/coremark) \
-                        $(HOME)/fpcwork/wasmbench/coremark-main)
+CMSRC    ?= $(firstword $(wildcard $(CURDIR)/../../../../benchmarks/coremark/coremark \
+                        $(HOME)/fpcwork/wasmbench/coremark-main \
+                        $(HOME)/fpcwork/wopt/coremark))
 
 progs: $(OUT)/jitrun
 	CC="$(WASI_SDK)/bin/clang --target=wasm32-wasip1 --sysroot=$(WASI_SDK)/share/wasi-sysroot -O2" \
