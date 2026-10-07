@@ -361,6 +361,164 @@ static void t_thread(void)
   out("counts", counts[0] + 10 * counts[1] + 100 * counts[2] + 1000 * counts[3]);
 }
 
+/* CoreMark's state machine: a token per call, the first state known
+ * (jump threading's paths from before the loop: into it at its header
+ * only, for wcc's structured control flow) */
+
+enum cst { CS_START, CS_INVALID, CS_S1, CS_S2, CS_INT, CS_FLOAT, CS_EXP, CS_SCI };
+
+static int isdig2(uint8_t c)
+{
+  return (c >= '0') & (c <= '9');
+}
+
+static enum cst transition(const uint8_t **instr, uint32_t *tc)
+{
+  const uint8_t *str = *instr;
+  uint8_t c;
+  enum cst state = CS_START;
+  for (; *str && state != CS_INVALID; str++)
+    {
+      c = *str;
+      if (c == ',')
+        {
+          str++;
+          break;
+        }
+      switch (state)
+        {
+        case CS_START:
+          if (isdig2(c))
+            state = CS_INT;
+          else if (c == '+' || c == '-')
+            state = CS_S1;
+          else if (c == '.')
+            state = CS_FLOAT;
+          else
+            {
+              state = CS_INVALID;
+              tc[CS_INVALID]++;
+            }
+          tc[CS_START]++;
+          break;
+        case CS_S1:
+          if (isdig2(c))
+            {
+              state = CS_INT;
+              tc[CS_S1]++;
+            }
+          else if (c == '.')
+            {
+              state = CS_FLOAT;
+              tc[CS_S1]++;
+            }
+          else
+            {
+              state = CS_INVALID;
+              tc[CS_S1]++;
+            }
+          break;
+        case CS_INT:
+          if (c == '.')
+            {
+              state = CS_FLOAT;
+              tc[CS_INT]++;
+            }
+          else if (!isdig2(c))
+            {
+              state = CS_INVALID;
+              tc[CS_INT]++;
+            }
+          break;
+        case CS_FLOAT:
+          if (c == 'E' || c == 'e')
+            {
+              state = CS_S2;
+              tc[CS_FLOAT]++;
+            }
+          else if (!isdig2(c))
+            {
+              state = CS_INVALID;
+              tc[CS_FLOAT]++;
+            }
+          break;
+        case CS_S2:
+          if (c == '+' || c == '-')
+            {
+              state = CS_EXP;
+              tc[CS_S2]++;
+            }
+          else
+            {
+              state = CS_INVALID;
+              tc[CS_S2]++;
+            }
+          break;
+        case CS_EXP:
+          if (isdig2(c))
+            {
+              state = CS_SCI;
+              tc[CS_EXP]++;
+            }
+          else
+            {
+              state = CS_INVALID;
+              tc[CS_EXP]++;
+            }
+          break;
+        case CS_SCI:
+          if (!isdig2(c))
+            {
+              state = CS_INVALID;
+              tc[CS_INVALID]++;
+            }
+          break;
+        default:
+          break;
+        }
+    }
+  *instr = str;
+  return state;
+}
+
+/* A switch whose cases fall into each other in their order (not sorted) */
+
+static int fallsw(int x)
+{
+  int r = 0;
+  switch (x)
+    {
+    case 5:
+      r += 1;
+    case 1:
+      r += 10;
+    case 3:
+      r += 100;
+      break;
+    case 0:
+      r += 1000;
+    default:
+      r += 10000;
+    }
+  return r;
+}
+
+static void t_state(void)
+{
+  static const char *in =
+    "5012,1234,-874,+122,35.54400,.1234500,-110.700,+0.64400,5.500e+3,-.123e-2,"
+    "-87e+832,+0.6e-12,T0.3e-1F,-T.T++Tq,1T3.4e4z,34.0e-T^,,1,2,,3,abc,+5,-.e,99.5E1,";
+  uint32_t tc[8] = {0, 0, 0, 0, 0, 0, 0, 0}, fin[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  const uint8_t *p = (const uint8_t *)in;
+  while (*p != 0)
+    fin[transition(&p, tc)]++;
+  uint32_t s = 0;
+  for (int i = 0; i < 8; i++)
+    s = s * 13 + tc[i] * 3 + fin[i];
+  out("state", s);
+  out("fallsw", fallsw(0) + fallsw(1) * 3 + fallsw(3) * 5 + fallsw(5) * 7 + fallsw(9) * 11);
+}
+
 /* Loads known again in a block and the blocks after it (not across a
  * store, a call, or a change of the address); base + offset used twice */
 
@@ -722,6 +880,7 @@ int main(int argc, char *argv[])
   t_inline();
   t_conds();
   t_thread();
+  t_state();
   t_loads();
   t_fuse();
   t_shift();

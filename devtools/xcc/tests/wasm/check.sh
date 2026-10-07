@@ -57,5 +57,19 @@ $W/wcc.sh -o $W/opt.wasm $X/tests/opt.c && $WASM_RUN $W/opt.wasm > $W/opt.wasm.t
 if cmp -s $W/opt.host.txt $W/opt.wasm.txt; then echo "opt.c: same ($(wc -l < $W/opt.host.txt) lines)"
 else echo "opt.c: DIFFERENT"; diff $W/opt.host.txt $W/opt.wasm.txt | head; fi
 
+# Which functions went through the IR (all of opt.c's should: no fallback
+# from the emitter, e.g. an irreducible graph)
+WCC_IRLIST=1 $W/wcc.sh -c -o $W/opt.o $X/tests/opt.c 2> $W/irlist.txt
+echo "opt.c: $(grep -c ': ok' $W/irlist.txt) functions through the IR, $(grep -c ': no' $W/irlist.txt) given back to wcc's own code generator"
+
+# Every function through the IR and the optimiser, then wcc's own code
+# generator after all (WCC_IRFAIL): what the first leaves of the tree
+WCC_IRFAIL=1 $W/wcc.sh -o $W/opt2.wasm $X/tests/opt.c && $WASM_RUN $W/opt2.wasm > $W/opt2.wasm.txt
+if cmp -s $W/opt.host.txt $W/opt2.wasm.txt; then echo "opt.c (IR, then wcc's own): same"
+else echo "opt.c (IR, then wcc's own): DIFFERENT"; diff $W/opt.host.txt $W/opt2.wasm.txt | head; fi
+srcs=$(sed -n 's/^VAL_SRCS:=\(.*\)/\1/p' Makefile)
+WCC_IRFAIL=1 $W/wcc.sh -o $W/valtest2.wasm -Wall -Werror $srcs > $W/valtest2.log 2>&1 && $WASM_RUN $W/valtest2.wasm >> $W/valtest2.log 2>&1
+echo "valtest (IR, then wcc's own): exit $?, $(sum $W/valtest2.log) ok, $(err $W/valtest2.log) failed suites"
+
 # the fuzzer (wcc only: XCC_FUZZ_ARM=0)
 WCC="$W/wcc.sh" WASM_RUN="$WASM_RUN" XCC_FUZZ_NOARM=1 $X/tests/arm/fuzz.sh 1 ${XCC_FUZZ:-100} | tail -4
