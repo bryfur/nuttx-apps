@@ -1,0 +1,14 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+config TESTING_STRBENCH
+	tristate "strbench: memset, memcpy and the string functions"
+	default n
+	---help---
+		The C library's memory and string functions as the firmware has
+		them (memset, memcpy, memmove, memchr, strlen, strcmp, strcpy):
+		checked against byte-at-a-time references (lengths, alignments,
+		overlaps), and their cycles a call at a range of sizes
+		(docs/benchmarks.md).
