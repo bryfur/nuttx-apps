@@ -283,10 +283,12 @@
 (assert_return (invoke "defassign" (i32.const 0)) (i32.const 124))
 
 ;; Bounds proofs at a loop's start: one coming in, of a local the loop
-;; writes, is assumed and checked at the branch back (here it does not
-;; hold there: compiled again without it, the second iteration's access
-;; traps); of a local the loop never writes, kept after the labels in it
-;; (a larger offset still checked)
+;; writes, is assumed and checked at the branches back where the loop
+;; reads through the local after writing it (lspec2; lspec3: only on one
+;; arm of an if, so it does not hold at the branch back: compiled again
+;; without it, the second iteration's access traps; lspec: not assumed);
+;; of a local the loop never writes, kept after the labels in it (a larger
+;; offset still checked)
 
 (module
   (memory 1)
@@ -308,6 +310,16 @@
         (drop (i32.load (local.get $p)))
         (br_table $out $l $l (local.tee $n (i32.sub (local.get $n) (i32.const 1))))))
     (local.get $s))
+  (func (export "lspec3") (param $p i32) (param $n i32) (param $c i32)
+    (result i32)
+    (local $s i32)
+    (drop (i32.load (local.get $p)))
+    (loop $l
+      (local.set $s (i32.add (local.get $s) (i32.load (local.get $p))))
+      (local.set $p (i32.add (local.get $p) (i32.const 0x10000)))
+      (if (local.get $c) (then (drop (i32.load (local.get $p)))))
+      (br_if $l (local.tee $n (i32.sub (local.get $n) (i32.const 1)))))
+    (local.get $s))
   (func (export "linv") (param $p i32) (param $n i32) (result i32)
     (local $s i32)
     (drop (i32.load offset=8 (local.get $p)))
@@ -325,6 +337,9 @@
 (assert_trap (invoke "lspec" (i32.const 65532) (i32.const 2)) "out of bounds memory access")
 (assert_return (invoke "lspec2" (i32.const 0) (i32.const 5)) (i32.const 0))
 (assert_trap (invoke "lspec2" (i32.const 65520) (i32.const 9)) "out of bounds memory access")
+(assert_return (invoke "lspec3" (i32.const 0) (i32.const 1) (i32.const 0)) (i32.const 0))
+(assert_trap (invoke "lspec3" (i32.const 0) (i32.const 2) (i32.const 0)) "out of bounds memory access")
+(assert_trap (invoke "lspec3" (i32.const 0) (i32.const 2) (i32.const 1)) "out of bounds memory access")
 (assert_return (invoke "linv" (i32.const 0) (i32.const 4)) (i32.const 6))
 (assert_return (invoke "linv" (i32.const 65400) (i32.const 3)) (i32.const 4))
 (assert_trap (invoke "linv" (i32.const 65480) (i32.const 3)) "out of bounds memory access")

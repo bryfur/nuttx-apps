@@ -6996,6 +6996,8 @@ static void loop_proofs(jc_t *c, ctrl_t *ct, const uint8_t *p)
 {
   int32_t lof[4];
   uint32_t written = 0;
+  uint32_t unproven = 0;          /* Written, no access through it since */
+  uint32_t atback = 0;            /* ... at one of the branches back */
   uint32_t depth = 1;
   uint32_t i;
   uint32_t l;
@@ -7041,6 +7043,31 @@ static void loop_proofs(jc_t *c, ctrl_t *ct, const uint8_t *p)
           for (i = 0; i < c->nbc; i++)
             {
               written |= (uint32_t)(lof[i] == (int32_t)l) << i;
+              unproven |= (uint32_t)(lof[i] == (int32_t)l) << i;
+            }
+        }
+
+      if (op == WASM_OP_BR || op == WASM_OP_BR_IF || op == WASM_OP_BR_TABLE)
+        {
+          uint32_t n = op == WASM_OP_BR_TABLE ? rd_u32(&q) + 1 : 1;
+
+          while (n-- > 0)
+            {
+              atback |= rd_u32(&q) == depth - 1 ? unproven : 0;
+            }
+        }
+
+      if (op == WASM_OP_GET_LOCAL || op == WASM_OP_TEE_LOCAL)
+        {
+          q = p;
+          l = rd_u32(&q);
+          if (q < c->code_end && *q >= WASM_OP_I32_LOAD &&
+              *q <= WASM_OP_I64_STORE32)
+            {
+              for (i = 0; i < c->nbc; i++)
+                {
+                  unproven &= ~((uint32_t)(lof[i] == (int32_t)l) << i);
+                }
             }
         }
 
@@ -7062,8 +7089,14 @@ static void loop_proofs(jc_t *c, ctrl_t *ct, const uint8_t *p)
           ct->inv[ct->ninv].reg = c->bc[i].reg;
           ct->inv[ct->ninv++].end = c->bc[i].end;
         }
-      else if (ct->ord < 64 && !(c->nospec & ((uint64_t)1 << ct->ord)))
+      else if (ct->ord < 64 && !(c->nospec & ((uint64_t)1 << ct->ord)) &&
+               !(atback & (1u << i)))
         {
+          /* (where the loop reads memory through it after it writes it,
+           * before each branch back, as the code reads: likely to hold
+           * there)
+           */
+
           ct->spec[ct->nspec].reg = c->bc[i].reg;
           ct->spec[ct->nspec++].end = c->bc[i].end;
         }
