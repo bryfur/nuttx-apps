@@ -255,16 +255,8 @@ static qboolean dq_start(void)
   pthread_getschedparam(pthread_self(), &policy, &param);
   param.sched_priority--;
   g_dq.stack = malloc(DQ_STACK);
-  g_dq.spans = malloc(DQ_SPANS * sizeof(espan_t));
+  g_dq.spans = NULL;                      /* (the GPU's entries': later) */
   g_dq.nspans = 0;
-  if (g_dq.spans == NULL)
-    {
-      kmm_free(g_dq.ring);
-      g_dq.ring = NULL;
-      free(g_dq.stack);
-      g_dq.stack = NULL;
-      return false;
-    }
 
   pthread_attr_init(&attr);
   if (g_dq.stack != NULL)
@@ -387,6 +379,21 @@ FPCQ_FAST qboolean fpcq_g3_queue(espan_t *spans, msurface_t *pface,
   if (g_dq.ring == NULL && (g_dq.tried || !dq_start()))
     {
       return false;
+    }
+
+  /* The copies of the GPU's entries' spans, taken at its first entry:
+   * 128 KB of the game's heap, which at 320 x 200 does not have them (it
+   * peaks within 100 KB of its end), so the drawer must not need them for
+   * the frame's own spans
+   */
+
+  if (g_dq.spans == NULL)
+    {
+      g_dq.spans = malloc(DQ_SPANS * sizeof(espan_t));
+      if (g_dq.spans == NULL)
+        {
+          return false;
+        }
     }
 
   for (s = spans; s != NULL; s = s->pnext)
