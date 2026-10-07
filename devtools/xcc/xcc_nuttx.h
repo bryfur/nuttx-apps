@@ -17,6 +17,10 @@
  *   intermediate files of a compile (named, e.g. the object an executable
  *   is linked from) are memory files (fopencookie), which fopen(), stat()
  *   and remove() know by name.
+ * - Streams: every stream a run opens (fopen, fdopen, tmpfile and the
+ *   memory streams, open_memstream and fmemopen: xcc's own, their buffers
+ *   in the arena) is listed and closed when the run ends if it is still
+ *   open: nothing of the C library's stays behind either.
  *
  ****************************************************************************/
 
@@ -54,6 +58,10 @@ void xcc_exit(int status) __attribute__((noreturn));
 int xcc_atexit(void (*fn)(void));
 
 FILE *xcc_fopen(const char *path, const char *mode);
+FILE *xcc_fdopen(int fd, const char *mode);
+FILE *xcc_open_memstream(char **bufp, size_t *sizep);
+FILE *xcc_fmemopen(void *buf, size_t size, const char *mode);
+int xcc_fclose(FILE *fp);
 FILE *xcc_tmpfile(void);
 int xcc_remove(const char *path);
 int xcc_stat(const char *path, struct stat *st);
@@ -106,6 +114,10 @@ size_t xcc_arena_peak(void);
 #  define exit(s)          xcc_exit(s)
 #  define atexit(f)        xcc_atexit(f)
 #  define fopen(p, m)      xcc_fopen(p, m)
+#  define fdopen(d, m)     xcc_fdopen(d, m)
+#  define fclose(f)        xcc_fclose(f)
+#  define open_memstream(b, s) xcc_open_memstream(b, s)
+#  define fmemopen(b, s, m) xcc_fmemopen(b, s, m)
 #  define tmpfile()        xcc_tmpfile()
 #  define remove(p)        xcc_remove(p)
 #  define stat(p, s)       xcc_stat(p, s)

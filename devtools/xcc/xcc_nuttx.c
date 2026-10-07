@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  *
  * xcc's process-like environment on NuttX (see xcc_nuttx.h): the arena,
- * exit(), memory files, and the snapshot of xcc's variables that makes
+ * exit(), the streams, memory files, and the snapshot of xcc's variables that makes
  * a built-in compiler (the simulator) start every run as a fresh process.
  *
  ****************************************************************************/
@@ -212,7 +212,7 @@ void xcc_free(void *p)
         }
       else
         {
-          free(p);                     /* The C library's (open_memstream) */
+          free(p);                     /* The C library's */
         }
     }
   else if (g_cur != NULL && g_cur->last == (char *)p - HDR)
@@ -467,6 +467,322 @@ static void arena_release_to(const struct arena_mark_s *m, int level)
 }
 
 /****************************************************************************
+ * Streams
+ ****************************************************************************/
+
+/* Every stream a run opens, with the run's depth: those still open when
+ * the run ends (an error exit deep in the compiler leaves its files open)
+ * are closed then.  In a flat build nothing else would free them: a FILE,
+ * its buffer and a memory stream's cookie are the C library's heap's and
+ * outlive the task.
+ */
+
+struct stream_s
+{
+  struct stream_s *next;
+  FILE *fp;
+  int level;
+};
+
+static struct stream_s *g_streams;
+static bool g_releasing;               /* Closing a run's leftovers */
+
+static FILE *stream_track(FILE *fp)
+{
+  struct stream_s *s;
+
+  if (fp == NULL)
+    {
+      return NULL;
+    }
+
+  s = malloc(sizeof(*s));
+  if (s == NULL)
+    {
+      fclose(fp);
+      errno = ENOMEM;
+      return NULL;
+    }
+
+  s->fp = fp;
+  s->level = g_depth;
+  s->next = g_streams;
+  g_streams = s;
+  return fp;
+}
+
+int xcc_fclose(FILE *fp)
+{
+  struct stream_s **pp;
+
+  for (pp = &g_streams; *pp != NULL; pp = &(*pp)->next)
+    {
+      if ((*pp)->fp == fp)
+        {
+          struct stream_s *s = *pp;
+
+          *pp = s->next;
+          free(s);
+          break;
+        }
+    }
+
+  return fclose(fp);
+}
+
+FILE *xcc_fdopen(int fd, const char *mode)
+{
+  return stream_track(fdopen(fd, mode));
+}
+
+/* The streams of runs at `level` and deeper closed */
+
+static void streams_release(int level)
+{
+  struct stream_s **pp = &g_streams;
+
+  g_releasing = true;
+  while (*pp != NULL)
+    {
+      struct stream_s *s = *pp;
+
+      if (s->level >= level)
+        {
+          *pp = s->next;
+          fclose(s->fp);
+          free(s);
+        }
+      else
+        {
+          pp = &s->next;
+        }
+    }
+
+  g_releasing = false;
+}
+
+/* open_memstream(): the buffer is the arena's (xcc_realloc), freed with
+ * free() as the C library's would be, or when the run ends (the C
+ * library's, realloc'd to the exact size at every write, outlived the
+ * task).  Its capacity doubles; it always ends with a '\0'.
+ */
+
+struct dynstream_s
+{
+  char **bufp;
+  size_t *sizep;
+  char *buf;
+  size_t len;
+  size_t cap;                          /* Bytes of buf, its '\0' included */
+  size_t pos;
+};
+
+static void ds_publish(struct dynstream_s *ds)
+{
+  /* Not while a run's leftovers are closed: `bufp` may be a variable of a
+   * function that an exit() left (preprocess_one_line's)
+   */
+
+  if (!g_releasing)
+    {
+      *ds->bufp = ds->buf;
+      *ds->sizep = ds->pos < ds->len ? ds->pos : ds->len;
+    }
+}
+
+static ssize_t ds_write(void *cookie, const char *buf, size_t size)
+{
+  struct dynstream_s *ds = cookie;
+  size_t end = ds->pos + size;
+
+  if (end + 1 > ds->cap)
+    {
+      size_t cap = ds->cap * 2;
+      char *b;
+
+      if (cap < end + 1)
+        {
+          cap = end + 1;
+        }
+
+      b = xcc_realloc(ds->buf, cap);
+      if (b == NULL)
+        {
+          errno = ENOMEM;
+          return -1;
+        }
+
+      ds->buf = b;
+      ds->cap = cap;
+    }
+
+  if (ds->pos > ds->len)
+    {
+      memset(ds->buf + ds->len, 0, ds->pos - ds->len);
+    }
+
+  memcpy(ds->buf + ds->pos, buf, size);
+  ds->pos = end;
+  if (end > ds->len)
+    {
+      ds->len = end;
+      ds->buf[end] = '\0';
+    }
+
+  ds_publish(ds);
+  return size;
+}
+
+static off_t ds_seek(void *cookie, off_t *offset, int whence)
+{
+  struct dynstream_s *ds = cookie;
+  off_t base = whence == SEEK_SET ? 0 :
+               whence == SEEK_CUR ? (off_t)ds->pos : (off_t)ds->len;
+
+  if (base + *offset < 0)
+    {
+      errno = EINVAL;
+      return -1;
+    }
+
+  ds->pos = base + *offset;
+  *offset = ds->pos;
+  ds_publish(ds);
+  return ds->pos;
+}
+
+static int ds_close(void *cookie)
+{
+  struct dynstream_s *ds = cookie;
+
+  ds_publish(ds);
+  free(ds);
+  return 0;
+}
+
+FILE *xcc_open_memstream(char **bufp, size_t *sizep)
+{
+  cookie_io_functions_t io =
+  {
+    NULL, ds_write, ds_seek, ds_close
+  };
+
+  struct dynstream_s *ds = malloc(sizeof(*ds));
+  FILE *fp;
+
+  if (ds == NULL)
+    {
+      return NULL;
+    }
+
+  ds->cap = 64;
+  ds->buf = xcc_malloc(ds->cap);
+  if (ds->buf == NULL)
+    {
+      free(ds);
+      return NULL;
+    }
+
+  ds->buf[0] = '\0';
+  ds->len = 0;
+  ds->pos = 0;
+  ds->bufp = bufp;
+  ds->sizep = sizep;
+  fp = fopencookie(ds, "w", io);
+  if (fp == NULL)
+    {
+      xcc_free(ds->buf);
+      free(ds);
+      return NULL;
+    }
+
+  ds_publish(ds);
+  return stream_track(fp);
+}
+
+/* fmemopen(), for reading (all xcc does with it) */
+
+struct rostream_s
+{
+  const char *buf;
+  size_t size;
+  size_t pos;
+};
+
+static ssize_t ro_read(void *cookie, char *buf, size_t size)
+{
+  struct rostream_s *rs = cookie;
+  size_t n = rs->pos < rs->size ? rs->size - rs->pos : 0;
+
+  if (n > size)
+    {
+      n = size;
+    }
+
+  memcpy(buf, rs->buf + rs->pos, n);
+  rs->pos += n;
+  return n;
+}
+
+static off_t ro_seek(void *cookie, off_t *offset, int whence)
+{
+  struct rostream_s *rs = cookie;
+  off_t base = whence == SEEK_SET ? 0 :
+               whence == SEEK_CUR ? (off_t)rs->pos : (off_t)rs->size;
+
+  if (base + *offset < 0 || base + *offset > (off_t)rs->size)
+    {
+      errno = EINVAL;
+      return -1;
+    }
+
+  rs->pos = base + *offset;
+  *offset = rs->pos;
+  return rs->pos;
+}
+
+static int ro_close(void *cookie)
+{
+  free(cookie);
+  return 0;
+}
+
+FILE *xcc_fmemopen(void *buf, size_t size, const char *mode)
+{
+  cookie_io_functions_t io =
+  {
+    ro_read, NULL, ro_seek, ro_close
+  };
+
+  struct rostream_s *rs;
+  FILE *fp;
+
+  if (mode[0] != 'r' || strchr(mode, '+') != NULL)
+    {
+      errno = EINVAL;
+      return NULL;
+    }
+
+  rs = malloc(sizeof(*rs));
+  if (rs == NULL)
+    {
+      return NULL;
+    }
+
+  rs->buf = buf;
+  rs->size = size;
+  rs->pos = 0;
+  fp = fopencookie(rs, mode, io);
+  if (fp == NULL)
+    {
+      free(rs);
+      return NULL;
+    }
+
+  return stream_track(fp);
+}
+
+/****************************************************************************
  * Memory files
  ****************************************************************************/
 
@@ -645,7 +961,7 @@ static FILE *memfile_open(struct memfile_s *mf, const char *mode)
     }
 
   mf->opens++;
-  return fp;
+  return stream_track(fp);
 }
 
 static struct memfile_s *memfile_new(const char *name)
@@ -700,7 +1016,7 @@ FILE *xcc_fopen(const char *path, const char *mode)
       setvbuf(fp, NULL, _IOFBF, XCC_FILE_BUFFER);
     }
 
-  return fp;
+  return stream_track(fp);
 }
 
 FILE *xcc_tmpfile(void)
@@ -758,9 +1074,8 @@ int xcc_stat(const char *path, struct stat *st)
 
 static void memfiles_release(void)
 {
-  /* Streams still open belong to the task, which closes them as it ends
-   * (a built-in compiler's are left: an error exit leaks the FILE, not
-   * the data).
+  /* The runs' streams are closed by now (streams_release): any still
+   * open is the caller's
    */
 
   struct memfile_s *mf = g_memfiles;
@@ -842,6 +1157,30 @@ int xcc_atexit(void (*fn)(void))
  * the driver).
  */
 
+/* The programs whose variables are saved: a loadable module (XCC_MODULE)
+ * gives the copies back when its outermost run ends (the next start loads
+ * the module again, its variables as in the file); a built-in compiler
+ * keeps them for its next run
+ */
+
+#define MAX_BLOBS 8
+
+static struct xcc_blob_s *g_blobs[MAX_BLOBS];
+static int g_nblobs;
+
+static void blobs_release(void)
+{
+#ifdef XCC_MODULE
+  while (g_nblobs > 0)
+    {
+      struct xcc_blob_s *b = g_blobs[--g_nblobs];
+
+      free(b->saved);
+      b->saved = NULL;
+    }
+#endif
+}
+
 static void blob_restore(struct xcc_blob_s *b)
 {
   size_t len = b->data_end - b->data_start;
@@ -852,6 +1191,10 @@ static void blob_restore(struct xcc_blob_s *b)
       if (b->saved != NULL)
         {
           memcpy(b->saved, b->data_start, len);
+          if (g_nblobs < MAX_BLOBS)
+            {
+              g_blobs[g_nblobs++] = b;
+            }
         }
     }
   else
@@ -900,12 +1243,14 @@ int xcc_run(struct xcc_blob_s *blob, int (*mainfn)(int, char **), int argc,
     }
 
   --g_depth;
+  streams_release(g_depth + 1);
   fflush(stdout);
   fflush(stderr);
   arena_release_to(&l->mark, g_depth + 1);
   if (g_depth == 0)
     {
       memfiles_release();
+      blobs_release();
       if (stats != NULL && stats[0] == '1')
         {
           fprintf(stderr, "xcc: arena peak %zu KB\n", g_arena_peak / 1024);

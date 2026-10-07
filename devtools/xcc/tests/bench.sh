@@ -11,7 +11,7 @@
 #                       for this machine from the same sources: the same
 #                       output as xcc on the board)
 #   bw_wcc.wasm, cw_wcc.wasm      WebAssembly made by wcc (this machine's)
-#   bw_clang.wasm, cw_clang.wasm  and by clang -O2 (wasi-sdk), if found
+#   bw_clang.wasm, cw_clang.wasm  and by clang -O2 (wasi-sdk), if found, stripped
 #
 # BUILD: the nuttx/apps pair of a built pc configuration (default
 # ~/git/fpc), for its NuttX headers, the xcc sysroot and the module flags.
@@ -104,6 +104,8 @@ if [ -x $WASI/bin/clang ]; then
   CL="$WASI/bin/clang --target=wasm32-wasip1 --sysroot=$WASI/share/wasi-sysroot -O2"
   $CL -o $OUT/bw_clang.wasm $B/bench.c -Wl,-z,stack-size=65536
   $CL $CMF -DCOMPILER_VERSION=\"clang-O2\" -D_WASI_EMULATED_PROCESS_CLOCKS -o $OUT/cw_clang.wasm $CMSRC -lwasi-emulated-process-clocks
+  # clang keeps its names and debug sections (bench.wasm: 175 KB, 31 KB stripped)
+  $WASI/bin/llvm-strip $OUT/bw_clang.wasm $OUT/cw_clang.wasm
 fi
 
 rm -rf $OUT/obj $OUT/host

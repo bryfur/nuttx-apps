@@ -125,10 +125,11 @@ $(foreach b,$(BLOBS),$(eval $(call BLOB_RULES,$(b))))
 ifeq ($(CONFIG_DEVTOOLS_XCC),m)
 
 # Loadable modules: the blobs and the runtime linked into them, not into
-# libapps.a
+# libapps.a (XCC_MODULE: loaded afresh at every start, so the programs'
+# saved variables are given back at the end too)
 
 xcc_nuttx.m$(OBJEXT): xcc_nuttx.c xcc_nuttx.h
-	$(Q) $(XCC_CC) $< -o $@
+	$(Q) $(XCC_CC) -DXCC_MODULE $< -o $@
 
 include $(APPDIR)/Application.mk
 
