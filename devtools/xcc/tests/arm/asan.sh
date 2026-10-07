@@ -16,7 +16,7 @@ gcc $F -o $O/as $X/as/*.c $X/as/arch/arm32/*.c $U $X/util/bin_util.c || exit 1
 export ASAN_OPTIONS=detect_leaks=0
 D="-D__XCC -D__ILP32__ -D__arm__ -D__thumb__ -D__thumb2__ -D__ARMEL__ -D__ARM_EABI__ -D__ARM_PCS_VFP -D__VFP_FP__ -D__CHAR_UNSIGNED__ -D__linux__ -D__STDC__ -D__STDC_VERSION__=199901L -D__SIZEOF_POINTER__=4 -D__SIZEOF_INT__=4 -D__SIZEOF_LONG__=4 -D__SIZEOF_LONG_LONG__=8 -D__SIZEOF_SIZE_T__=4"
 I="-I$X/util -I$X/cc/frontend -I$X/cc/backend -I$X/cpp -I$X/as -DXCC_TARGET_ARCH=XCC_ARCH_ARM32 -DXCC_TARGET_PLATFORM=XCC_PLATFORM_POSIX -I$TESTS_ARM/pch"
-CM=$FPC/apps/benchmarks/coremark/coremark
+CM=${XCC_COREMARK:-$FPC/apps/benchmarks/coremark/coremark}  # (or a copy of its sources)
 n=0; bad=0
 for f in $T/*.c $(ls $X/*/*.c $X/*/*/*.c $X/*/*/*/*.c 2>/dev/null | grep -v _debug) $XCCDIR/bench/bench.c \
          $XCCDIR/tests/opt.c $TESTS_ARM/pch/*.c $CM/core_*.c; do

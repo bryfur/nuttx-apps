@@ -43,7 +43,9 @@ blob() {  # blob NAME MAINFILE "FLAGS" SOURCES...
 }
 PPF="-I$X/util -I$X/cc/frontend -I$X/cpp"
 blob wcc $X/wcc/wcc.c "$PPF -DXCC_TARGET_ARCH=XCC_ARCH_WASM" $X/wcc/*.c $X/cc/frontend/*.c \
-  $X/cpp/preprocessor.c $X/cpp/pp_parser.c $X/cpp/macro.c $X/cpp/pch.c $U $X/util/archive.c &&
+  $X/cpp/preprocessor.c $X/cpp/pp_parser.c $X/cpp/macro.c $X/cpp/pch.c $U $X/util/archive.c \
+  $X/cc/backend/codegen.c $X/cc/backend/codegen_expr.c $X/cc/backend/ir.c $X/cc/backend/optimize.c \
+  $X/cc/backend/regalloc.c $X/cc/backend/ssa.c &&
 blob xccd $XCCDIR/xcc_main.c "" $XCCDIR/xcc_main.c &&
 blob cpp $X/cpp/cpp.c "$PPF $ARM" $X/cpp/*.c $X/cc/frontend/lexer.c $X/cc/frontend/ast.c $U &&
 blob cc1 $X/cc/cc1.c "-I$X/util -I$X/cc/frontend -I$X/cc/backend $ARM" $X/cc/frontend/*.c \
@@ -62,7 +64,7 @@ gcc -fsanitize=leak -o $O/wcc $O/obj/leakmain.o $O/obj/wcc_main.o $O/obj/xcc_nut
 
 # The compiles: each a start of the module, as on the board
 B=$XCCDIR/bench
-CM=$FPC/apps/benchmarks/coremark/coremark
+CM=${XCC_COREMARK:-$FPC/apps/benchmarks/coremark/coremark}  # (or a copy of its sources)
 CMSRC="$CM/core_list_join.c $CM/core_main.c $CM/core_matrix.c $CM/core_state.c $CM/core_util.c $B/coremark/core_portme.c"
 CMF="-I$CM -I$B/coremark -DITERATIONS=10"
 W=$O/work

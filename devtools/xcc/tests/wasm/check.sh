@@ -17,7 +17,9 @@ L=$X/xcc/libsrc
 gcc -O2 -std=gnu11 -D_DEFAULT_SOURCE -w -I$S/util -I$S/cc/frontend -I$S/cpp \
     -DXCC_TARGET_ARCH=XCC_ARCH_WASM -o $W/wcc $S/wcc/*.c $S/cc/frontend/*.c \
     $S/cpp/preprocessor.c $S/cpp/pp_parser.c $S/cpp/macro.c $S/cpp/pch.c \
-    $S/util/util.c $S/util/table.c $S/util/archive.c || { echo "wasm check: build failed"; exit 1; }
+    $S/util/util.c $S/util/table.c $S/util/archive.c \
+    $S/cc/backend/codegen.c $S/cc/backend/codegen_expr.c $S/cc/backend/ir.c \
+    $S/cc/backend/optimize.c $S/cc/backend/regalloc.c $S/cc/backend/ssa.c || { echo "wasm check: build failed"; exit 1; }
 rm -f $W/wlibc/*.o
 for f in $L/math/*.c $L/misc/*.c $L/stdio/*.c $L/stdlib/*.c $L/string/*.c $L/_wasm/unistd/*.c $L/_wasm/crt0/*.c; do
   $W/wcc -nostdinc -isystem $X/xcc/include -c -o $W/wlibc/$(basename $f .c).o $f || echo "wasm check: libc $f failed"

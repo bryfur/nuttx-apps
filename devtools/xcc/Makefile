@@ -55,6 +55,7 @@ UTIL_SRCS = $(X)/util/util.c $(X)/util/table.c
 wcc_SRCS  = $(wildcard $(X)/wcc/*.c) $(wildcard $(X)/cc/frontend/*.c)
 wcc_SRCS += $(X)/cpp/preprocessor.c $(X)/cpp/pp_parser.c $(X)/cpp/macro.c $(X)/cpp/pch.c
 wcc_SRCS += $(UTIL_SRCS) $(X)/util/archive.c
+wcc_SRCS += $(addprefix $(X)/cc/backend/,codegen.c codegen_expr.c ir.c optimize.c regalloc.c ssa.c)
 wcc_FLAGS = -I$(X)/util -I$(X)/cc/frontend -I$(X)/cpp -DXCC_TARGET_ARCH=XCC_ARCH_WASM
 wcc_MAIN  = $(X)/wcc/wcc.c
 
