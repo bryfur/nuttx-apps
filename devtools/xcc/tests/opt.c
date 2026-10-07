@@ -863,6 +863,21 @@ static uint32_t bitx(uint32_t x, uint32_t n)
   return s;
 }
 
+/* A load masked to its low byte or half: a narrower load (little endian) */
+
+static int16_t g_ln16[6] = {-1, -32768, 0x1234, 0x00ff, -256, 77};
+static int32_t g_ln32[4] = {-1, 0x12345678, -65536, 0x8000ff01};
+
+static void t_ldnarrow(int k)
+{
+  uint32_t s = 0;
+  for (int i = 0; i < 6; i++)
+    s = s * 31 + (uint32_t)(g_ln16[(i + k) % 6] & 0xff) + ((uint32_t)(g_ln16[i] & 0xffff) << 8);
+  for (int i = 0; i < 4; i++)
+    s = s * 17 + (uint32_t)(g_ln32[(i + k) % 4] & 0xff) + (uint32_t)(g_ln32[i] & 0xffff);
+  out("ldnarrow", s);
+}
+
 static void t_bitx(int k)
 {
   out("bitx", bitx((uint32_t)k, 35) * 1000 + bitx((uint32_t)k + 1, 20));
@@ -891,6 +906,7 @@ int main(int argc, char *argv[])
   t_fall();
   t_ldrd();
   t_bitx(argc + 1);
+  t_ldnarrow(argc);
   printf("total %u\n", (unsigned)g_sum);
   return 0;
 }
