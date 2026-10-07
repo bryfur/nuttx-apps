@@ -27,6 +27,8 @@ MPY_TARBALL = micropython-$(MPY_VERSION).tar.gz
 MPY_URL     = https://github.com/micropython/micropython/archive/refs/tags/v$(MPY_VERSION).tar.gz
 MPY         = micropython
 MPY_PARTS   = py extmod shared lib/re1.5 lib/oofatfs tests/basics LICENSE
+MPY_PARTS  += mpy-cross tools/makemanifest.py tools/manifestfile.py
+MPY_PARTS  += tools/mpy-tool.py
 MPY_BUILD   = build
 MPY_PATCHED = $(MPY)/.patched
 MPY_GENHDR  = $(MPY_BUILD)/genhdr/qstrdefs.generated.h
@@ -47,7 +49,7 @@ MPY_SHARED += runtime/sys_stdio_mphal.c timeutils/timeutils.c
 MPY_SRCS    = $(MPY_PY) $(addprefix $(MPY)/extmod/,$(MPY_EXTMOD))
 MPY_SRCS   += $(addprefix $(MPY)/shared/,$(MPY_SHARED))
 
-PORT_SRCS   = mphalport.c
+PORT_SRCS   = mphalport.c qstrindex.c
 ifeq ($(CONFIG_INTERPRETERS_MICROPYTHON_FPC),y)
 PORT_SRCS  += modfpc.c
 endif
@@ -60,7 +62,7 @@ endif
 MAINSRC     = main.c
 
 # The agent (docs/agent.md): the _agent module, the agent package frozen
-# (mkfrozen.py: frozen_agent.c), the agent command
+# as bytecode (manifest.py, by mpy.mk: frozen_agent.c), the agent command
 
 AGENT_PY    = $(sort $(wildcard agent/*.py))
 ifeq ($(CONFIG_INTERPRETERS_MICROPYTHON_AGENT),y)
@@ -68,6 +70,8 @@ PORT_SRCS  += modagent.c agent_http.c agent_proc.c agent_search.c
 PROGNAME   += agent
 MAINSRC    += agent_main.c
 AGENT_SRCS  = frozen_agent.c
+MPY_FROZEN  = FROZEN_MANIFEST_PY=manifest.py FROZEN_C=frozen_agent.c
+MPY_FROZEN += FROZEN_DEPS="$(AGENT_PY)"
 endif
 
 CSRCS       = $(PORT_SRCS) $(AGENT_SRCS) $(notdir $(MPY_SRCS))
@@ -107,7 +111,7 @@ $(MPY_TARBALL):
 	$(Q) echo "$(MPY_SHA256)  $@.part" | sha256sum -c --quiet
 	$(Q) mv $@.part $@
 
-$(MPY_PATCHED): $(MPY_TARBALL) $(sort $(wildcard patches/*.patch))
+$(MPY_PATCHED): $(MPY_TARBALL) $(sort $(wildcard patches/*.patch)) Makefile
 	$(Q) echo "Unpacking MicroPython $(MPY_VERSION) to $(MPY)"
 	$(Q) rm -rf $(MPY) $(MPY_BUILD)
 	$(Q) mkdir -p $(MPY)
@@ -135,12 +139,9 @@ mpy_genhdr: $(MPY_PATCHED)
 		$(MAKE) -s -f mpy.mk MICROPYTHON_TOP=$(MPY) BUILD=$(MPY_BUILD) \
 		CC="$(CC)" CPP="$(CC) -E" \
 		SRC_QSTR_PORT="$(MAINSRC) $(PORT_SRCS) $(MPY_SRCS)" \
-		NUTTX_CONFIG_H=$(TOPDIR)/include/nuttx/config.h
+		NUTTX_CONFIG_H=$(TOPDIR)/include/nuttx/config.h $(MPY_FROZEN)
 
-frozen_agent.c: $(AGENT_PY) mkfrozen.py
-	$(Q) python3 mkfrozen.py $@ agent
-
-context:: mpy_genhdr $(AGENT_SRCS)
+context:: mpy_genhdr
 
 depend:: mpy_genhdr
 

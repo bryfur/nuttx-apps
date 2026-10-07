@@ -1,0 +1,29 @@
+qstr: the port may find the firmware's qstrs its own way
+
+qstr_find_strn() runs whenever a str is made (to share a qstr with the
+same text) and whenever a name is interned.  It searches the firmware's
+pools by a binary search on the strings (and a linear one on the static
+pool's hashes): on a board whose firmware is read through a small cache
+(the RP2350's XIP), that is some 20 cache misses a str, more than half of
+the time of str-heavy code.  Those pools never change, so a port may say
+how to find a string in them (MICROPY_PORT_QSTR_FIND_CONST(top pool, str,
+len, hash), returning the qstr or MP_QSTRnull): an index by the hash.
+Without the macro nothing changes.
+
+--- a/py/qstr.c
++++ b/py/qstr.c
+@@ -272,6 +272,14 @@
+ 
+     // search pools for the data
+     for (const qstr_pool_t *pool = MP_STATE_VM(last_pool); pool != NULL; pool = pool->prev) {
++        #if defined(MICROPY_PORT_QSTR_FIND_CONST) && MICROPY_QSTR_BYTES_IN_HASH
++        // The firmware's pools (this one and those before it) never change:
++        // the port may find their strings its own way (an index)
++        if (pool == &CONST_POOL) {
++            return MICROPY_PORT_QSTR_FIND_CONST(&CONST_POOL, str, str_len, str_hash);
++        }
++        #endif
++
+         size_t low = 0;
+         size_t high = pool->len - 1;
+ 

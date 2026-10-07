@@ -15,11 +15,13 @@
  * bytes come as they are typed.
  *
  * Each python task is an interpreter of its own (patches/0002): its state
- * (MicroPython's and this port's) is found by its pid.
+ * (MicroPython's and this port's) is found by the stack it runs on, else
+ * by its pid.
  ****************************************************************************/
 
 #include <nuttx/config.h>
 
+#include <nuttx/kmalloc.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
@@ -42,30 +44,103 @@
 #define POLL_MS          20               /* Looking for Ctrl-C */
 #define VM_COUNT         256              /* Loop hooks between clock reads */
 #define MAX_INTERPRETERS 4
+#define SRAM_RESERVE     (32 * 1024)      /* Left to the system */
+
+/* In the SRAM: what the VM looks at all the time (not the PSRAM, through
+ * the XIP cache that the code in the flash uses too)
+ */
+
+#ifdef __arm__
+#  define SRAM_BSS       \
+     __attribute__((section(".sram_bss.mpy,\"aw\",%nobits@")))
+#  define GET_SP(sp)     __asm__ ("mov %0, sp" : "=r" (sp))
+#else
+#  define SRAM_BSS
+#  define GET_SP(sp)     ((sp) = (uintptr_t)__builtin_frame_address(0))
+#endif
 
 /****************************************************************************
  * Public Data
  ****************************************************************************/
 
-int mp_nuttx_vm_count = VM_COUNT;
+int mp_nuttx_vm_count SRAM_BSS;
 
 /****************************************************************************
  * Private Data
  ****************************************************************************/
 
-/* The interpreters running: each task's state */
+/* The interpreters running: each task's state, and the stack its
+ * interpreter runs on (once it runs: mp_nuttx_stack()).  The stack pointer
+ * says which interpreter is running, whichever thread or CPU it is, and
+ * without asking NuttX (by getpid() it was up to 40 % of a function call's
+ * time, docs/python.md).
+ *
+ * Changed under g_interplock, read without it: the count is odd while
+ * g_interp changes, and a reader that sees it change (or odd) asks again
+ * by the pid.  A stack's range is taken away when its interpreter ends;
+ * one left by a task deleted while it ran is taken away when a new
+ * interpreter's stack overlaps it (only an interpreter asks).
+ */
 
 static struct
 {
-  pid_t pid;
+  uintptr_t base;                      /* The stack, from here */
+  uintptr_t size;                      /* this long (0: none yet) */
   struct mp_nuttx_port_s *port;
-} g_interp[MAX_INTERPRETERS];
+  pid_t pid;
+} g_interp[MAX_INTERPRETERS] SRAM_BSS;
 
+static volatile uint32_t g_interpseq SRAM_BSS;
 static pthread_mutex_t g_interplock = PTHREAD_MUTEX_INITIALIZER;
 
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
+
+/* An interpreter's state (the port's and MicroPython's, 1.4 KB): in the
+ * SRAM while the kernel's heap has room for it and SRAM_RESERVE more (a
+ * flat build: the kernel's heap is the SRAM on the board), else in the
+ * PSRAM.  The VM uses it all the time: from the PSRAM, through the XIP
+ * cache, a method call was 40 % slower.
+ */
+
+static void *state_alloc(size_t size)
+{
+#if defined(CONFIG_MM_KERNEL_HEAP) && !defined(CONFIG_BUILD_KERNEL) && \
+    !defined(CONFIG_BUILD_PROTECTED)
+  if (kmm_mallinfo().mxordblk >= size + SRAM_RESERVE)
+    {
+      void *p = kmm_zalloc(size);
+
+      if (p != NULL)
+        {
+          return p;
+        }
+    }
+#endif
+
+  return calloc(1, size);
+}
+
+static void state_free(struct mp_nuttx_port_s *p)
+{
+  if (p == NULL)
+    {
+      return;
+    }
+
+  free(p->fpc);
+#if defined(CONFIG_MM_KERNEL_HEAP) && !defined(CONFIG_BUILD_KERNEL) && \
+    !defined(CONFIG_BUILD_PROTECTED)
+  if (kmm_heapmember(p))
+    {
+      kmm_free(p);
+      return;
+    }
+#endif
+
+  free(p);
+}
 
 /* What the input has now (without waiting) into the ring; Ctrl-C, while
  * it interrupts, schedules KeyboardInterrupt and goes no further
@@ -374,12 +449,24 @@ void mp_hal_set_interrupt_char(int c)
   mp_nuttx_port()->interrupt_char = c;
 }
 
-/* The interpreters: each task's state, found by its pid.  Called before
- * the task uses any (mp_nuttx_port() being const, it is not called again
- * in a function that has called it).
+/* The interpreters: each task's state, found by the stack it runs on,
+ * else by its pid.  Called before the task uses any (mp_nuttx_port() being
+ * const, it is not called again in a function that has called it).
  */
 
-struct mp_nuttx_port_s *mp_nuttx_port(void)
+static void interp_begin(void)
+{
+  g_interpseq++;
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+}
+
+static void interp_end(void)
+{
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+  g_interpseq++;
+}
+
+static __attribute__((noinline)) struct mp_nuttx_port_s *port_by_pid(void)
 {
   pid_t pid = getpid();
   int i;
@@ -395,6 +482,65 @@ struct mp_nuttx_port_s *mp_nuttx_port(void)
   return NULL;
 }
 
+struct mp_nuttx_port_s *mp_nuttx_port(void)
+{
+  uint32_t seq = g_interpseq;
+  uintptr_t sp;
+  int i;
+
+  GET_SP(sp);
+  __atomic_thread_fence(__ATOMIC_ACQUIRE);
+  for (i = 0; i < MAX_INTERPRETERS; i++)
+    {
+      if (sp - g_interp[i].base < g_interp[i].size)
+        {
+          struct mp_nuttx_port_s *p = g_interp[i].port;
+
+          __atomic_thread_fence(__ATOMIC_ACQUIRE);
+          if (g_interpseq == seq && (seq & 1) == 0)
+            {
+              return p;
+            }
+
+          break;
+        }
+    }
+
+  return port_by_pid();
+}
+
+/* The stack this task's interpreter runs on (base NULL: it no longer
+ * does), for mp_nuttx_port()
+ */
+
+void mp_nuttx_stack(void *base, size_t size)
+{
+  uintptr_t b = (uintptr_t)base;
+  pid_t pid = getpid();
+  int i;
+
+  pthread_mutex_lock(&g_interplock);
+  interp_begin();
+  for (i = 0; i < MAX_INTERPRETERS; i++)
+    {
+      if (g_interp[i].pid == pid)
+        {
+          g_interp[i].base = b;
+          g_interp[i].size = base != NULL ? size : 0;
+        }
+      else if (base != NULL && g_interp[i].base < b + size &&
+               b < g_interp[i].base + g_interp[i].size)
+        {
+          /* Left by a task that is gone: it was where this stack is */
+
+          g_interp[i].size = 0;
+        }
+    }
+
+  interp_end();
+  pthread_mutex_unlock(&g_interplock);
+}
+
 /* A new interpreter for this task: its state (the port's, then
  * MicroPython's, all zero), or NULL if there are as many as there can be
  */
@@ -406,6 +552,22 @@ void *mp_nuttx_attach(size_t ctxsize)
   int i;
 
   pthread_mutex_lock(&g_interplock);
+
+  /* The stacks of tasks that went without a word (deleted) are theirs no
+   * longer: this task's may be where one was
+   */
+
+  interp_begin();
+  for (i = 0; i < MAX_INTERPRETERS; i++)
+    {
+      if (g_interp[i].pid != 0 &&
+          (g_interp[i].pid == pid || kill(g_interp[i].pid, 0) < 0))
+        {
+          g_interp[i].size = 0;
+        }
+    }
+
+  interp_end();
   for (i = 0; i < MAX_INTERPRETERS; i++)
     {
       /* Free, or left by a task that went without a word (deleted) */
@@ -413,15 +575,13 @@ void *mp_nuttx_attach(size_t ctxsize)
       if (g_interp[i].pid == 0 || g_interp[i].pid == pid ||
           kill(g_interp[i].pid, 0) < 0)
         {
-          if (g_interp[i].port != NULL)
-            {
-              free(g_interp[i].port->fpc);
-              free(g_interp[i].port);
-            }
-
-          p = calloc(1, MP_NUTTX_PORT_SIZE + ctxsize);
+          state_free(g_interp[i].port);
+          p = state_alloc(MP_NUTTX_PORT_SIZE + ctxsize);
+          interp_begin();
+          g_interp[i].size = 0;
           g_interp[i].port = p;
           g_interp[i].pid  = p != NULL ? pid : 0;
+          interp_end();
           break;
         }
     }
@@ -447,10 +607,14 @@ void mp_nuttx_detach(void)
     {
       if (g_interp[i].pid == pid)
         {
-          free(g_interp[i].port->fpc);
-          free(g_interp[i].port);
+          struct mp_nuttx_port_s *p = g_interp[i].port;
+
+          interp_begin();
+          g_interp[i].size = 0;
           g_interp[i].port = NULL;
           g_interp[i].pid  = 0;
+          interp_end();
+          state_free(p);
         }
     }
 

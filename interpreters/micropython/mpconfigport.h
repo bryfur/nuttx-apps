@@ -85,12 +85,14 @@
 #  define MICROPY_EMIT_INLINE_THUMB   (0)
 #endif
 
-/* The agent's Python, frozen into the firmware as source (mkfrozen.py),
- * imported from ".frozen" in sys.path
+/* The agent's Python, frozen into the firmware as bytecode (manifest.py:
+ * nothing compiled when it starts, its code not in the heap), imported
+ * from ".frozen" in sys.path; its qstrs are a pool after the firmware's
  */
 
 #ifdef CONFIG_INTERPRETERS_MICROPYTHON_AGENT
-#  define MICROPY_MODULE_FROZEN_STR   (1)
+#  define MICROPY_MODULE_FROZEN_MPY   (1)
+#  define MICROPY_QSTR_EXTRA_POOL     mp_qstr_frozen_const_pool
 #endif
 
 /* Files: NuttX's, through the POSIX VFS mounted at / */
@@ -204,7 +206,8 @@ extern const struct _mp_print_t mp_stderr_print;
 #define MICROPY_ERROR_PRINTER         (&mp_stderr_print)
 
 /* Several interpreters at once (patches/0002): each python task has its
- * own state, found by its pid (mphalport.c: mp_nuttx_port()).  First what
+ * own state, found by the stack it runs on, else by its pid (mphalport.c:
+ * mp_nuttx_port()).  First what
  * the port keeps for each (and MicroPython's few static variables), then
  * MicroPython's state.  mp_nuttx_port() is const: a function calls it once
  * however many times it uses the state.
@@ -257,6 +260,29 @@ struct mp_nuttx_port_s *mp_nuttx_port(void) __attribute__((const));
 #define MICROPY_PORT_READLINE_STATE_SIZE  (sizeof(uint32_t) * 16)
 #define MICROPY_PORT_PYEXEC_MODE_KIND     (mp_nuttx_port()->pyexec_mode)
 #define MICROPY_PORT_RANDOM_STATE         (mp_nuttx_port()->random)
+
+/* The VM's loop and what it calls most, in the SRAM (copied there at
+ * boot with .data) rather than run from the flash through the XIP cache
+ */
+
+#ifdef __arm__
+#  define MP_NUTTX_FAST(f) \
+     __attribute__((section(".time_critical.mpy." #f))) f
+#  define MICROPY_WRAP_MP_EXECUTE_BYTECODE(f) MP_NUTTX_FAST(f)
+#  define MICROPY_WRAP_MP_MAP_LOOKUP(f)       MP_NUTTX_FAST(f)
+#  define MICROPY_WRAP_MP_LOAD_GLOBAL(f)      MP_NUTTX_FAST(f)
+#  define MICROPY_WRAP_MP_OBJ_GET_TYPE(f)     MP_NUTTX_FAST(f)
+#  define MICROPY_WRAP_MP_BINARY_OP(f)        MP_NUTTX_FAST(f)
+#endif
+
+/* The firmware's qstrs found by an index of their hashes (qstrindex.c,
+ * patches/0005) rather than searched for in the flash
+ */
+
+struct _qstr_pool_t;
+size_t mp_nuttx_qstr_find_const(const struct _qstr_pool_t *top,
+                                const char *str, size_t len, size_t hash);
+#define MICROPY_PORT_QSTR_FIND_CONST  mp_nuttx_qstr_find_const
 
 /* Ctrl-C: the input is looked at for it now and then while Python runs
  * (mphalport.c), there being no SIGINT from NuttX's terminals.  The count

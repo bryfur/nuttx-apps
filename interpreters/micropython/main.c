@@ -67,6 +67,7 @@
 
 void *mp_nuttx_attach(size_t ctxsize);
 void mp_nuttx_detach(void);
+void mp_nuttx_stack(void *base, size_t size);
 #ifdef CONFIG_INTERPRETERS_MICROPYTHON_FPC
 void mp_fpc_deinit(void);
 #endif
@@ -552,6 +553,7 @@ static MP_NOINLINE int interpreter_here(int argc, char **argv,
   volatile char here;
   struct stackinfo_s si;
   size_t avail = stack_size;
+  int ret;
 
   if (nxsched_get_stackinfo(0, &si) == 0 && si.stack_alloc_ptr != NULL)
     {
@@ -561,12 +563,22 @@ static MP_NOINLINE int interpreter_here(int argc, char **argv,
       if (sp > base && sp - base < si.adj_stack_size + 64)
         {
           avail = sp - base;
+
+          /* The interpreter is the one running while the stack pointer
+           * is in this stack (mp_nuttx_port())
+           */
+
+          mp_nuttx_stack(si.stack_alloc_ptr,
+                         base + si.adj_stack_size -
+                         (uintptr_t)si.stack_alloc_ptr);
         }
     }
 
   avail = avail > STACK_SPARE + 4096 ? avail - STACK_SPARE : 4096;
   mp_cstack_init_with_sp_here(avail);
-  return interpreter(argc, argv, heapsize);
+  ret = interpreter(argc, argv, heapsize);
+  mp_nuttx_stack(NULL, 0);
+  return ret;
 }
 
 #if CONFIG_INTERPRETERS_MICROPYTHON_PSRAM_STACK > 0

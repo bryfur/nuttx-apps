@@ -4,12 +4,12 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * agent: the AI agent (docs/agent.md) as a command.  MicroPython runs the
- * agent package (agent/, frozen into the firmware: mkfrozen.py) with a
- * heap of CONFIG_INTERPRETERS_MICROPYTHON_AGENT_HEAPSIZE KB (AGENT_HEAP=N
- * in the environment: N KB).  AGENT_PATH=DIR in the environment puts DIR
- * first in sys.path, so a copy of the package there (on the microSD, say)
- * is run instead of the frozen one: the Python half can be changed without
- * a new firmware.
+ * agent package (agent/, frozen into the firmware as bytecode:
+ * manifest.py) with a heap of CONFIG_INTERPRETERS_MICROPYTHON_AGENT_HEAPSIZE
+ * KB (AGENT_HEAP=N in the environment: N KB).  AGENT_PATH=DIR in the
+ * environment puts DIR first in sys.path, so a copy of the package there
+ * (on the microSD, say) is run instead of the frozen one: the Python half
+ * can be changed without a new firmware.
  ****************************************************************************/
 
 #include <nuttx/config.h>
