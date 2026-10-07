@@ -25,6 +25,13 @@
  *   sdtest crc FILE...                    CRC-32 and size of each file
  *   sdtest read FILE [KB [sram|psram [MB]]]  read throughput
  *   sdtest write FILE MB [KB [sram|psram]]   write throughput (then fsync)
+ *   sdtest seek FILE [BYTES [N [sram|psram [SEED]]]]  N reads of BYTES at
+ *       random offsets (each piece's CRC summed: the same seed gives the
+ *       same sum whatever the file system does underneath)
+ *   sdtest fat DIR [OPS [SEED]]           two files grown in turns (their
+ *       clusters interleaved), then random reads, writes (also past the
+ *       end), truncations and reopens through several handles at once,
+ *       every read checked against a copy in memory; removed afterwards
  *   sdtest stress DIR MB [SEED [keep]]    files of random sizes written
  *       in random pieces from unaligned buffers, overwritten in places
  *       (garbage first, then the right data), read back in random pieces
@@ -248,6 +255,443 @@ static int cmd_read(int argc, char **argv)
          us ? total * 1000000 / 1024 / us : 0, kb, kind, buf);
   free(tofree);
   return 0;
+}
+
+static int cmd_seek(int argc, char **argv)
+{
+  size_t bytes = argc > 3 ? atoi(argv[3]) : 4096;
+  uint32_t n = argc > 4 ? atoi(argv[4]) : 1000;
+  const char *kind = argc > 5 ? argv[5] : "psram";
+  uint64_t total = 0;
+  uint64_t t0;
+  uint64_t us;
+  uint32_t sum = 0;
+  uint32_t back = 0;
+  off_t size;
+  off_t last = 0;
+  void *tofree;
+  uint8_t *buf;
+  uint32_t i;
+  int fd;
+
+  g_rand = argc > 6 ? atoi(argv[6]) : 1;
+  if (g_rand == 0)
+    {
+      g_rand = 1;
+    }
+
+  buf = pick_buffer(kind, bytes, &tofree);
+  fd = open(argv[2], O_RDONLY);
+  if (buf == NULL || fd < 0 || bytes == 0)
+    {
+      printf("%s: %d\n", argv[2], buf == NULL ? ENOMEM : errno);
+      free(tofree);
+      return 1;
+    }
+
+  size = lseek(fd, 0, SEEK_END);
+  if (size <= (off_t)bytes)
+    {
+      printf("%s: too small\n", argv[2]);
+      close(fd);
+      free(tofree);
+      return 1;
+    }
+
+  t0 = now_us();
+  for (i = 0; i < n; i++)
+    {
+      off_t pos = rnd() % (uint32_t)(size - bytes);
+      ssize_t got;
+
+      back += pos < last;
+      last = pos;
+      if (lseek(fd, pos, SEEK_SET) != pos ||
+          (got = read(fd, buf, bytes)) != (ssize_t)bytes)
+        {
+          printf("read error %d at %" PRIu32 "\n", errno, (uint32_t)pos);
+          break;
+        }
+
+      total += got;
+      sum += crc_update(0xffffffffu, buf, bytes);
+    }
+
+  us = now_us() - t0;
+  close(fd);
+  printf("seek: %" PRIu32 " reads of %zu bytes (%" PRIu32 " backwards) in "
+         "%" PRIu64 " us: %" PRIu64 " us a read, %" PRIu64 " KB/s, "
+         "sum %08" PRIx32 " (%s)\n", i, bytes, back, us, i ? us / i : 0,
+         us ? total * 1000000 / 1024 / us : 0, sum, kind);
+  free(tofree);
+  return i == n ? 0 : 1;
+}
+
+/* sdtest fat: the file system's cluster bookkeeping (seeks backwards and
+ * forwards, files growing and shrinking under open handles) against a
+ * model of the file in memory.
+ *
+ * Handle 0 writes; it is synced after every change.  Each handle keeps a
+ * sector of the file of its own (NuttX's FAT), which another handle's
+ * writes do not update: the other handles read whole sectors only, which
+ * go past that cache.
+ */
+
+#define FAT_MAXSIZE  (768 * 1024)
+#define FAT_HANDLES  4
+
+struct fatcheck_s
+{
+  uint8_t *model;                   /* The file as it should be */
+  uint8_t *buf;
+  uint32_t size;
+  int fd[FAT_HANDLES];              /* 0: read-write, the rest read-only */
+  const char *path;
+  uint32_t errs;
+};
+
+static int fat_reopen(struct fatcheck_s *c, int h, int flags)
+{
+  if (c->fd[h] >= 0)
+    {
+      close(c->fd[h]);
+    }
+
+  c->fd[h] = open(c->path, flags, 0666);
+  if (c->fd[h] < 0)
+    {
+      printf("  open %s: %d\n", c->path, errno);
+      c->errs++;
+      return -1;
+    }
+
+  return 0;
+}
+
+static void fat_check(struct fatcheck_s *c, int h, uint32_t pos,
+                      uint32_t len, const char *what)
+{
+  uint32_t want;
+  ssize_t n;
+  uint32_t i;
+
+  if (h != 0)
+    {
+      len += pos & 511;
+      pos &= ~511;
+      len = (len + 511) & ~511;
+    }
+
+  want = pos >= c->size ? 0 : len > c->size - pos ? c->size - pos : len;
+  if (h != 0 && (want & 511) != 0)
+    {
+      /* The end of the file: from handle 0 */
+
+      h = 0;
+    }
+
+  if (lseek(c->fd[h], pos, SEEK_SET) != (off_t)pos)
+    {
+      printf("  %s: lseek %" PRIu32 ": %d\n", what, pos, errno);
+      c->errs++;
+      return;
+    }
+
+  n = read(c->fd[h], c->buf, len);
+  if (n != (ssize_t)want)
+    {
+      printf("  %s: handle %d read %" PRIu32 "+%" PRIu32 ": %zd, want %"
+             PRIu32 " (size %" PRIu32 ", errno %d)\n", what, h, pos, len, n,
+             want, c->size, errno);
+      c->errs++;
+      return;
+    }
+
+  if (memcmp(c->buf, c->model + pos, want) != 0)
+    {
+      for (i = 0; i < want && c->buf[i] == c->model[pos + i]; i++)
+        {
+        }
+
+      printf("  %s: handle %d MISMATCH at %" PRIu32 " (%02x, want %02x), "
+             "read %" PRIu32 "+%" PRIu32 ", size %" PRIu32 "\n", what, h,
+             pos + i, c->buf[i], c->model[pos + i], pos, len, c->size);
+      c->errs++;
+    }
+}
+
+static uint32_t fat_len(void)
+{
+  uint32_t r = rnd() % 4;
+
+  return r == 0 ? rnd_range(1, 600) : r == 1 ? 512 * rnd_range(1, 16) :
+                  rnd_range(1, 40000);
+}
+
+static int cmd_fat(int argc, char **argv)
+{
+  const char *dir = argv[2];
+  uint32_t ops = argc > 3 ? atoi(argv[3]) : 3000;
+  uint32_t seed = argc > 4 ? strtoul(argv[4], NULL, 0) : 1;
+  struct fatcheck_s c;
+  bool v = argc > 5 && strchr(argv[5], 'v') != NULL;
+  bool paranoid = argc > 5 && strchr(argv[5], 'p') != NULL;
+  char path[128];
+  char other[128];
+  uint32_t i = 0;
+  int fo;
+  int h;
+
+  memset(&c, 0, sizeof(c));
+  g_rand = seed * 2654435761u | 1;
+  c.model = malloc(FAT_MAXSIZE + 65536);
+  c.buf = malloc(65536);
+  if (c.model == NULL || c.buf == NULL)
+    {
+      printf("no memory\n");
+      free(c.model);
+      free(c.buf);
+      return 1;
+    }
+
+  mkdir(dir, 0777);
+  snprintf(path, sizeof(path), "%s/fat.bin", dir);
+  snprintf(other, sizeof(other), "%s/other.bin", dir);
+  c.path = path;
+  for (h = 0; h < FAT_HANDLES; h++)
+    {
+      c.fd[h] = -1;
+    }
+
+  /* The two files grown in turns, in pieces of a few clusters at most,
+   * so that their chains interleave
+   */
+
+  if (fat_reopen(&c, 0, O_RDWR | O_CREAT | O_TRUNC) < 0)
+    {
+      goto out;
+    }
+
+  fo = open(other, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+  while (fo >= 0 && c.size < FAT_MAXSIZE / 2)
+    {
+      uint32_t len = rnd_range(1, 9000);
+
+      fill(c.model + c.size, seed, 1, c.size, len);
+      if (write(c.fd[0], c.model + c.size, len) != (ssize_t)len ||
+          fsync(c.fd[0]) < 0 ||
+          write(fo, c.buf, rnd_range(1, 9000)) <= 0)
+        {
+          printf("  write: %d\n", errno);
+          c.errs++;
+          break;
+        }
+
+      c.size += len;
+    }
+
+  if (fo >= 0)
+    {
+      close(fo);
+    }
+
+  for (h = 1; h < FAT_HANDLES; h++)
+    {
+      fat_reopen(&c, h, O_RDONLY);
+    }
+
+  for (i = 0; i < ops && c.errs == 0; i++)
+    {
+      uint32_t r = rnd() % 100;
+      uint32_t pos;
+      uint32_t len;
+
+      if (paranoid && i > 0)
+        {
+          /* All of it, through handle 0 */
+
+          for (pos = 0; pos < c.size && c.errs == 0; pos += 8192)
+            {
+              fat_check(&c, 0, pos, 8192, "paranoid");
+            }
+
+          if (c.errs != 0)
+            {
+              break;
+            }
+        }
+
+      h = rnd() % FAT_HANDLES;
+      if (r < 60)
+        {
+          /* A read anywhere (some past the end) */
+
+          len = fat_len();
+          pos = rnd() % (c.size + 2048);
+          fat_check(&c, h, pos, len, "read");
+        }
+      else if (r < 64)
+        {
+          /* Reads backwards through the file */
+
+          len = fat_len();
+          for (pos = c.size; pos > 0 && c.errs == 0; )
+            {
+              pos = pos > len * 7 ? pos - len * 7 : 0;
+              fat_check(&c, h, pos, len, "back");
+            }
+        }
+      else if (r < 84)
+        {
+          /* A write, sometimes past the end (a gap of zeros) */
+
+          len = fat_len();
+          pos = rnd() % (c.size + (rnd() % 4 == 0 ? 20000 : 1));
+          if (pos + len > FAT_MAXSIZE)
+            {
+              continue;
+            }
+
+          if (pos > c.size)
+            {
+              memset(c.model + c.size, 0, pos - c.size);
+            }
+
+          if (v)
+            {
+              printf("  %" PRIu32 ": write %" PRIu32 "+%" PRIu32 " (size %"
+                     PRIu32 ")\n", i, pos, len, c.size);
+            }
+
+          fill(c.model + pos, seed, i + 2, pos, len);
+          if (lseek(c.fd[0], pos, SEEK_SET) != (off_t)pos ||
+              write(c.fd[0], c.model + pos, len) != (ssize_t)len)
+            {
+              printf("  write %" PRIu32 "+%" PRIu32 ": %d\n", pos, len,
+                     errno);
+              c.errs++;
+              break;
+            }
+
+          if (pos + len > c.size)
+            {
+              c.size = pos + len;
+            }
+
+          fsync(c.fd[0]);
+
+          /* Read back at once through another handle */
+
+          fat_check(&c, 1 + rnd() % (FAT_HANDLES - 1), pos, len, "written");
+        }
+      else if (r < 90)
+        {
+          /* ftruncate: shorter or longer */
+
+          uint32_t n = rnd() % 3 == 0 ? rnd() % (c.size + 1) :
+                       rnd() % 2 ? c.size + rnd() % 30000 :
+                                   c.size - c.size / 8;
+
+          if (n > FAT_MAXSIZE)
+            {
+              continue;
+            }
+
+          if (n > c.size)
+            {
+              memset(c.model + c.size, 0, n - c.size);
+            }
+
+          if (v)
+            {
+              printf("  %" PRIu32 ": ftruncate %" PRIu32 " -> %" PRIu32 "\n",
+                     i, c.size, n);
+            }
+
+          if (ftruncate(c.fd[0], n) < 0)
+            {
+              printf("  ftruncate %" PRIu32 ": %d\n", n, errno);
+              c.errs++;
+              break;
+            }
+
+          c.size = n;
+          fsync(c.fd[0]);
+          fat_check(&c, h, n > 5000 ? n - 5000 : 0, 10000, "truncated");
+        }
+      else if (r < 92)
+        {
+          /* Opened again with O_TRUNC while the others are open */
+
+          if (v)
+            {
+              printf("  %" PRIu32 ": O_TRUNC\n", i);
+            }
+
+          if (fat_reopen(&c, 0, O_RDWR | O_TRUNC) < 0)
+            {
+              break;
+            }
+
+          c.size = 0;
+        }
+      else if (r < 96)
+        {
+          /* A read-only handle closed and opened again */
+
+          h = 1 + rnd() % (FAT_HANDLES - 1);
+          fat_reopen(&c, h, O_RDONLY);
+        }
+      else
+        {
+          /* The other file grows (new clusters interleave), or starts
+           * again (the room it had to be taken again)
+           */
+
+          fo = open(other, rnd() % 8 == 0 ? O_WRONLY | O_TRUNC :
+                                            O_WRONLY | O_APPEND);
+          if (fo >= 0)
+            {
+              if (lseek(fo, 0, SEEK_END) < 1024 * 1024)
+                {
+                  write(fo, c.buf, rnd_range(1, 20000));
+                }
+
+              close(fo);
+            }
+        }
+    }
+
+  /* Everything once more, through a new handle, in pieces */
+
+  if (c.errs == 0)
+    {
+      uint32_t pos;
+
+      fat_reopen(&c, 1, O_RDONLY);
+      for (pos = 0; pos < c.size && c.errs == 0; pos += 4096)
+        {
+          fat_check(&c, 1, pos, 4096, "final");
+        }
+    }
+
+out:
+  for (h = 0; h < FAT_HANDLES; h++)
+    {
+      if (c.fd[h] >= 0)
+        {
+          close(c.fd[h]);
+        }
+    }
+
+  unlink(path);
+  unlink(other);
+  rmdir(dir);
+  free(c.model);
+  free(c.buf);
+  printf("fat: %" PRIu32 " operations, size %" PRIu32 ": %s\n", i, c.size,
+         c.errs == 0 ? "PASS" : "FAIL");
+  return c.errs == 0 ? 0 : 1;
 }
 
 static int cmd_write(int argc, char **argv)
@@ -645,6 +1089,14 @@ int main(int argc, FAR char *argv[])
     {
       return cmd_write(argc, argv);
     }
+  else if (argc >= 3 && strcmp(argv[1], "fat") == 0)
+    {
+      return cmd_fat(argc, argv);
+    }
+  else if (argc >= 3 && strcmp(argv[1], "seek") == 0)
+    {
+      return cmd_seek(argc, argv);
+    }
   else if (argc >= 4 && strcmp(argv[1], "stress") == 0)
     {
       return cmd_stress(argc, argv);
@@ -653,6 +1105,8 @@ int main(int argc, FAR char *argv[])
   printf("sdtest crc FILE...\n"
          "sdtest read FILE [KB [sram|psram [MB]]]\n"
          "sdtest write FILE MB [KB [sram|psram]]\n"
+         "sdtest seek FILE [BYTES [N [sram|psram [SEED]]]]\n"
+         "sdtest fat DIR [OPS [SEED]]\n"
          "sdtest stress DIR MB [SEED [keep|v|keepv]]\n");
   return 2;
 }
