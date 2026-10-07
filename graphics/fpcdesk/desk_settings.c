@@ -51,7 +51,7 @@
 #define NWALLS         4               /* The drawn ones, then the image */
 #define THEME_W        132             /* A theme's preview */
 #define THEME_H        80
-#define RES_MAX        6               /* Display modes listed */
+#define RES_MAX        8               /* Display modes listed */
 #define RES_STD        4               /* ... the first row: every monitor's;
                                         * then the experimental ones */
 #define MODE_TRIAL_S   20              /* A new mode reverts unless kept */
@@ -268,6 +268,7 @@ static void mode_values(struct settings_s *st, int mode);
 int fpc_gpu_modeinfo(int mode, int *w, int *h, int *hz, int *flags);
 #  define MODEF_Y420  0x01             /* FPC_GPU_MODEF_* */
 #  define MODEF_EXPERIMENTAL 0x02
+#  define MODEF_SCALED 0x04            /* Shown 2 x 2 (1920 x 1080 at 2 x) */
 #endif
 
 static const char * const g_pages[SETTINGS_PAGES] =
@@ -2656,7 +2657,8 @@ void desk_settings_changed(int page)
 }
 
 /* A display mode's name: "1280 x 800"; the experimental ones with their
- * rate (and the segments' short form, without the size)
+ * rate (and the segments' short form, without the size); the 2 x 2 ones
+ * (960 x 540 shown at 1920 x 1080) as "1920 x 1080, 2x (30 Hz)"
  */
 
 void desk_mode_label(int mode, char *buf, size_t n, bool brief)
@@ -2667,6 +2669,23 @@ void desk_mode_label(int mode, char *buf, size_t n, bool brief)
   int h;
   int hz;
   int flags;
+
+  if (fpc_gpu_modeinfo(mode, &w, &h, &hz, &flags) >= 0 &&
+      (flags & MODEF_SCALED) != 0)
+    {
+      if (brief)
+        {
+          snprintf(buf, n, "2x, %d Hz%s", hz,
+                   (flags & MODEF_Y420) ? ", 4:2:0" : "");
+        }
+      else
+        {
+          snprintf(buf, n, "%d x %d, 2x (%d Hz%s)", w * 2, h * 2, hz,
+                   (flags & MODEF_Y420) ? ", 4:2:0" : "");
+        }
+
+      return;
+    }
 
   if (fpc_gpu_modeinfo(mode, &w, &h, &hz, &flags) >= 0 &&
       (flags & MODEF_EXPERIMENTAL) != 0)
