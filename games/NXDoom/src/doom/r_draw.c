@@ -37,6 +37,12 @@
 #  include <syslog.h>
 #endif
 
+#if defined(CONFIG_GAMES_NXDOOM_DRAWQ) && defined(CONFIG_ARCH_CHIP_RP23XX)
+#  include <arch/chip/interp.h>
+#  include "m_argv.h"
+#  define NXDOOM_SIO 1                    /* The drawer on the interpolators */
+#endif
+
 #include "deh_main.h"
 #include "doomdef.h"
 
@@ -207,7 +213,131 @@ static struct
   void *stack;                            /* The game's heap: the PSRAM */
   sem_t go;
   int fuzzpos;                            /* The drawer's */
+  bool sio;                               /* The drawer has its core's
+                                           * interpolators */
+  bool siocheck;                          /* -siocheck */
+  uint32_t checked;                       /* ... entries compared */
+  uint32_t checkbad;                      /* ... that differed */
 } g_dq NXDOOM_SRAM;                       /* (Spun on by both cores) */
+
+#ifdef NXDOOM_SIO
+/* The drawer's columns and spans on its core's SIO interpolators
+ * (arch/chip/interp.h), pixel for pixel dq_draw()'s: the texel's address
+ * and the step in one single-cycle load (POP2: BASE2, the texture, plus
+ * the lanes' shifted and masked accumulators, and each accumulator
+ * stepped).  The drawer is pinned to its core and claims the pair
+ * (dq_main()); each entry sets up all it uses.
+ */
+
+#define I0 RP23XX_INTERP0
+
+static void dq_draw(const struct dq_s *e);
+
+/* A column: lane 0 frac (ADD_RAW, BASE0 the step) giving
+ * (frac >> FRACBITS) & 127, bits 16-22 whatever frac's sign, as the C's
+ * shift and mask take them
+ */
+
+NXDOOM_FAST static void dq_sio_column(const struct dq_s *e)
+{
+  pixel_t *dest = e->dest;
+  int count = e->count;
+  const lighttable_t *colormap = e->colormap;
+
+  I0->ctrl[0] = INTERP_SHIFT(FRACBITS) | INTERP_MASK(0, 6) | INTERP_ADD_RAW;
+  I0->ctrl[1] = 0;
+  I0->accum[0] = e->frac;
+  I0->accum[1] = 0;
+  I0->base[0] = e->step;
+  I0->base[1] = 0;
+  I0->base[2] = (uint32_t)e->source;
+
+  while (count >= 3)
+    {
+      dest[0] = colormap[*(const byte *)I0->pop[2]];
+      dest[SCREENWIDTH] = colormap[*(const byte *)I0->pop[2]];
+      dest[2 * SCREENWIDTH] = colormap[*(const byte *)I0->pop[2]];
+      dest[3 * SCREENWIDTH] = colormap[*(const byte *)I0->pop[2]];
+      dest += 4 * SCREENWIDTH;
+      count -= 4;
+    }
+
+  while (count-- >= 0)
+    {
+      *dest = colormap[*(const byte *)I0->pop[2]];
+      dest += SCREENWIDTH;
+    }
+}
+
+/* A span: frac packs x (6.10, the top half) and y (6.10, the bottom);
+ * lane 0 gives frac >> 26 (x's whole part, bits 26-31) and steps it,
+ * lane 1 reads the same accumulator (CROSS_INPUT) for (frac >> 4) & 0x0fc0
+ * (y's, bits 10-15, as row * 64); the two fields do not overlap, so their
+ * sum is the C's |
+ */
+
+/* -siocheck: an entry drawn on the interpolators drawn again by the C
+ * (dq_draw()) and the two compared; the counts logged as the drawer ends
+ */
+
+static void dq_sio_check(const struct dq_s *e)
+{
+  pixel_t got[SCREENWIDTH];
+  int step = e->kind == DQ_COLUMN ? SCREENWIDTH : 1;
+  int i;
+
+  if (e->count >= SCREENWIDTH)
+    {
+      return;                             /* (not drawn: dq_draw() would) */
+    }
+
+  for (i = 0; i <= e->count; i++)
+    {
+      got[i] = e->dest[i * step];
+    }
+
+  dq_draw(e);
+  g_dq.checked++;
+  for (i = 0; i <= e->count; i++)
+    {
+      if (got[i] != e->dest[i * step])
+        {
+          g_dq.checkbad++;
+          break;
+        }
+    }
+}
+
+NXDOOM_FAST static void dq_sio_span(const struct dq_s *e)
+{
+  pixel_t *dest = e->dest;
+  int count = e->count;
+  const lighttable_t *colormap = e->colormap;
+
+  I0->ctrl[0] = INTERP_SHIFT(26) | INTERP_MASK(0, 5) | INTERP_ADD_RAW;
+  I0->ctrl[1] = INTERP_SHIFT(4) | INTERP_MASK(6, 11) | INTERP_CROSS_INPUT;
+  I0->accum[0] = e->frac;
+  I0->accum[1] = 0;
+  I0->base[0] = e->step;
+  I0->base[1] = 0;
+  I0->base[2] = (uint32_t)e->source;
+
+  while (count >= 3)
+    {
+      dest[0] = colormap[*(const byte *)I0->pop[2]];
+      dest[1] = colormap[*(const byte *)I0->pop[2]];
+      dest[2] = colormap[*(const byte *)I0->pop[2]];
+      dest[3] = colormap[*(const byte *)I0->pop[2]];
+      dest += 4;
+      count -= 4;
+    }
+
+  while (count-- >= 0)
+    {
+      *dest++ = colormap[*(const byte *)I0->pop[2]];
+    }
+}
+#endif
 
 NXDOOM_FAST static void dq_draw(const struct dq_s *e)
 {
@@ -271,11 +401,44 @@ NXDOOM_FAST static void dq_draw(const struct dq_s *e)
     }
 }
 
+/* The drawer's interpolators given back as it ends */
+
+static void dq_sio_release(void)
+{
+#ifdef NXDOOM_SIO
+  if (g_dq.sio)
+    {
+      g_dq.sio = false;
+      rp23xx_interp_release();
+      if (g_dq.siocheck)
+        {
+          syslog(LOG_INFO, "nxdoom: -siocheck: %u columns and spans "
+                 "compared, %u differ\n", (unsigned)g_dq.checked,
+                 (unsigned)g_dq.checkbad);
+        }
+    }
+#endif
+}
+
 /* The drawer: sleeps between frames, spins within one */
 
 NXDOOM_FAST static void *dq_main(void *arg)
 {
   (void)arg;
+#ifdef NXDOOM_SIO
+  /* Pinned to its core (dq_start()): its interpolators, unless -nosio */
+
+  if (m_check_parm("-nosio") <= 0)
+    {
+      int cpu = rp23xx_interp_claim();
+
+      g_dq.sio = cpu >= 0;
+      g_dq.siocheck = g_dq.sio && m_check_parm("-siocheck") > 0;
+      syslog(LOG_INFO, "nxdoom: the drawer %s\n", cpu >= 0 ?
+             "on its core's interpolators" : "in plain C (no interpolators)");
+    }
+#endif
+
   for (; ; )
     {
       sem_wait(&g_dq.go);
@@ -288,6 +451,7 @@ NXDOOM_FAST static void *dq_main(void *arg)
             {
               if (__atomic_load_n(&g_dq.quit, __ATOMIC_RELAXED))
                 {
+                  dq_sio_release();
                   return NULL;
                 }
             }
@@ -299,12 +463,35 @@ NXDOOM_FAST static void *dq_main(void *arg)
               break;
             }
 
-          dq_draw(e);
+#ifdef NXDOOM_SIO
+          if (g_dq.sio && e->kind == DQ_COLUMN)
+            {
+              dq_sio_column(e);
+              if (g_dq.siocheck)
+                {
+                  dq_sio_check(e);
+                }
+            }
+          else if (g_dq.sio && e->kind == DQ_SPAN)
+            {
+              dq_sio_span(e);
+              if (g_dq.siocheck)
+                {
+                  dq_sio_check(e);
+                }
+            }
+          else
+#endif
+            {
+              dq_draw(e);
+            }
+
           __atomic_store_n(&g_dq.tail, t + 1, __ATOMIC_RELEASE);
         }
 
       if (__atomic_load_n(&g_dq.quit, __ATOMIC_RELAXED))
         {
+          dq_sio_release();
           return NULL;
         }
     }
@@ -404,6 +591,7 @@ static bool dq_start(void)
   g_dq.tail = 0;
   g_dq.quit = false;
   g_dq.fuzzpos = 0;
+  g_dq.sio = false;
   sem_init(&g_dq.go, 0, 0);
 
   CPU_ZERO(&cpus);
