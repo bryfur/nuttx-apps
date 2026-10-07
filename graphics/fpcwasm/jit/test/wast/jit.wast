@@ -349,3 +349,29 @@
 )
 (assert_return (invoke "shop" (i32.const 10) (i32.const 5)) (i32.const 1109))
 (assert_return (invoke "shop" (i32.const -7) (i32.const -123456)) (i32.const -3973271))
+
+;; Bounds proofs where control flow merges: what every way in had (the
+;; else arm checked nothing: the access after the if is checked)
+
+(module
+  (memory 1)
+  (func (export "pmerge") (param $p i32) (param $c i32) (result i32)
+    (local $s i32)
+    (if (local.get $c)
+      (then (local.set $s (i32.load offset=8 (local.get $p))))
+      (else (local.set $s (i32.const 1))))
+    (i32.add (local.get $s) (i32.load offset=4 (local.get $p))))
+  (func (export "pmerge2") (param $p i32) (param $c i32) (result i32)
+    (local $s i32)
+    (block $b
+      (local.set $s (i32.load offset=8 (local.get $p)))
+      (br_if $b (local.get $c))
+      (local.set $s (i32.load offset=12 (local.get $p))))
+    (i32.add (local.get $s) (i32.load offset=10 (local.get $p))))
+)
+(assert_return (invoke "pmerge" (i32.const 0) (i32.const 1)) (i32.const 0))
+(assert_return (invoke "pmerge" (i32.const 65524) (i32.const 1)) (i32.const 0))
+(assert_return (invoke "pmerge" (i32.const 0) (i32.const 0)) (i32.const 1))
+(assert_trap (invoke "pmerge" (i32.const 65534) (i32.const 0)) "out of bounds memory access")
+(assert_return (invoke "pmerge2" (i32.const 65520) (i32.const 0)) (i32.const 0))
+(assert_trap (invoke "pmerge2" (i32.const 65524) (i32.const 1)) "out of bounds memory access")

@@ -148,6 +148,13 @@ typedef struct label_s
 {
   int32_t pos;                    /* -1: not yet bound */
   int32_t fix;                    /* First fixup waiting, -1 none */
+  bool any;                       /* A branch here was seen: */
+  uint8_t nbc;                    /* the bounds proofs every one had */
+  struct
+  {
+    int8_t reg;
+    uint32_t end;
+  } bc[4];
 } label_t;
 
 typedef struct fixup_s
@@ -731,6 +738,7 @@ static int new_label(jc_t *c)
 
   c->labels[c->nlabels].pos = -1;
   c->labels[c->nlabels].fix = -1;
+  c->labels[c->nlabels].any = false;
   return (int)c->nlabels++;
 }
 
@@ -839,15 +847,76 @@ static void bc_back(jc_t *c, ctrl_t *ct)
     }
 }
 
+/* A way to a label (not yet bound) with c->bc: what it keeps proven is
+ * what every way there had
+ */
+
+static void lb_meet(jc_t *c, label_t *lb)
+{
+  uint32_t i;
+  uint32_t k;
+  uint32_t n = 0;
+
+  if (!lb->any)
+    {
+      lb->any = true;
+      lb->nbc = (uint8_t)c->nbc;
+      memcpy(lb->bc, c->bc, sizeof(lb->bc));
+      return;
+    }
+
+  for (i = 0; i < lb->nbc; i++)
+    {
+      for (k = 0; k < c->nbc && c->bc[k].reg != lb->bc[i].reg; k++);
+      if (k < c->nbc)
+        {
+          lb->bc[n].reg = lb->bc[i].reg;
+          lb->bc[n++].end = c->bc[k].end < lb->bc[i].end ?
+                            c->bc[k].end : lb->bc[i].end;
+        }
+    }
+
+  lb->nbc = (uint8_t)n;
+}
+
+/* lbind_ft(): what the label keeps of the proofs: those of every branch to
+ * it and of the code falling through to it (LB_FT) or not (LB_NOFT: the
+ * code before it ends in a branch); lbind(): none (LB_CLEAR: a loop's
+ * start, an exact check's way back)
+ */
+
+enum
+{
+  LB_CLEAR, LB_FT, LB_NOFT
+};
+
+static void lbind_ft(jc_t *c, int l, int mode);
+
 static void lbind(jc_t *c, int l)
+{
+  lbind_ft(c, l, LB_CLEAR);
+}
+
+static void lbind_ft(jc_t *c, int l, int mode)
 {
   label_t *lb = &c->labels[l];
   int32_t i;
 
+  if (mode == LB_FT)
+    {
+      lb_meet(c, lb);
+    }
+
   c->nbc = 0;                   /* (other ways in: nothing proven) */
+  if (mode != LB_CLEAR && lb->any)
+    {
+      c->nbc = lb->nbc;         /* (but what every way in had) */
+      memcpy(c->bc, lb->bc, sizeof(c->bc));
+    }
+
   c->kvalid = 0;                /* (nor known) */
   c->lvalid = 0;
-  bc_loops(c);                  /* (but what the loops around keep) */
+  bc_loops(c);                  /* (and what the loops around keep) */
 
   /* A b.w just before, to here: left out (a label bound at it now means
    * here, the same; not when one is bound after it, here: branches to
@@ -904,6 +973,7 @@ static void add_fix(jc_t *c, int l, uint8_t kind, uint8_t cond,
 
   c->fix[c->nfix] = f;
   lb->fix = (int32_t)c->nfix++;
+  lb_meet(c, lb);
 }
 
 static void br_to(jc_t *c, int l)            /* b.w label */
@@ -2628,7 +2698,7 @@ static void br_cond(jc_t *c, uint32_t depth, int cond)
       br_to(c, ct->label);
     }
 
-  lbind(c, skip);
+  lbind_ft(c, skip, LB_NOFT);
 }
 
 /* Set the flags from a value: true is NE */
@@ -2770,10 +2840,15 @@ static void op_end(jc_t *c)
 
   if (ct->kind == CK_IF)
     {
-      lbind(c, ct->else_label);    /* No else: the parameters pass */
+      lbind_ft(c, ct->else_label,  /* No else: the parameters pass */
+               ct->unreach ? LB_NOFT : LB_FT);
+      lbind_ft(c, ct->label, LB_FT);
+    }
+  else
+    {
+      lbind_ft(c, ct->label, ct->unreach ? LB_NOFT : LB_FT);
     }
 
-  lbind(c, ct->label);
   reset_stack(c, ct, true);
   {
     bool reach = !ct->unreach || ct->kind == CK_IF ||
@@ -3820,7 +3895,7 @@ static void op_i32_div(jc_t *c, uint8_t op)
           bcc_to(c, CC_NE, ok);
           cmp_imm(c, ra, 0x80000000u);
           trap_if(c, CC_EQ, JT_OVERFLOW);
-          lbind(c, ok);
+          lbind_ft(c, ok, LB_FT);
         }
 
       rd = alloc_dest(c);
@@ -4282,7 +4357,7 @@ static void op_i64_div(jc_t *c, uint8_t op)
       t_it(&c->fb, CC_EQ, "t");
       t_cmpi_enc(&c->fb, alo, 0);
       trap_if(c, CC_EQ, JT_OVERFLOW);
-      lbind(c, ok);
+      lbind_ft(c, ok, LB_FT);
     }
 
   ccall(c, fn[op - WASM_OP_I64_DIV_S], "ll", args, T_I64, true);
@@ -6754,7 +6829,7 @@ static void op_br_table(jc_t *c, const uint8_t **pp)
 
       if (frag[i] >= 0)
         {
-          lbind(c, frag[i]);
+          lbind_ft(c, frag[i], LB_NOFT);
           op_br(c, depth);
         }
     }
@@ -6899,7 +6974,7 @@ static void op_else(jc_t *c)
       br_to(c, ct->label);
     }
 
-  lbind(c, ct->else_label);
+  lbind_ft(c, ct->else_label, LB_NOFT);
   reset_stack(c, ct, false);
   ct->kind = CK_ELSE;
   ct->unreach = false;
