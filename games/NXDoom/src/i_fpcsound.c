@@ -31,6 +31,7 @@
 #include <nuttx/audio/fpc_mixer.h>
 
 #include "doomtype.h"
+#include "i_fpcmix.h"
 #include "i_sound.h"
 #include "w_wad.h"
 #include "z_zone.h"
@@ -44,21 +45,13 @@
 #define FPC_AHEAD       662             /* Frames kept written ahead: 60 ms */
 #define FPC_CHUNK       256
 #define FPC_TICK_US     10000
+#define FPC_STACK       2048            /* (CONFIG_PTHREAD_STACK_DEFAULT) */
 
 /****************************************************************************
  * Private Types
  ****************************************************************************/
 
-struct fpc_voice_s
-{
-  const uint8_t *data;                  /* 8-bit unsigned samples */
-  uint32_t len;                         /* ... how many */
-  uint32_t pos;                         /* 16.16 */
-  uint32_t step;                        /* 16.16: its rate / FPC_RATE */
-  int      left;                        /* Gains, 0..254 */
-  int      right;
-  bool     on;
-};
+/* struct fpc_voice_s: i_fpcmix.h */
 
 /****************************************************************************
  * Private Function Prototypes
@@ -101,8 +94,17 @@ static struct
   uint32_t  f0;                          /* The channel's count at start */
   struct fpc_voice_s voice[FPC_NCHAN];
   struct fpcmix_info_s info;
-  int16_t   buf[FPC_CHUNK * 2];
-} g_fpc;
+  uint32_t  buf[FPC_CHUNK];              /* Stereo frames, left low */
+} g_fpc NXDOOM_SRAM;
+
+/* The sound thread's stack: in the SRAM with the voices and the mix
+ * (NXDOOM_SRAM, NXDOOM_FAST), out of the way of the game's thrashing of
+ * the XIP cache
+ */
+
+#ifdef CONFIG_GAMES_NXDOOM_FASTCODE
+static uint64_t g_fpc_stack[FPC_STACK / 8] NXDOOM_SRAM;
+#endif
 
 /****************************************************************************
  * Public Data
@@ -194,39 +196,21 @@ static uint32_t fpc_played(void)
   return g_fpc.info.chan[g_fpc.pcm].frames;
 }
 
-/* n frames of every voice, mixed */
+/* n frames of every voice, mixed (not inlined: in the SRAM) */
 
-static void fpc_mix(int n)
+NXDOOM_FAST static void __attribute__((noinline)) fpc_mix(int n)
 {
-  int16_t *out = g_fpc.buf;
-  int i;
   int k;
 
-  memset(out, 0, n * 4);
+  memset(g_fpc.buf, 0, n * 4);
   pthread_mutex_lock(&g_fpc.lock);
   for (k = 0; k < FPC_NCHAN; k++)
     {
       struct fpc_voice_s *v = &g_fpc.voice[k];
 
-      for (i = 0; v->on && i < n; i++)
+      if (v->on)
         {
-          uint32_t at = v->pos >> 16;
-          int s;
-          int l;
-          int r;
-
-          if (at >= v->len)
-            {
-              v->on = false;
-              break;
-            }
-
-          s = ((int)v->data[at] - 128) << 8;
-          l = out[2 * i] + s * v->left / 254;
-          r = out[2 * i + 1] + s * v->right / 254;
-          out[2 * i]     = l > 32767 ? 32767 : l < -32768 ? -32768 : l;
-          out[2 * i + 1] = r > 32767 ? 32767 : r < -32768 ? -32768 : r;
-          v->pos += v->step;
+          v->on = fpc_mix_voice(v, g_fpc.buf, n);
         }
     }
 
@@ -266,6 +250,8 @@ static void *fpc_thread(void *arg)
 
 static boolean i_fpc_init_sound(gamemission_t mission)
 {
+  pthread_attr_t attr;
+
   memset(&g_fpc, 0, sizeof(g_fpc));
   g_fpc.mixfd = open(FPCMIX_DEVPATH, O_RDONLY | O_CLOEXEC);
   if (g_fpc.mixfd < 0)
@@ -282,8 +268,12 @@ static boolean i_fpc_init_sound(gamemission_t mission)
 
   pthread_mutex_init(&g_fpc.lock, NULL);
   g_fpc.f0      = fpc_played();
-  g_fpc.running = pthread_create(&g_fpc.thread, NULL, fpc_thread, NULL) ==
-                  0;
+  pthread_attr_init(&attr);
+#ifdef CONFIG_GAMES_NXDOOM_FASTCODE
+  pthread_attr_setstack(&attr, g_fpc_stack, sizeof(g_fpc_stack));
+#endif
+  g_fpc.running = pthread_create(&g_fpc.thread, &attr, fpc_thread,
+                                 NULL) == 0;
   if (!g_fpc.running)
     {
       close(g_fpc.fd);

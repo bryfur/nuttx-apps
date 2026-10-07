@@ -36,6 +36,11 @@ endif
 # TRI's engine and SDK files come as they are: their warnings stay theirs
 # (the SDK's are found through VPATH: their names here are tri/...)
 fg_audio_engine.c_CFLAGS += -Wno-unused-function
+
+# The sound engine's loops (in the SRAM, fg_audio_engine.h) at -O2, as TRI
+# tuned them: at -Os its FM loops reload their gains and tables from the
+# stack every frame
+fg_audio_engine.c_CFLAGS += -O2
 tri/tri_gfx.c_CFLAGS += -Wno-shadow
 tri/tri_text.c_CFLAGS += -Wno-shadow
 

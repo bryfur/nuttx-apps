@@ -95,14 +95,14 @@ typedef struct {
 
 static vdp2_t *VDP;                       // the VRAM map (SRAM + PSRAM) the samples live in
 static sample_t samples[TRI_AUDIO_SAMPLES];
-static patch_t patches[TRI_AUDIO_FM_PATCHES];
-static voice_t voices[TRI_AUDIO_VOICES];
+static patch_t patches[TRI_AUDIO_FM_PATCHES] FG_AUDIO_SRAM;   // (FPC: FG_AUDIO_SRAM)
+static voice_t voices[TRI_AUDIO_VOICES] FG_AUDIO_SRAM;
 static uint32_t live;                                     // bit per voice with mode != V_FREE
 static uint32_t master_l = 255, master_r = 255;
 static vdp2_audio_stats_t ST;
 
 // waveform tables (sine, half-sine, abs-sine, pulse-sine), int16, built at init: 8 KB in SRAM
-static int16_t wave[4][WAVE_N] __attribute__((aligned(4)));
+static int16_t wave[4][WAVE_N] __attribute__((aligned(4))) FG_AUDIO_SRAM;
 
 static void build_tables(void) {
 	// sine from a 5-term Taylor series on [0, pi/2] in Q16 using 1/4-wave symmetry
@@ -316,20 +316,28 @@ bool vdp2_audio_exec(uint32_t op, uint32_t imm, const uint32_t *p, uint32_t nw) 
 // eight phases and spill everything.
 
 // PCM: acc += s * gain, gain = vol * master << 3. Returns false when a one-shot ends.
+// (FPC: the whole-block loop out of line, a leaf like the FM loops below: inlined it
+// shared render_block's registers and reloaded the sample pointer and a gain from the
+// stack every frame.)
+static uint32_t __attribute__((noinline)) __not_in_flash_func(pcm_block)(const int8_t *pcm, uint32_t pos, uint32_t step,
+                                                                         int32_t *acc, int32_t gl, int32_t gr) {
+	int n = BLOCK;
+#pragma GCC unroll 2
+	do {
+		int32_t s = pcm[pos >> 8];
+		acc[0] += s * gl;
+		acc[1] += s * gr;
+		acc += 2;
+		pos += step;
+	} while (--n);
+	return pos;
+}
+
 INLINE bool render_pcm(voice_t *v, int32_t *acc, int32_t gl, int32_t gr) {
 	uint32_t pos = v->pos, step = v->step, len8 = v->len8;
 	const int8_t *pcm = v->pcm;
 	if (pos + step * (BLOCK - 1) < len8) {              // whole block inside the sample: no end checks
-		int n = BLOCK;
-#pragma GCC unroll 2
-		do {
-			int32_t s = pcm[pos >> 8];
-			acc[0] += s * gl;
-			acc[1] += s * gr;
-			acc += 2;
-			pos += step;
-		} while (--n);
-		v->pos = pos;
+		v->pos = pcm_block(pcm, pos, step, acc, gl, gr);
 		return true;
 	}
 	uint32_t loop8 = v->loop8;

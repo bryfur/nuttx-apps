@@ -38,6 +38,15 @@
 #include "tri/tri_isa.h"
 
 #define FG_BLOCK        256               /* Frames rendered at a time (5.3 ms) */
+#define FG_AUDIO_STACK  4096
+
+/* The sound thread's stack in the SRAM with the engine (fg_audio_engine.h:
+ * its mix buffer and spills, every frame), not in the PSRAM
+ */
+
+#if defined(__arm__)
+static uint64_t g_au_stack[FG_AUDIO_STACK / 8] FG_AUDIO_SRAM;
+#endif
 
 static struct
 {
@@ -423,7 +432,7 @@ static int chan_open(void)
 
 static FAR void *audio_thread(FAR void *arg)
 {
-  static int16_t buf[FG_BLOCK * 2];
+  static int16_t buf[FG_BLOCK * 2] FG_AUDIO_SRAM;
 
   while (!g_au.stop)
     {
@@ -478,7 +487,11 @@ int fg_audio_start(void)
 
   g_au.stop = false;
   pthread_attr_init(&attr);
-  pthread_attr_setstacksize(&attr, 4096);
+#if defined(__arm__)
+  pthread_attr_setstack(&attr, g_au_stack, sizeof(g_au_stack));
+#else
+  pthread_attr_setstacksize(&attr, FG_AUDIO_STACK);
+#endif
   sp.sched_priority = 150;                /* Above the game, below the mixer */
   pthread_attr_setschedparam(&attr, &sp);
   if (pthread_create(&g_au.thread, &attr, audio_thread, NULL) != 0)
