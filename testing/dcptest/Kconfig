@@ -1,0 +1,14 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+config TESTING_DCPTEST
+	tristate "dcptest: the RP2350's double-precision coprocessor"
+	default n
+	depends on ARCH_CHIP_RP23XX
+	---help---
+		The coprocessor's double-precision helpers (rp23xx_dcp.S) against
+		libgcc's soft-float, bit for bit, on millions of operands of every
+		class; their speed; and their use from threads on both cores under
+		preemption (docs/hardware-accel.md).

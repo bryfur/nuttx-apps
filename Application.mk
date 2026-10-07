@@ -61,8 +61,13 @@ LDLIBS += $(call CONVERT_PATH,$(BIN))
 # When building a module, link with the compiler runtime.
 # This should be linked after libapps. Consider that mbedtls in libapps
 # uses __udivdi3.
+# Before it, run-time helpers of the chip's own (MODULE_RTSRC from its
+# Config.mk: the RP2350's double-precision coprocessor's), made here.
 ifeq ($(BUILD_MODULE),y)
-  COMPILER_RT_LIB := $(call FIND_COMPILER_RT_LIB)
+  ifneq ($(MODULE_RTSRC),)
+    MODULE_RTLIB := $(CWD)$(DELIM)modrt$(LIBEXT)
+  endif
+  COMPILER_RT_LIB := $(MODULE_RTLIB) $(call FIND_COMPILER_RT_LIB)
   LDLIBS += $(COMPILER_RT_LIB)
 endif
 
@@ -333,6 +338,15 @@ endif
 
 install:: $(PROGLIST)
 	@:
+
+ifneq ($(MODULE_RTLIB),)
+$(MODULE_RTLIB): $(MODULE_RTSRC)
+	$(Q) $(CC) -c $(AFLAGS) $(MODULE_RTAFLAGS) $< -o $(@:$(LIBEXT)=$(OBJEXT))
+	$(call DELFILE, $@)
+	$(Q) $(call ARCHIVE, $@, $(@:$(LIBEXT)=$(OBJEXT)))
+
+$(PROGLIST): $(MODULE_RTLIB)
+endif
 
 else
 

@@ -52,6 +52,11 @@ ifeq ($(CONFIG_INTERPRETERS_MICROPYTHON_FPC),y)
 PORT_SRCS  += modfpc.c
 endif
 
+# hashlib.sha256: /dev/crypto (the board's SHA-256 accelerator) or sha2.c
+ifeq ($(CONFIG_CRYPTO),y)
+PORT_SRCS  += modhashlib_nuttx.c
+endif
+
 MAINSRC     = main.c
 
 # The agent (docs/agent.md): the _agent module, the agent package frozen
