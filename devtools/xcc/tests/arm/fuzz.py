@@ -112,6 +112,19 @@ class Gen:
             return '%s[(%s) %% %du] = (%s)(%s);' % (a, self.expr(2), ln, at, self.expr())
         if r.random() < 0.1:
             return 'bf.%s = %s;' % (r.choice(['a', 'b', 'c', 'd']), self.expr())
+        if t != 'int32_t' and r.random() < 0.15:
+            # C's own compound assignments and ++/-- (on a narrow variable:
+            # done in int, then wrapped to its type; nothing that overflows
+            # an int or shifts a negative one)
+            k = r.random()
+            if k < 0.3:
+                return '%s%s;' % (v, r.choice(['++', '--']))
+            if k < 0.45:
+                return '%s%s;' % (r.choice(['++', '--']), v)
+            if k < 0.6 and t in UNSIGNED:
+                return '%s <<= (%s) & 7u;' % (v, self.expr(2))
+            ops = ['+=', '-='] + (['*='] if t in ('uint8_t', 'int8_t', 'int16_t', 'uint32_t') else [])
+            return '%s %s (%s)(%s);' % (v, r.choice(ops), t, self.expr(2))
         op = r.choice(['=', '=', '+=', '^=', '|=', '&='])
         if op == '=':
             return '%s = (%s)(%s);' % (v, t, self.expr())
@@ -127,6 +140,20 @@ class Gen:
             out += self.block(d + 1)
             if r.random() < 0.5:
                 out += ['} else {'] + self.block(d + 1)
+            return out + ['}']
+        if c < 0.68 and r.random() < 0.3:
+            # a narrow counter that wraps around (at most 12 trips)
+            i = self.name('i')
+            t = r.choice(['uint8_t', 'uint16_t'])
+            top = 255 if t == 'uint8_t' else 65535
+            start, n = top - r.randrange(0, 6), r.randrange(1, 7)
+            end = (start + n) % (top + 1)
+            out = ['for (%s %s = %d; %s != %d; %s++) {' % (t, i, start, i, end, i)]
+            self.vars.append((i, t))
+            self.readonly.add(i)
+            out += self.block(d + 1)
+            self.vars.pop()
+            self.readonly.discard(i)
             return out + ['}']
         if c < 0.75:
             i = self.name('i')

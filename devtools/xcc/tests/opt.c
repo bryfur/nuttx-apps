@@ -878,6 +878,52 @@ static void t_ldnarrow(int k)
   out("ldnarrow", s);
 }
 
+/* Small loops of one block with a known trip count: unrolled whole (a
+ * counter from a constant, up or down, narrow, a step over the bound) */
+
+static uint32_t g_unr[8];
+
+static void t_unroll(int k)
+{
+  uint32_t crc = 0xffffffffu, s = 0;
+  for (int i = 0; i < 40; i++)
+    {
+      crc ^= (uint32_t)(i * 7 + k);
+      for (int b = 0; b < 8; b++)
+        crc = (crc >> 1) ^ (0xedb88320u & -(crc & 1));
+    }
+  for (uint8_t u = 250; u != 2; u++)     /* wraps: 8 trips */
+    s = s * 3 + u;
+  for (int d = 9; d > 0; d -= 4)         /* down, over the bound: 3 trips */
+    s = s * 5 + (uint32_t)d;
+  for (int i = 0; i < 8; i++)
+    g_unr[i] = (uint32_t)i * s + crc;
+  for (int i = 1; i <= 7; i += 3)        /* a step over the bound: 3 trips */
+    s += g_unr[i];
+  out("unroll", crc ^ s);
+}
+
+/* Compound assignments in narrow types: done in int, wrapped to the type */
+
+static void t_compound(int k)
+{
+  uint8_t u = 0xc3;
+  uint16_t w = 0xfff1;
+  int8_t c = -3;
+  int16_t h = 30000;
+  uint32_t s = 0;
+  for (int i = 0; i < 4; i++)
+    {
+      u <<= (k + i) & 7;
+      w <<= (k + 2 * i) & 7;
+      c *= (int8_t)(5 + i);
+      h += (int16_t)(12000 + k);
+      u -= (uint8_t)(k * 77);
+      s = s * 7 + u + w + (uint32_t)(int32_t)c + (uint32_t)(int32_t)h + (uint32_t)(u % 6);
+    }
+  out("compound", s);
+}
+
 static void t_bitx(int k)
 {
   out("bitx", bitx((uint32_t)k, 35) * 1000 + bitx((uint32_t)k + 1, 20));
@@ -907,6 +953,8 @@ int main(int argc, char *argv[])
   t_ldrd();
   t_bitx(argc + 1);
   t_ldnarrow(argc);
+  t_unroll(argc);
+  t_compound(argc);
   printf("total %u\n", (unsigned)g_sum);
   return 0;
 }
