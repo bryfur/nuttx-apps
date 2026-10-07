@@ -128,6 +128,8 @@ typedef struct ctrl_s
   uint8_t ninv;
   uint8_t nspec;
   uint8_t ord;                    /* The loop's number in the function */
+  int32_t stub;                   /* A loop: its b.w to the unwinding, just
+                                   * before its start (fb position) */
   struct
   {
     int8_t reg;
@@ -2550,6 +2552,8 @@ static void ret_moves(jc_t *c)
   pmoves(c, m, n);
 }
 
+static void back_to(jc_t *c, ctrl_t *ct, int cond);
+
 static ctrl_t *ctrl_at(jc_t *c, uint32_t depth)
 {
   return &c->cs[c->csp - 1 - depth];
@@ -2564,9 +2568,14 @@ static void op_br(jc_t *c, uint32_t depth)
       ret_moves(c);
       br_to(c, c->epilogue);
     }
-  else
+  else if (ct->kind == CK_LOOP)
     {
       bc_back(c, ct);
+      br_moves(c, ct);
+      back_to(c, ct, CC_AL);
+    }
+  else
+    {
       br_moves(c, ct);
       br_to(c, ct->label);
     }
@@ -2584,7 +2593,15 @@ static void br_cond(jc_t *c, uint32_t depth, int cond)
   bc_back(c, ct);
   if (ct->kind != CK_FUNC && !br_needs_moves(c, ct))
     {
-      bcc_to(c, cond, ct->label);
+      if (ct->kind == CK_LOOP)
+        {
+          back_to(c, ct, cond);
+        }
+      else
+        {
+          bcc_to(c, cond, ct->label);
+        }
+
       return;
     }
 
@@ -2599,6 +2616,11 @@ static void br_cond(jc_t *c, uint32_t depth, int cond)
     {
       ret_moves(c);
       br_to(c, c->epilogue);
+    }
+  else if (ct->kind == CK_LOOP)
+    {
+      br_moves(c, ct);
+      back_to(c, ct, CC_AL);
     }
   else
     {
@@ -4382,12 +4404,36 @@ static void op_f32_unary(jc_t *c, uint8_t op)
 
 /* f64: helpers on the bit patterns (abs, neg, copysign inline) */
 
+/* The run-time ABI's double helpers (the module's: the coprocessor's on
+ * the board, CONFIG_RP23XX_DCP), called directly where they are wasm's
+ * operation exactly (what jit_f64_add ... would call; the same arguments
+ * and results in r0-r3)
+ */
+
+void __aeabi_dadd(void);
+void __aeabi_dsub(void);
+void __aeabi_dmul(void);
+void __aeabi_ddiv(void);
+void __aeabi_dcmpeq(void);
+void __aeabi_dcmplt(void);
+void __aeabi_dcmple(void);
+void __aeabi_dcmpgt(void);
+void __aeabi_dcmpge(void);
+void __aeabi_i2d(void);
+void __aeabi_ui2d(void);
+void __aeabi_l2d(void);
+void __aeabi_ul2d(void);
+void __aeabi_l2f(void);
+void __aeabi_ul2f(void);
+void __aeabi_d2f(void);
+void __aeabi_f2d(void);
+
 static void op_f64(jc_t *c, uint8_t op)
 {
   static void *const bin[] =
   {
-    (void *)jit_f64_add, (void *)jit_f64_sub, (void *)jit_f64_mul,
-    (void *)jit_f64_div, (void *)jit_f64_min, (void *)jit_f64_max
+    (void *)__aeabi_dadd, (void *)__aeabi_dsub, (void *)__aeabi_dmul,
+    (void *)__aeabi_ddiv, (void *)jit_f64_min, (void *)jit_f64_max
   };
 
   static void *const un[] =
@@ -4398,8 +4444,8 @@ static void op_f64(jc_t *c, uint8_t op)
 
   static void *const cmp[] =
   {
-    (void *)jit_f64_eq, (void *)jit_f64_ne, (void *)jit_f64_lt,
-    (void *)jit_f64_gt, (void *)jit_f64_le, (void *)jit_f64_ge
+    (void *)__aeabi_dcmpeq, (void *)jit_f64_ne, (void *)__aeabi_dcmplt,
+    (void *)__aeabi_dcmpgt, (void *)__aeabi_dcmple, (void *)__aeabi_dcmpge
   };
 
   val_t args[2];
@@ -4650,35 +4696,35 @@ static void op_convert(jc_t *c, uint8_t op)
         return;
 
       case WASM_OP_F32_CONVERT_S_I64:
-        ccall(c, (void *)jit_f32_convert_i64_s, "l", &a, T_F32, true);
+        ccall(c, (void *)__aeabi_l2f, "l", &a, T_F32, true);
         return;
 
       case WASM_OP_F32_CONVERT_U_I64:
-        ccall(c, (void *)jit_f32_convert_i64_u, "l", &a, T_F32, true);
+        ccall(c, (void *)__aeabi_ul2f, "l", &a, T_F32, true);
         return;
 
       case WASM_OP_F32_DEMOTE_F64:
-        ccall(c, (void *)jit_f32_demote_f64, "l", &a, T_F32, true);
+        ccall(c, (void *)__aeabi_d2f, "l", &a, T_F32, true);
         return;
 
       case WASM_OP_F64_CONVERT_S_I32:
-        ccall(c, (void *)jit_f64_convert_i32_s, "w", &a, T_F64, true);
+        ccall(c, (void *)__aeabi_i2d, "w", &a, T_F64, true);
         return;
 
       case WASM_OP_F64_CONVERT_U_I32:
-        ccall(c, (void *)jit_f64_convert_i32_u, "w", &a, T_F64, true);
+        ccall(c, (void *)__aeabi_ui2d, "w", &a, T_F64, true);
         return;
 
       case WASM_OP_F64_CONVERT_S_I64:
-        ccall(c, (void *)jit_f64_convert_i64_s, "l", &a, T_F64, true);
+        ccall(c, (void *)__aeabi_l2d, "l", &a, T_F64, true);
         return;
 
       case WASM_OP_F64_CONVERT_U_I64:
-        ccall(c, (void *)jit_f64_convert_i64_u, "l", &a, T_F64, true);
+        ccall(c, (void *)__aeabi_ul2d, "l", &a, T_F64, true);
         return;
 
       case WASM_OP_F64_PROMOTE_F32:
-        ccall(c, (void *)jit_f64_promote_f32, "w", &a, T_F64, true);
+        ccall(c, (void *)__aeabi_f2d, "w", &a, T_F64, true);
         return;
     }
 }
@@ -6949,6 +6995,27 @@ static void loop_proofs(jc_t *c, ctrl_t *ct, const uint8_t *p)
     }
 }
 
+/* Where a loop's body (p) ends */
+
+static const uint8_t *loop_end(jc_t *c, const uint8_t *p)
+{
+  uint32_t depth = 1;
+
+  while (p < c->code_end && depth > 0)
+    {
+      uint8_t op = *p++;
+
+      depth += op == WASM_OP_BLOCK || op == WASM_OP_LOOP || op == WASM_OP_IF;
+      depth -= op == WASM_OP_END;
+      if (!skip_imm(op, &p))
+        {
+          break;
+        }
+    }
+
+  return p;
+}
+
 /* lbind() then keeps the invariant ones: the assumed ones back too */
 
 static void loop_specs(jc_t *c, ctrl_t *ct)
@@ -6968,8 +7035,66 @@ static void loop_head(jc_t *c)
       return;
     }
 
+  if (c->fb.len & 2)
+    {
+      e16(&c->fb, 0xbf00);
+    }
+
   c->lheads[c->nlheads++] = c->fb.len;
   e32(&c->fb, 0xf3af, 0x8000);                       /* nop.w */
+}
+
+/* A branch back to a loop's start (cond: CC_AL or a condition), noted for
+ * wasm_jit_interrupt(): it turns the branch to the loop's stub by
+ * rewriting its second halfword (one store: a core running the loop sees
+ * the branch to either), possible where both offsets share their first
+ * halfword's bits (the stub 4 to 6 bytes before the start: unless that
+ * crosses a 4 KB step of the offset); else an aligned nop.w just before
+ * it, rewritten as a b.w to the unwinding
+ */
+
+static void back_to(jc_t *c, ctrl_t *ct, int cond)
+{
+  uint32_t pos = c->fb.len;
+  int32_t head = c->labels[ct->label].pos;
+  uint32_t h1;
+  uint32_t h2;
+  uint32_t s1 = 0;
+  uint32_t s2;
+
+  h1 = ~0u;
+  if (ct->stub >= 0 && head >= 0)
+    {
+      if (cond == CC_AL)
+        {
+          t_enc_b(&h1, &h2, head - (int32_t)pos, false);
+          t_enc_b(&s1, &s2, ct->stub - (int32_t)pos, false);
+        }
+      else
+        {
+          t_enc_bcc(&h1, &h2, cond, head - (int32_t)pos);
+          t_enc_bcc(&s1, &s2, cond, ct->stub - (int32_t)pos);
+        }
+    }
+
+  if (h1 == s1 && GROW(c, c->lheads, c->nlheads + 1, c->lhcap))
+    {
+      c->lheads[c->nlheads++] = pos | 1;
+      c->lheads[c->nlheads++] = (uint32_t)ct->stub;
+    }
+  else
+    {
+      loop_head(c);
+    }
+
+  if (cond == CC_AL)
+    {
+      br_to(c, ct->label);
+    }
+  else
+    {
+      bcc_to(c, cond, ct->label);
+    }
 }
 
 static void compile_body(jc_t *c)
@@ -7071,15 +7196,54 @@ static void compile_body(jc_t *c)
             spill_from(c, c->cs[c->csp - 1].height);
             ct = &c->cs[c->csp - 1];
             ct->label = new_label(c);
-            if (c->fb.len & 2)
+
+            /* b.n over its stub (a b.w to the unwinding, which a branch
+             * back is turned to by wasm_jit_interrupt()), the loop's start
+             * aligned
+             */
+
+            /* (a loop inside another, short enough to reach its stub as
+             * well, takes that one: no b.n at each entry)
+             */
+
+            ct->stub = -1;
+            for (x = c->csp - 1; x-- > 0; )
               {
-                e16(&c->fb, 0xbf00);          /* (the loop's start aligned) */
+                if (c->cs[x].kind == CK_LOOP && !c->cs[x].dead)
+                  {
+                    if (c->fb.len - (uint32_t)c->cs[x].stub +
+                        8 * (uint32_t)(loop_end(c, p) - p) < 3072)
+                      {
+                        ct->stub = c->cs[x].stub;
+                      }
+
+                    break;
+                  }
+              }
+
+            if (ct->stub < 0)
+              {
+                uint32_t bn = c->fb.len;
+
+                e16(&c->fb, 0xe000);
+                ct->stub = (int32_t)c->fb.len;
+                far_br(c, CC_AL, c->exc_pos);
+                if (c->fb.len & 2)
+                  {
+                    e16(&c->fb, 0xbf00);
+                  }
+
+                jb_put16(&c->fb, bn,
+                         0xe000 | (((c->fb.len - bn - 4) >> 1) & 0x7ff));
+              }
+            else if (c->fb.len & 2)
+              {
+                e16(&c->fb, 0xbf00);      /* (the loop's start aligned) */
               }
 
             loop_proofs(c, ct, p);
             lbind(c, ct->label);
             loop_specs(c, ct);
-            loop_head(c);
             break;
 
           case WASM_OP_IF:
@@ -7615,6 +7779,8 @@ static void place_body(jc_t *c)
         {
           return;
         }
+
+      /* (a branch back: its position | 1, then its stub's) */
 
       c->mloops[c->nmloops++] = base + c->lheads[i];
     }
@@ -8464,6 +8630,34 @@ void wasm_jit_interrupt(wasm_module_inst_t module_inst)
       uint32_t pos = jm->loops[i];
       uint8_t hw[4];
       jbuf_t tb;
+
+      if (pos & 1)
+        {
+          /* A branch back: to its loop's stub (its second halfword) */
+
+          uint32_t stub = jm->loops[++i];
+          volatile uint16_t *ins = (volatile uint16_t *)(jm->code + pos - 1);
+          uint32_t h1;
+          uint32_t h2;
+
+          pos--;
+          if (ins[1] & 0x1000)
+            {
+              t_enc_b(&h1, &h2, (int32_t)stub - (int32_t)pos, false);
+            }
+          else
+            {
+              t_enc_bcc(&h1, &h2, (ins[0] >> 6) & 15,
+                        (int32_t)stub - (int32_t)pos);
+            }
+
+          if (h1 == ins[0])
+            {
+              ins[1] = (uint16_t)h2;
+            }
+
+          continue;
+        }
 
       tb.buf = hw;
       tb.len = 4;

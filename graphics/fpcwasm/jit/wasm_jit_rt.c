@@ -441,25 +441,9 @@ static inline uint32_t w_(float f)
   return x;
 }
 
-uint64_t jit_f64_add(uint64_t a, uint64_t b)
-{
-  return u_(d_(a) + d_(b));
-}
 
-uint64_t jit_f64_sub(uint64_t a, uint64_t b)
-{
-  return u_(d_(a) - d_(b));
-}
 
-uint64_t jit_f64_mul(uint64_t a, uint64_t b)
-{
-  return u_(d_(a) * d_(b));
-}
 
-uint64_t jit_f64_div(uint64_t a, uint64_t b)
-{
-  return u_(d_(a) / d_(b));
-}
 
 uint64_t jit_f64_min(uint64_t a, uint64_t b)
 {
@@ -522,35 +506,15 @@ uint64_t jit_f64_nearest(uint64_t a)
   return u_(rint(d_(a)));
 }
 
-uint32_t jit_f64_eq(uint64_t a, uint64_t b)
-{
-  return d_(a) == d_(b);
-}
 
 uint32_t jit_f64_ne(uint64_t a, uint64_t b)
 {
   return d_(a) != d_(b);
 }
 
-uint32_t jit_f64_lt(uint64_t a, uint64_t b)
-{
-  return d_(a) < d_(b);
-}
 
-uint32_t jit_f64_gt(uint64_t a, uint64_t b)
-{
-  return d_(a) > d_(b);
-}
 
-uint32_t jit_f64_le(uint64_t a, uint64_t b)
-{
-  return d_(a) <= d_(b);
-}
 
-uint32_t jit_f64_ge(uint64_t a, uint64_t b)
-{
-  return d_(a) >= d_(b);
-}
 
 /* Truncations that trap */
 
@@ -777,42 +741,10 @@ uint64_t jit_i64_trunc_sat_f64_u(uint64_t a)
 
 /* Conversions */
 
-uint32_t jit_f32_convert_i64_s(uint64_t a)
-{
-  return w_((float)(int64_t)a);
-}
 
-uint32_t jit_f32_convert_i64_u(uint64_t a)
-{
-  return w_((float)a);
-}
 
-uint32_t jit_f32_demote_f64(uint64_t a)
-{
-  return w_((float)d_(a));
-}
 
-uint64_t jit_f64_convert_i32_s(uint32_t a)
-{
-  return u_((double)(int32_t)a);
-}
 
-uint64_t jit_f64_convert_i32_u(uint32_t a)
-{
-  return u_((double)a);
-}
 
-uint64_t jit_f64_convert_i64_s(uint64_t a)
-{
-  return u_((double)(int64_t)a);
-}
 
-uint64_t jit_f64_convert_i64_u(uint64_t a)
-{
-  return u_((double)a);
-}
 
-uint64_t jit_f64_promote_f32(uint32_t a)
-{
-  return u_((double)f_(a));
-}

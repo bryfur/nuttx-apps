@@ -148,10 +148,6 @@ uint64_t jit_i64_rotr(uint64_t a, uint32_t n);
 uint64_t jit_i64_ctz(uint64_t a);
 uint64_t jit_i64_popcnt(uint64_t a);
 
-uint64_t jit_f64_add(uint64_t a, uint64_t b);
-uint64_t jit_f64_sub(uint64_t a, uint64_t b);
-uint64_t jit_f64_mul(uint64_t a, uint64_t b);
-uint64_t jit_f64_div(uint64_t a, uint64_t b);
 uint64_t jit_f64_min(uint64_t a, uint64_t b);
 uint64_t jit_f64_max(uint64_t a, uint64_t b);
 uint64_t jit_f64_sqrt(uint64_t a);
@@ -159,12 +155,7 @@ uint64_t jit_f64_ceil(uint64_t a);
 uint64_t jit_f64_floor(uint64_t a);
 uint64_t jit_f64_trunc(uint64_t a);
 uint64_t jit_f64_nearest(uint64_t a);
-uint32_t jit_f64_eq(uint64_t a, uint64_t b);
 uint32_t jit_f64_ne(uint64_t a, uint64_t b);
-uint32_t jit_f64_lt(uint64_t a, uint64_t b);
-uint32_t jit_f64_gt(uint64_t a, uint64_t b);
-uint32_t jit_f64_le(uint64_t a, uint64_t b);
-uint32_t jit_f64_ge(uint64_t a, uint64_t b);
 
 uint32_t jit_i32_trunc_f64_s(WASMModuleInstance *inst, uint64_t a);
 uint32_t jit_i32_trunc_f64_u(WASMModuleInstance *inst, uint64_t a);
@@ -178,13 +169,5 @@ uint64_t jit_i64_trunc_sat_f32_s(uint32_t a);
 uint64_t jit_i64_trunc_sat_f32_u(uint32_t a);
 uint64_t jit_i64_trunc_sat_f64_s(uint64_t a);
 uint64_t jit_i64_trunc_sat_f64_u(uint64_t a);
-uint32_t jit_f32_convert_i64_s(uint64_t a);
-uint32_t jit_f32_convert_i64_u(uint64_t a);
-uint32_t jit_f32_demote_f64(uint64_t a);
-uint64_t jit_f64_convert_i32_s(uint32_t a);
-uint64_t jit_f64_convert_i32_u(uint32_t a);
-uint64_t jit_f64_convert_i64_s(uint64_t a);
-uint64_t jit_f64_convert_i64_u(uint64_t a);
-uint64_t jit_f64_promote_f32(uint32_t a);
 
 #endif /* __APPS_GRAPHICS_FPCWASM_JIT_JIT_INTERNAL_H */
