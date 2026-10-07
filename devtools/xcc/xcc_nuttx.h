@@ -101,6 +101,23 @@ char *xcc_getcwd(char *buf, size_t size);
 /* The arena's high-water mark (bytes): XCC_STATS=1 prints it at the end */
 
 size_t xcc_arena_peak(void);
+size_t xcc_arena_used(void);
+
+/* A window in the arena: the small allocations made after the mark given
+ * back at the release (not the larger ones, which are freed when freed).
+ * wcc's IR of a function lives in one (wasm_ir.c): nothing allocated in it
+ * may be kept */
+
+struct xcc_arena_mark_s
+{
+  void *chunks;
+  void *cur;
+  char *top;
+  char *last;
+};
+
+void xcc_arena_mark(struct xcc_arena_mark_s *m);
+void xcc_arena_release(const struct xcc_arena_mark_s *m);
 
 #ifndef XCC_NUTTX_NO_MACROS
 #  define malloc(n)        xcc_malloc(n)

@@ -419,6 +419,48 @@ size_t xcc_arena_peak(void)
   return g_arena_peak;
 }
 
+void xcc_arena_mark(struct xcc_arena_mark_s *m)
+{
+  m->chunks = g_chunks;
+  m->cur = g_cur;
+  m->top = g_cur != NULL ? g_cur->top : NULL;
+  m->last = g_cur != NULL ? g_cur->last : NULL;
+}
+
+void xcc_arena_release(const struct xcc_arena_mark_s *m)
+{
+  while (g_chunks != (struct chunk_s *)m->chunks)
+    {
+      struct chunk_s *c = g_chunks;
+
+      g_chunks = c->next;
+      g_arena_bytes -= c->end - (char *)c;
+#ifdef XCC_ARENA_POISON
+      memset(c, 0xa5, c->end - (char *)c);   /* (a use after it: found) */
+#endif
+      free(c);
+    }
+
+  g_cur = (struct chunk_s *)m->cur;
+  if (g_cur != NULL)
+    {
+#ifdef XCC_ARENA_POISON
+      memset(m->top, 0xa5, g_cur->top - m->top);
+#endif
+      g_cur->top = m->top;
+      g_cur->last = m->last;
+    }
+}
+
+/* What the arena holds now: its blocks less the current block's free end,
+ * and the larger allocations (wcc's WCC_ARENA=1 statistics) */
+
+size_t xcc_arena_used(void)
+{
+  return g_arena_bytes + g_heap_bytes -
+         (g_cur != NULL ? (size_t)(g_cur->end - g_cur->top) : 0);
+}
+
 struct arena_mark_s
 {
   struct chunk_s *chunks;

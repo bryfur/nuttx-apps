@@ -60,7 +60,7 @@ else echo "opt.c: DIFFERENT"; diff $W/opt.host.txt $W/opt.wasm.txt | head; fi
 # Which functions went through the IR (all of opt.c's should: no fallback
 # from the emitter, e.g. an irreducible graph)
 WCC_IRLIST=1 $W/wcc.sh -c -o $W/opt.o $X/tests/opt.c 2> $W/irlist.txt
-echo "opt.c: $(grep -c ': ok' $W/irlist.txt) functions through the IR, $(grep -c ': no' $W/irlist.txt) given back to wcc's own code generator"
+echo "opt.c: $(grep -c ': ok' $W/irlist.txt) functions through the IR, $(grep -c ': no (' $W/irlist.txt) given back to wcc's own code generator, $(grep -c ': not eligible' $W/irlist.txt) left to it"
 
 # Every function through the IR and the optimiser, then wcc's own code
 # generator after all (WCC_IRFAIL): what the first leaves of the tree
