@@ -119,6 +119,10 @@ static struct
   uint8_t tintalpha;
   uint32_t frames;
   uint32_t hold;                          /* -holdframe */
+  bool     hash;                          /* -framehash */
+  uint32_t fnv;                           /* ... its hash so far */
+  uint32_t nhashed;
+  uint32_t hashes[128];                   /* ... each frame's */
   uint64_t send_us;
   uint8_t  mods;                          /* NX_KEY_* modifiers held */
   int      keyq[KEYQ];                    /* key | down << 16 */
@@ -445,6 +449,20 @@ static void fs_close(void)
   printf("quake: %u frames sent, %u us each on average\n",
          (unsigned)g_fs.frames,
          (unsigned)(g_fs.frames ? g_fs.send_us / g_fs.frames : 0));
+  if (g_fs.hash)
+    {
+      uint32_t i;
+
+      printf("quake: frame hash %08x (%u frames)\n", (unsigned)g_fs.fnv,
+             (unsigned)g_fs.nhashed);
+      for (i = 0; i < g_fs.nhashed && i < 128; i++)
+        {
+          printf("%08x%s", (unsigned)g_fs.hashes[i],
+                 i % 8 == 7 ? "\n" : " ");
+        }
+
+      printf("\n");
+    }
   fpc_gpu_game_free_all();
   fpc_gpu_game_keys(false);
   fpc_gpu_game_display(false);
@@ -714,6 +732,15 @@ void QG_Init(void)
         }
     }
 
+  for (k = 1; k < g_argc; k++)
+    {
+      if (strcmp(g_argv[k], "-framehash") == 0)
+        {
+          g_fs.hash = true;
+          g_fs.fnv = 2166136261u;
+        }
+    }
+
   fpcq_g3_init();                         /* (the atlas: after the canvases) */
   fpc_gpu_game_keys(true);
   if (!g_fs.aspect)
@@ -879,6 +906,45 @@ void QG_DrawFrame(void *pixels)
   g_fs.send_us += fpc_gpu_game_us() - t0;
   g_fs.frames++;
   g_fs.back = 1 - k;
+
+  /* -framehash: every tenth frame's hash (FNV-1a of its pixels), logged at
+   * the end, each (the first 128) and all of them with the palettes folded
+   * into one.  With +con_notifytime 0 +host_framerate 0.05 most of a
+   * timedemo's frames are the same from run to run, but not all: some
+   * particles are not (-siocheck, fpc_sio.c, is the exact check of the
+   * interpolators' loops)
+   */
+
+  if (g_fs.hash && g_fs.frames % 10 == 0)
+    {
+      const uint8_t *p = pixels;
+      uint32_t f = 2166136261u;
+      uint32_t h = g_fs.fnv;
+      int i;
+
+      for (i = 0; i < g_fs.w * g_fs.h; i++)
+        {
+          f = (f ^ p[i]) * 16777619u;
+        }
+
+      for (i = 0; i < 4; i++)
+        {
+          h = (h ^ ((f >> (8 * i)) & 0xff)) * 16777619u;
+        }
+
+      for (i = 0; i < 256; i++)
+        {
+          h = (h ^ g_fs.lut[i]) * 16777619u;
+        }
+
+      if (g_fs.nhashed < 128)
+        {
+          g_fs.hashes[g_fs.nhashed] = f;
+        }
+
+      g_fs.fnv = h;
+      g_fs.nhashed++;
+    }
 
   /* -holdframe N: frame N's hash (FNV-1a of its 8-bit pixels: the same
    * picture, the same hash), and the frame kept on the screen a while

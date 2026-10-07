@@ -34,6 +34,7 @@ GAMESRCS += r_part.c r_sky.c r_sprite.c r_surf.c r_vars.c sbar.c screen.c
 GAMESRCS += snd_null.c sv_main.c sv_move.c sv_phys.c sv_user.c sys_null.c
 GAMESRCS += vid_null.c view.c wad.c world.c zone.c quakegeneric.c
 GAMESRCS := $(addprefix $(QG)/,$(GAMESRCS)) fpc_drawq.c fpc_gpu3d.c fpc_glq.c
+GAMESRCS += fpc_sio.c
 
 MAINSRC = fpc_quake.c
 

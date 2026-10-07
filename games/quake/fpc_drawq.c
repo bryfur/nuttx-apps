@@ -43,6 +43,7 @@
 #include <nuttx/kmalloc.h>
 
 #include "fpc_gpu.h"
+#include "fpc_sio.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -163,6 +164,7 @@ FPCQ_FAST static qboolean dq_take(qboolean game)
 FPCQ_FAST static void *dq_main(void *arg)
 {
   (void)arg;
+  fpcq_sio_claim("the drawer");           /* (pinned to its core) */
   for (; ; )
     {
       sem_wait(&g_dq.go);
@@ -175,6 +177,7 @@ FPCQ_FAST static void *dq_main(void *arg)
 
           if (__atomic_load_n(&g_dq.quit, __ATOMIC_RELAXED))
             {
+              fpcq_sio_release();
               return NULL;
             }
 
@@ -247,6 +250,7 @@ static qboolean dq_start(void)
   CPU_ZERO(&cpus);
   CPU_SET(0, &cpus);
   sched_setaffinity(0, sizeof(cpus), &cpus);
+  fpcq_sio_claim("the game");             /* (pinned to the first core) */
 
   pthread_getschedparam(pthread_self(), &policy, &param);
   param.sched_priority--;
@@ -513,6 +517,7 @@ void fpcq_dq_shutdown(void)
   __atomic_store_n(&g_dq.quit, true, __ATOMIC_RELEASE);
   sem_post(&g_dq.go);
   pthread_join(g_dq.thread, NULL);
+  fpcq_sio_release();                     /* (the game's) */
   sem_destroy(&g_dq.go);
   free(g_dq.stack);
   g_dq.stack = NULL;

@@ -21,6 +21,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "r_local.h"
+#include "../fpc_sio.h"	// FPC: the blocks on the interpolators
 
 drawsurf_t	r_drawsurf;
 
@@ -265,6 +266,10 @@ FPCQ_FAST void R_DrawSurface (void)
 //==============================
 
 	pblockdrawer = surfmiptable[r_drawsurf.surfmip];
+#ifdef FPCQ_SIO
+	if (fpcq_sio_here() & FPCQ_SIO_BLOCKS)	// FPC: on this core's interpolators (fpc_sio.c)
+		pblockdrawer = fpcq_sio_blocks[r_drawsurf.surfmip];
+#endif
 	// TODO: only needs to be set when there is a display settings change
 	horzblockstep = blocksize;
 

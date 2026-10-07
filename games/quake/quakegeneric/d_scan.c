@@ -24,6 +24,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "r_local.h"
 #include "d_local.h"
+#include "../fpc_sio.h"	// FPC: the loops on the interpolators
 
 unsigned char	*r_turb_pbase, *r_turb_pdest;
 fixed16_t		r_turb_s, r_turb_t, r_turb_sstep, r_turb_tstep;
@@ -300,6 +301,10 @@ FPCQ_FAST void D_DrawSpans8Ctx (const dspanctx_t *c, espan_t *pspan)
 	const fixed16_t	sadjust = c->sadjust, tadjust = c->tadjust;
 	const fixed16_t	bbextents = c->bbextents, bbextentt = c->bbextentt;
 
+	// FPC: on this core's interpolators if its thread has them (fpc_sio.c)
+	if ((fpcq_sio_here() & FPCQ_SIO_SPANS) && D_DrawSpans8Sio(c, pspan))
+		return;
+
 	sstep = 0;	// keep compiler happy
 	tstep = 0;	// ditto
 
@@ -445,6 +450,13 @@ FPCQ_FAST void D_DrawZSpansCtx (const dspanctx_t *c, espan_t *pspan)
 	const int		d_zwidth = c->zwidth;
 	const float		d_zistepu = c->zistepu, d_zistepv = c->zistepv;
 	const float		d_ziorigin = c->ziorigin;
+
+	// FPC: on this core's interpolators if its thread has them (fpc_sio.c)
+	if (fpcq_sio_here() & FPCQ_SIO_ZSPANS)
+	{
+		D_DrawZSpansSio (c, pspan);
+		return;
+	}
 
 // FIXME: check for clamping/range problems
 // we count on FP exceptions being turned off to avoid range problems
