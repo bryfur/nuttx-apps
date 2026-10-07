@@ -55,6 +55,9 @@
  *                                 when the monitor shows nothing; expire:
  *                                 a mode on trial from Settings goes back
  *                                 now, as after its 20 s)
+ *   deskctl race [LINES|on|off]   single buffered frames drawn behind the
+ *                                 beam (v13 WAIT_LINE) in bands of LINES
+ *                                 (on: 64), or not; the state and counts
  *   deskctl redraw                composite all of the display again (a
  *                                 check: the result must not change)
  *   deskctl freeze [SECONDS|off]  stop the desktop's clock at SECONDS
@@ -578,7 +581,8 @@ static void deskctl_usage(void)
   fprintf(stderr,
           "usage: deskctl m X Y [BUTTONS] | c X Y | d X0 Y0 X1 Y1 [N] |\n"
           "               k TEXT | key [+|-]NAME|@MS... | shot FILE |\n"
-          "               stats [clear|N] | bw [N] | mode [N|expire] | redraw | test | link [MB [S C [rb]]] |\n"
+          "               stats [clear|N] | bw [N] | mode [N|expire] | race [LINES|on|off] |\n"
+          "               redraw | test | link [MB [S C [rb]]] |\n"
           "               rlink [MB [N HALF]] [psram|copy] |\n"
           "               freeze [SECONDS|off] | dock APP [r] | wins |\n"
           "               fx hold PERMILLE|off | fx [EFFECT] on|off\n"
@@ -636,6 +640,27 @@ int main(int argc, FAR char *argv[])
   if (strcmp(argv[1], "stats") == 0)
     {
       deskctl_stats(argc >= 3 ? argv[2] : NULL);
+      return EXIT_SUCCESS;
+    }
+#endif
+
+#ifdef CONFIG_NX_COMPOSITOR
+  if (strcmp(argv[1], "race") == 0)
+    {
+      struct nx_compose_stats_s cs;
+
+      if (argc >= 3)
+        {
+          nxbe_compose_race(strcmp(argv[2], "on") == 0 ? -1 :
+                            strcmp(argv[2], "off") == 0 ? 0 :
+                            atoi(argv[2]));
+        }
+
+      nxbe_compose_stats(&cs);
+      printf("race: bands of %d lines%s, %s; %lu frames raced in %lu bands\n",
+             cs.race, cs.race > 0 ? "" : " (off)",
+             cs.dbuf ? "double buffered (FLIP)" : "single buffered",
+             (unsigned long)cs.raced, (unsigned long)cs.bands);
       return EXIT_SUCCESS;
     }
 #endif
