@@ -891,7 +891,7 @@ void R_EdgeDrawing (void)
 		rw_time1 = Sys_FloatTime ();
 	}
 
-	R_RenderWorld ();
+	FPCQ_TIMED (FPCQ_T_WORLD, R_RenderWorld ());
 
 	if (r_drawculledpolys)
 		R_ScanEdges ();
@@ -906,7 +906,7 @@ void R_EdgeDrawing (void)
 		db_time1 = rw_time2;
 	}
 
-	R_DrawBEntitiesOnList ();
+	FPCQ_TIMED (FPCQ_T_BENT, R_DrawBEntitiesOnList ());
 
 	if (r_dspeeds.value)
 	{
@@ -922,7 +922,7 @@ void R_EdgeDrawing (void)
 	}
 	
 	if (!(r_drawpolys | r_drawculledpolys))
-		R_ScanEdges ();
+		FPCQ_TIMED (FPCQ_T_SCAN, R_ScanEdges ());
 }
 
 
@@ -999,7 +999,7 @@ SetVisibilityByPassages ();
 		de_time1 = se_time2;
 	}
 
-	R_DrawEntitiesOnList ();
+	FPCQ_TIMED (FPCQ_T_ENT, R_DrawEntitiesOnList ());
 
 	if (r_dspeeds.value)
 	{
@@ -1007,7 +1007,7 @@ SetVisibilityByPassages ();
 		dv_time1 = de_time2;
 	}
 
-	R_DrawViewModel ();
+	FPCQ_TIMED (FPCQ_T_ENT, R_DrawViewModel ());
 
 	if (r_dspeeds.value)
 	{
@@ -1015,7 +1015,7 @@ SetVisibilityByPassages ();
 		dp_time1 = Sys_FloatTime ();
 	}
 
-	R_DrawParticles ();
+	FPCQ_TIMED (FPCQ_T_PART, R_DrawParticles ());
 
 	if (r_dspeeds.value)
 		dp_time2 = Sys_FloatTime ();
@@ -1065,7 +1065,7 @@ void R_RenderView (void)
 	if ( (intptr_t)(&r_warpbuffer) & 3 )
 		Sys_Error ("Globals are missaligned");
 
-	R_RenderView_ ();
+	FPCQ_TIMED (FPCQ_T_VIEW, R_RenderView_ ());
 }
 
 /*

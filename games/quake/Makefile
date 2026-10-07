@@ -68,7 +68,7 @@ ifeq ($(CONFIG_GAMES_QUAKE),m)
 
 GAMEOBJS = $(GAMESRCS:%=$(PREFIX)%$(SUFFIX)$(OBJEXT))
 LDLIBS = $(GAMEOBJS)
-$(foreach f,$(GAMESRCS),$(eval $(f)_CELFFLAGS += $(GAMEFLAGS) -MMD -MP -MF $(f)$(SUFFIX)$(OBJEXT).d))
+$(foreach f,$(GAMESRCS),$(eval $(f)_CELFFLAGS += $(GAMEFLAGS) -MMD -MP -MF $(f)$$(SUFFIX)$(OBJEXT).d))
 
 include $(APPDIR)/Application.mk
 

@@ -138,6 +138,37 @@ void R_SetSkyFrame (void);
 void R_DrawSurfaceBlock16 (void);
 void R_DrawSurfaceBlock8 (void);
 texture_t *R_TextureAnimation (texture_t *base);
+texture_t *R_TextureAnimationEnt (texture_t *base, entity_t *ent);	// FPC
+
+// FPC: a column of a surface's blocks (R_DrawSurface; the other core draws
+// some, fpc_drawq.c): the block drawers' state, which was in globals
+typedef struct rblock_s
+{
+	unsigned		*lightptr;
+	unsigned char	*prowdest;
+	unsigned char	*psource;
+	int				lightleft, lightright;		// (left behind)
+	int				lightleftstep, lightrightstep;
+	int				numvblocks, lightwidth, sourcetstep, surfrowbytes;
+	int				stepback;
+	unsigned char	*sourcemax;
+} rblock_t;
+
+#define RCOLS_MAX	20		// (extents of 256 at most: 16)
+
+typedef struct rcols_s
+{
+	rblock_t		proto;		// what the columns share
+	int				mip;
+	int				n;			// columns
+	int				blocksize;
+	unsigned char	*dest;		// column 0's
+	unsigned char	*basetptr;
+	int				soffset[RCOLS_MAX];	// each column's
+} rcols_t;
+
+void R_DrawSurfaceColumn (const rcols_t *c, int u);
+void fpcq_cols_draw (const rcols_t *c);
 
 void R_GenSkyTile (void *pdest);
 void R_GenSkyTile16 (void *pdest);

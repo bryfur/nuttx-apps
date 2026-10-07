@@ -718,7 +718,7 @@ FPCQ_FAST void R_ScanEdges (void)
 			}
 			else
 			{
-				D_DrawSurfaces ();
+				FPCQ_TIMED (FPCQ_T_DSURF, D_DrawSurfaces ());	// FPC: timed
 			}
 
 		// clear the surface span pointers
@@ -752,7 +752,7 @@ FPCQ_FAST void R_ScanEdges (void)
 	if (r_drawculledpolys)
 		R_DrawCulledPolys ();
 	else
-		D_DrawSurfaces ();
+		FPCQ_TIMED (FPCQ_T_DSURF, D_DrawSurfaces ());	// FPC: timed
 }
 
 

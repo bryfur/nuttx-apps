@@ -53,7 +53,9 @@ void fpcq_sio_release(void);
 qboolean D_DrawSpans8Sio(const dspanctx_t *c, espan_t *pspan);
 void D_DrawZSpansSio(const dspanctx_t *c, espan_t *pspan);
 #endif
-extern void (*const fpcq_sio_blocks[4])(void);
+#ifdef RCOLS_MAX                          /* (r_local.h's rblock_t) */
+extern void (*const fpcq_sio_blocks[4])(rblock_t *rb);
+#endif
 
 #else
 

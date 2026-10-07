@@ -135,6 +135,7 @@ void fpcscreen_frame(const uint8_t *pixels, const uint8_t *rgbpal)
   int k = g_fs.back;
   int g;
   uint32_t t0;
+  const uint16_t *lut;
 
   if (!g_fs.on)
     {
@@ -184,17 +185,27 @@ void fpcscreen_frame(const uint8_t *pixels, const uint8_t *rgbpal)
 
   t0 = fpc_gpu_game_us();
   /* 200 rows as 240: each group of five rows as six, its middle one
-   * twice (rows 0-2 and 2-4 of the group, one PUT each)
+   * twice (rows 0-2 and 2-4 of the group, one PUT each).  The palette
+   * with the first PUT only: the driver compares the one a PUT brings
+   * with what the GPU has (512 bytes), 80 times a frame; NULL is the one
+   * last sent, where a PUT8 goes as one (a v10 GPU, x and w even:
+   * fpc_gpu.h)
    */
 
+  lut = g_fs.lut;
   for (g = 0; g < FS_H / 5; g++)
     {
       const uint8_t *src = pixels + g * 5 * FS_W;
       int y = g_fs.y[k] + g_fs.oy + g * 6;
 
-      fpc_gpu_put8(g_fs.x[k] + g_fs.ox, y, FS_W, 3, src, FS_W, g_fs.lut);
+      fpc_gpu_put8(g_fs.x[k] + g_fs.ox, y, FS_W, 3, src, FS_W, lut);
+      if (fpc_gpu_version() >= 10 && ((g_fs.x[k] + g_fs.ox) & 1) == 0)
+        {
+          lut = NULL;
+        }
+
       fpc_gpu_put8(g_fs.x[k] + g_fs.ox, y + 3, FS_W, 3, src + 2 * FS_W,
-                   FS_W, g_fs.lut);
+                   FS_W, lut);
     }
 
   fpc_gpu_game_flip(g_fs.x[k], g_fs.y[k]);

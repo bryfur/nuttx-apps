@@ -66,6 +66,50 @@ void fpcq_palette_parts(const unsigned char *base, int r, int g, int b,
 
 #define FPCQ_FAST __attribute__((section(".time_critical.quake")))
 
+/* Where a frame's time goes (us, summed over a timedemo; fpc_drawq.c prints
+ * it at the end): the game's core's parts, the world's spans by the core
+ * that drew them, the surfaces' columns of blocks by the core that built
+ * them; -xipcount: the XIP cache's misses a frame too
+ */
+
+enum
+{
+  FPCQ_T_VIEW,                            /* R_RenderView, all of it */
+  FPCQ_T_WORLD,                           /* R_RenderWorld: the BSP, the edges */
+  FPCQ_T_BENT,                            /* R_DrawBEntitiesOnList */
+  FPCQ_T_SCAN,                            /* R_ScanEdges, D_DrawSurfaces in it */
+  FPCQ_T_DSURF,                           /* D_DrawSurfaces */
+  FPCQ_T_ENT,                             /* R_DrawEntitiesOnList, the view model */
+  FPCQ_T_PART,                            /* R_DrawParticles */
+  FPCQ_T_SEND,                            /* QG_DrawFrame */
+  FPCQ_T_FRAME,                           /* A frame, all of it */
+  FPCQ_T_SPANS0,                          /* The world's spans on the game's core */
+  FPCQ_T_SPANS1,                          /* ... on the drawer's */
+  FPCQ_T_FULL,                            /* The game waiting for room in the drawer's queue */
+  FPCQ_T_COLS0,                           /* Surface columns: the game's */
+  FPCQ_T_COLS1,                           /* ... the drawer's */
+  FPCQ_T_N
+};
+
+extern unsigned int fpcq_tsum[FPCQ_T_N];
+extern unsigned int fpcq_xmisses;         /* -xipcount: XIP cache misses (both cores') */
+extern unsigned int fpcq_xipcount;
+
+static inline unsigned int fpcq_us(void)
+{
+#ifdef __ARM_ARCH
+  return *(volatile unsigned int *)0x400b0028;   /* RP2350 TIMER0 TIMERAWL */
+#else
+  return 0;
+#endif
+}
+
+#define FPCQ_TIMED(i, stmt) \
+  do { unsigned int t0_ = fpcq_us(); stmt; fpcq_tsum[i] += fpcq_us() - t0_; } \
+  while (0)
+
+void fpcq_times_report(unsigned int frames);
+
 /* (Not in fpc_quake.c itself, which allocates the heap) */
 
 #ifndef FPCQ_PLATFORM

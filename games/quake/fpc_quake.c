@@ -120,6 +120,7 @@ static struct
   uint32_t frames;
   uint32_t hold;                          /* -holdframe */
   bool     hash;                          /* -framehash */
+  uint32_t frame_us;                      /* When the last frame was sent */
   uint32_t fnv;                           /* ... its hash so far */
   uint32_t nhashed;
   uint32_t hashes[128];                   /* ... each frame's */
@@ -501,6 +502,25 @@ void fpcq_free(void *ptr)
     }
 }
 
+/* -xipcount: the XIP cache's misses since the last call (CTR_ACC - CTR_HIT
+ * of XIP_CTRL, cleared: they saturate; so not while NSH's mw reads them,
+ * docs/benchmarks.md)
+ */
+
+static uint32_t xip_misses(void)
+{
+#ifdef CONFIG_ARCH_CHIP_RP23XX
+  volatile uint32_t *ctr = (volatile uint32_t *)0x400c800c;   /* CTR_HIT, CTR_ACC */
+  uint32_t n = ctr[1] - ctr[0];
+
+  ctr[0] = 0;
+  ctr[1] = 0;
+  return n;
+#else
+  return 0;
+#endif
+}
+
 void *fpcq_fast_alloc(size_t size, const char *what)
 {
   void *p;
@@ -513,7 +533,8 @@ void *fpcq_fast_alloc(size_t size, const char *what)
         {
           g_sram[g_nsram++] = p;
           g_sram_bytes += size;
-          printf("quake: %s in the SRAM (%zu bytes)\n", what, size);
+          printf("quake: %s in the SRAM (%zu bytes; %zu KB left in one "
+                 "piece)\n", what, size, kmm_mallinfo().mxordblk / 1024);
           return p;
         }
     }
@@ -734,6 +755,12 @@ void QG_Init(void)
 
   for (k = 1; k < g_argc; k++)
     {
+      if (strcmp(g_argv[k], "-xipcount") == 0)
+        {
+          fpcq_xipcount = 1;
+          xip_misses();
+        }
+
       if (strcmp(g_argv[k], "-framehash") == 0)
         {
           g_fs.hash = true;
@@ -873,10 +900,15 @@ void QG_DrawFrame(void *pixels)
     {
       if (g_fs.aspect && !g_fs.res)
         {
+          const uint16_t *lut = g_fs.lut;
           int g;
 
           /* 200 rows as 240: each group of five rows as six, its middle
-           * one twice (rows 0-2 and 2-4 of the group, a PUT each)
+           * one twice (rows 0-2 and 2-4 of the group, a PUT each).  The
+           * palette with the first PUT only: the driver compares the one
+           * a PUT brings with what the GPU has (512 bytes), 80 times a
+           * frame; NULL is the one last sent, where a PUT8 goes as one
+           * (a v10 GPU, x and w even: fpc_gpu.h)
            */
 
           for (g = 0; g < FS_H / 5; g++)
@@ -884,10 +916,15 @@ void QG_DrawFrame(void *pixels)
               const uint8_t *src = pixels + g * 5 * FS_W;
               int y = g_fs.y[k] + g_fs.oy + g * 6;
 
-              fpc_gpu_put8(g_fs.x[k] + g_fs.ox, y, FS_W, 3, src, FS_W,
-                           g_fs.lut);
+              fpc_gpu_put8(g_fs.x[k] + g_fs.ox, y, FS_W, 3, src, FS_W, lut);
+              if (fpc_gpu_version() >= 10 &&
+                  ((g_fs.x[k] + g_fs.ox) & 1) == 0)
+                {
+                  lut = NULL;
+                }
+
               fpc_gpu_put8(g_fs.x[k] + g_fs.ox, y + 3, FS_W, 3,
-                           src + 2 * FS_W, FS_W, g_fs.lut);
+                           src + 2 * FS_W, FS_W, lut);
             }
         }
       else
@@ -904,6 +941,14 @@ void QG_DrawFrame(void *pixels)
   fpc_gpu_game_flip(g_fs.x[k], g_fs.y[k]);
   fpc_gpu_flush();
   g_fs.send_us += fpc_gpu_game_us() - t0;
+  fpcq_tsum[FPCQ_T_SEND] += fpc_gpu_game_us() - t0;
+  fpcq_tsum[FPCQ_T_FRAME] += fpc_gpu_game_us() - g_fs.frame_us;
+  g_fs.frame_us = fpc_gpu_game_us();
+  if (fpcq_xipcount)
+    {
+      fpcq_xmisses += xip_misses();
+    }
+
   g_fs.frames++;
   g_fs.back = 1 - k;
 

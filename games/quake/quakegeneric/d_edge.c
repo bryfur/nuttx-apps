@@ -171,13 +171,177 @@ FPCQ_FAST void D_CalcGradients (msurface_t *pface)
 D_DrawSurfaces
 ==============
 */
-FPCQ_FAST void D_DrawSurfaces (void)
+// FPC: one surface of D_DrawSurfaces, its drawing state set and put back.
+// With first set, a textured surface whose cache block is not built is
+// left (true): D_DrawSurfaces_ comes back to it (second pass)
+FPCQ_FAST static qboolean D_DrawSurface1 (surf_t *s, qboolean first,
+		vec3_t world_transformed_modelorg)
 {
-	surf_t			*s;
 	msurface_t		*pface;
 	surfcache_t		*pcurrentcache;
-	vec3_t			world_transformed_modelorg;
 	vec3_t			local_modelorg;
+
+	d_zistepu = s->d_zistepu;
+	d_zistepv = s->d_zistepv;
+	d_ziorigin = s->d_ziorigin;
+
+	if (s->flags & SURF_DRAWSKY)
+	{
+		if (!r_skymade)
+		{
+			R_MakeSky ();
+		}
+
+		D_DrawSkyScans8 (s->spans);
+		D_DrawZSpans (s->spans);
+	}
+	else if (s->flags & SURF_DRAWBACKGROUND)
+	{
+	// set up a gradient for the background surface that places it
+	// effectively at infinity distance from the viewpoint
+		d_zistepu = 0;
+		d_zistepv = 0;
+		d_ziorigin = -0.9;
+
+		D_DrawSolidSurface (s, (int)r_clearcolor.value & 0xFF);
+		D_DrawZSpans (s->spans);
+	}
+	else if (s->flags & SURF_DRAWTURB)
+	{
+		pface = s->data;
+		miplevel = 0;
+		cacheblock = (pixel_t *)
+				((byte *)pface->texinfo->texture +
+				pface->texinfo->texture->offsets[0]);
+		cachewidth = 64;
+
+		if (s->insubmodel)
+		{
+		// FIXME: we don't want to do all this for every polygon!
+		// TODO: store once at start of frame
+			currententity = s->entity;	//FIXME: make this passed in to
+										// R_RotateBmodel ()
+			VectorSubtract (r_origin, currententity->origin,
+					local_modelorg);
+			TransformVector (local_modelorg, transformed_modelorg);
+
+			R_RotateBmodel ();	// FIXME: don't mess with the frustum,
+								// make entity passed in
+		}
+
+		D_CalcGradients (pface);
+		Turbulent8 (s->spans);
+		D_DrawZSpans (s->spans);
+
+		if (s->insubmodel)
+		{
+		//
+		// restore the old drawing state
+		// FIXME: we don't want to do this every time!
+		// TODO: speed up
+		//
+			currententity = &cl_entities[0];
+			VectorCopy (world_transformed_modelorg,
+						transformed_modelorg);
+			VectorCopy (base_vpn, vpn);
+			VectorCopy (base_vup, vup);
+			VectorCopy (base_vright, vright);
+			VectorCopy (base_modelorg, modelorg);
+			R_TransformFrustum ();
+		}
+	}
+	else
+	{
+		pface = s->data;
+		miplevel = D_MipLevelForScale (s->nearzi * scale_for_mip
+		* pface->texinfo->mipadjust);
+
+		// FPC: its cache block not built: later
+		if (first && fpcq_dq_on () && !fpcq_g3_drawing () &&
+				!D_SurfaceCached (pface, miplevel,
+						R_TextureAnimationEnt (pface->texinfo->texture,
+						s->insubmodel ? s->entity : &cl_entities[0])))
+			return true;
+
+		if (s->insubmodel)
+		{
+		// FIXME: we don't want to do all this for every polygon!
+		// TODO: store once at start of frame
+			currententity = s->entity;	//FIXME: make this passed in to
+										// R_RotateBmodel ()
+			VectorSubtract (r_origin, currententity->origin, local_modelorg);
+			TransformVector (local_modelorg, transformed_modelorg);
+
+			R_RotateBmodel ();	// FIXME: don't mess with the frustum,
+								// make entity passed in
+		}
+
+		// FPC: textured by the GPU (fpc_gpu3d.c): the depth here (the
+		// models are tested against it), the surface built, uploaded
+		// and given to the GPU by the other core (fpc_drawq.c)
+		if (fpcq_g3_drawing () && fpcq_g3_fits (pface, miplevel))
+		{
+			texture_t *tex = R_TextureAnimation (pface->texinfo->texture);
+
+			D_CalcGradients (pface);
+			D_DrawZSpans (s->spans);
+			if (!fpcq_g3_queue (s->spans, pface, miplevel, tex))
+			{
+				pcurrentcache = D_CacheSurfaceTex (pface, miplevel, tex);
+				if (fpcq_g3_surface (pcurrentcache))
+					fpcq_g3_spans (s->spans, pcurrentcache);
+			}
+		}
+		else
+		{
+			if (fpcq_g3_drawing ())
+				fpcq_g3_cpu ();		// (the other core builds surfaces meanwhile)
+
+		// FIXME: make this passed in to D_CacheSurface
+			pcurrentcache = D_CacheSurface (pface, miplevel);
+
+			cacheblock = (pixel_t *)pcurrentcache->data;
+			cachewidth = pcurrentcache->width;
+
+			D_CalcGradients (pface);
+
+		// FPC: drawn on the other core where it can be
+			if (!fpcq_dq_surface (s->spans, pcurrentcache))
+			{
+				(*d_drawspans) (s->spans);
+
+				D_DrawZSpans (s->spans);
+			}
+		}
+
+		if (s->insubmodel)
+		{
+		//
+		// restore the old drawing state
+		// FIXME: we don't want to do this every time!
+		// TODO: speed up
+		//
+			currententity = &cl_entities[0];
+			VectorCopy (world_transformed_modelorg,
+						transformed_modelorg);
+			VectorCopy (base_vpn, vpn);
+			VectorCopy (base_vup, vup);
+			VectorCopy (base_vright, vright);
+			VectorCopy (base_modelorg, modelorg);
+			R_TransformFrustum ();
+		}
+	}
+
+	return false;
+}
+
+FPCQ_FAST void D_DrawSurfaces (void)
+{
+	surf_t			*s, *d;
+	vec3_t			world_transformed_modelorg;
+	int				deferred;
+
+	fpcq_dq_begin ();	// FPC: the other core awake (it helps build, fpc_drawq.c)
 
 	currententity = &cl_entities[0];
 	TransformVector (modelorg, transformed_modelorg);
@@ -201,159 +365,41 @@ FPCQ_FAST void D_DrawSurfaces (void)
 	}
 	else
 	{
+	// FPC: the surfaces whose cache blocks are built first (and the sky,
+	// the water), queued for the other core (fpc_drawq.c); the ones to
+	// build are left (pad[0]) and built while the other core draws the
+	// first ones' spans: whenever its queue is full, and after.  The
+	// surfaces' pixels are their own: the order draws the same picture.
+		d = &surfaces[1];
+		deferred = 0;
 		for (s = &surfaces[1] ; s<surface_p ; s++)
 		{
 			if (!s->spans)
 				continue;
 
 			r_drawnpolycount++;
-
-			d_zistepu = s->d_zistepu;
-			d_zistepv = s->d_zistepv;
-			d_ziorigin = s->d_ziorigin;
-
-			if (s->flags & SURF_DRAWSKY)
+			s->pad[0] = D_DrawSurface1 (s, true, world_transformed_modelorg);
+			deferred += s->pad[0];
+			while (deferred && !fpcq_dq_room ())
 			{
-				if (!r_skymade)
-				{
-					R_MakeSky ();
-				}
-
-				D_DrawSkyScans8 (s->spans);
-				D_DrawZSpans (s->spans);
+				while (!d->spans || !d->pad[0])
+					d++;
+				d->pad[0] = 0;
+				deferred--;
+				D_DrawSurface1 (d, false, world_transformed_modelorg);
 			}
-			else if (s->flags & SURF_DRAWBACKGROUND)
+		}
+
+		for ( ; deferred ; d++)
+		{
+			if (d->spans && d->pad[0])
 			{
-			// set up a gradient for the background surface that places it
-			// effectively at infinity distance from the viewpoint
-				d_zistepu = 0;
-				d_zistepv = 0;
-				d_ziorigin = -0.9;
-
-				D_DrawSolidSurface (s, (int)r_clearcolor.value & 0xFF);
-				D_DrawZSpans (s->spans);
-			}
-			else if (s->flags & SURF_DRAWTURB)
-			{
-				pface = s->data;
-				miplevel = 0;
-				cacheblock = (pixel_t *)
-						((byte *)pface->texinfo->texture +
-						pface->texinfo->texture->offsets[0]);
-				cachewidth = 64;
-
-				if (s->insubmodel)
-				{
-				// FIXME: we don't want to do all this for every polygon!
-				// TODO: store once at start of frame
-					currententity = s->entity;	//FIXME: make this passed in to
-												// R_RotateBmodel ()
-					VectorSubtract (r_origin, currententity->origin,
-							local_modelorg);
-					TransformVector (local_modelorg, transformed_modelorg);
-
-					R_RotateBmodel ();	// FIXME: don't mess with the frustum,
-										// make entity passed in
-				}
-
-				D_CalcGradients (pface);
-				Turbulent8 (s->spans);
-				D_DrawZSpans (s->spans);
-
-				if (s->insubmodel)
-				{
-				//
-				// restore the old drawing state
-				// FIXME: we don't want to do this every time!
-				// TODO: speed up
-				//
-					currententity = &cl_entities[0];
-					VectorCopy (world_transformed_modelorg,
-								transformed_modelorg);
-					VectorCopy (base_vpn, vpn);
-					VectorCopy (base_vup, vup);
-					VectorCopy (base_vright, vright);
-					VectorCopy (base_modelorg, modelorg);
-					R_TransformFrustum ();
-				}
-			}
-			else
-			{
-				if (s->insubmodel)
-				{
-				// FIXME: we don't want to do all this for every polygon!
-				// TODO: store once at start of frame
-					currententity = s->entity;	//FIXME: make this passed in to
-												// R_RotateBmodel ()
-					VectorSubtract (r_origin, currententity->origin, local_modelorg);
-					TransformVector (local_modelorg, transformed_modelorg);
-
-					R_RotateBmodel ();	// FIXME: don't mess with the frustum,
-										// make entity passed in
-				}
-
-				pface = s->data;
-				miplevel = D_MipLevelForScale (s->nearzi * scale_for_mip
-				* pface->texinfo->mipadjust);
-
-				// FPC: textured by the GPU (fpc_gpu3d.c): the depth here (the
-				// models are tested against it), the surface built, uploaded
-				// and given to the GPU by the other core (fpc_drawq.c)
-				if (fpcq_g3_drawing () && fpcq_g3_fits (pface, miplevel))
-				{
-					texture_t *tex = R_TextureAnimation (pface->texinfo->texture);
-
-					D_CalcGradients (pface);
-					D_DrawZSpans (s->spans);
-					if (!fpcq_g3_queue (s->spans, pface, miplevel, tex))
-					{
-						pcurrentcache = D_CacheSurfaceTex (pface, miplevel, tex);
-						if (fpcq_g3_surface (pcurrentcache))
-							fpcq_g3_spans (s->spans, pcurrentcache);
-					}
-				}
-				else
-				{
-					if (fpcq_g3_drawing ())
-						fpcq_g3_cpu ();		// (the other core builds surfaces meanwhile)
-
-			// FIXME: make this passed in to D_CacheSurface
-					pcurrentcache = D_CacheSurface (pface, miplevel);
-
-					cacheblock = (pixel_t *)pcurrentcache->data;
-					cachewidth = pcurrentcache->width;
-
-					D_CalcGradients (pface);
-
-				// FPC: drawn on the other core where it can be
-					if (!fpcq_dq_surface (s->spans, pcurrentcache))
-					{
-						(*d_drawspans) (s->spans);
-
-						D_DrawZSpans (s->spans);
-					}
-				}
-
-				if (s->insubmodel)
-				{
-				//
-				// restore the old drawing state
-				// FIXME: we don't want to do this every time!
-				// TODO: speed up
-				//
-					currententity = &cl_entities[0];
-					VectorCopy (world_transformed_modelorg,
-								transformed_modelorg);
-					VectorCopy (base_vpn, vpn);
-					VectorCopy (base_vup, vup);
-					VectorCopy (base_vright, vright);
-					VectorCopy (base_modelorg, modelorg);
-					R_TransformFrustum ();
-				}
+				d->pad[0] = 0;
+				deferred--;
+				D_DrawSurface1 (d, false, world_transformed_modelorg);
 			}
 		}
 	}
 
 	fpcq_dq_batch_end ();	// FPC: what the other core draws into the frame drawn
 }
-

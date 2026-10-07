@@ -57,16 +57,6 @@
  * External Data (r_surf.c's: what R_DrawSurface sets up for a block)
  ****************************************************************************/
 
-extern int				lightleft, sourcetstep, lightright;
-extern int				lightleftstep, lightrightstep;
-extern void				*prowdestbase;
-extern unsigned char	*pbasesource;
-extern int				surfrowbytes;
-extern unsigned			*r_lightptr;
-extern int				r_stepback;
-extern int				r_lightwidth;
-extern int				r_numvblocks;
-extern unsigned char	*r_sourcemax;
 
 /****************************************************************************
  * Public Data
@@ -515,16 +505,17 @@ FPCQ_FAST static void zspans_sio(const dspanctx_t *c, espan_t *pspan)
  * left the same.
  ****************************************************************************/
 
-static inline __attribute__((always_inline)) void block_body(const int shift)
+static inline __attribute__((always_inline))
+void block_body(rblock_t *rb, const int shift)
 {
 	const int		size = 1 << shift;
 	int				v, i, b, lightstep, lighttemp;
 	unsigned char	*psource, *prowdest;
 	int				ll, lr, lls, lrs;
-	unsigned		*lp = r_lightptr;
-	const int		lw = r_lightwidth;
-	const int		tstep = sourcetstep;
-	const int		rowbytes = surfrowbytes;
+	unsigned		*lp = rb->lightptr;
+	const int		lw = rb->lightwidth;
+	const int		tstep = rb->sourcetstep;
+	const int		rowbytes = rb->surfrowbytes;
 
 	I0->ctrl[0] = INTERP_MASK(8, 15) | INTERP_ADD_RAW;
 	I0->ctrl[1] = 0;
@@ -532,14 +523,14 @@ static inline __attribute__((always_inline)) void block_body(const int shift)
 	I0->base[1] = 0;
 	I0->base[2] = (uint32_t)vid.colormap;
 
-	psource = pbasesource;
-	prowdest = prowdestbase;
-	ll = lightleft;
-	lr = lightright;
-	lls = lightleftstep;
-	lrs = lightrightstep;
+	psource = rb->psource;
+	prowdest = rb->prowdest;
+	ll = rb->lightleft;
+	lr = rb->lightright;
+	lls = rb->lightleftstep;
+	lrs = rb->lightrightstep;
 
-	for (v=0 ; v<r_numvblocks ; v++)
+	for (v=0 ; v<rb->numvblocks ; v++)
 	{
 		ll = lp[0];
 		lr = lp[1];
@@ -567,35 +558,35 @@ static inline __attribute__((always_inline)) void block_body(const int shift)
 			prowdest += rowbytes;
 		}
 
-		if (psource >= r_sourcemax)
-			psource -= r_stepback;
+		if (psource >= rb->sourcemax)
+			psource -= rb->stepback;
 	}
 
-	r_lightptr = lp;
-	lightleft = ll;
-	lightright = lr;
-	lightleftstep = lls;
-	lightrightstep = lrs;
+	rb->lightptr = lp;
+	rb->lightleft = ll;
+	rb->lightright = lr;
+	rb->lightleftstep = lls;
+	rb->lightrightstep = lrs;
 }
 
-FPCQ_FAST static void block_sio0(void)
+FPCQ_FAST static void block_sio0(rblock_t *rb)
 {
-  block_body(4);
+  block_body(rb, 4);
 }
 
-FPCQ_FAST static void block_sio1(void)
+FPCQ_FAST static void block_sio1(rblock_t *rb)
 {
-  block_body(3);
+  block_body(rb, 3);
 }
 
-FPCQ_FAST static void block_sio2(void)
+FPCQ_FAST static void block_sio2(rblock_t *rb)
 {
-  block_body(2);
+  block_body(rb, 2);
 }
 
-FPCQ_FAST static void block_sio3(void)
+FPCQ_FAST static void block_sio3(rblock_t *rb)
 {
-  block_body(1);
+  block_body(rb, 1);
 }
 
 /****************************************************************************
@@ -620,10 +611,10 @@ struct check_s
 
 static struct check_s g_check[2];
 
-extern void R_DrawSurfaceBlock8_mip0(void);
-extern void R_DrawSurfaceBlock8_mip1(void);
-extern void R_DrawSurfaceBlock8_mip2(void);
-extern void R_DrawSurfaceBlock8_mip3(void);
+extern void R_DrawSurfaceBlock8_mip0(rblock_t *rb);
+extern void R_DrawSurfaceBlock8_mip1(rblock_t *rb);
+extern void R_DrawSurfaceBlock8_mip2(rblock_t *rb);
+extern void R_DrawSurfaceBlock8_mip3(rblock_t *rb);
 
 /* (From the system's heap: the game's is all taken) */
 
@@ -744,22 +735,18 @@ FPCQ_FAST void D_DrawZSpansSio(const dspanctx_t *c, espan_t *pspan)
     }
 }
 
-static void block_check(int mip, void (*sio)(void), void (*cfn)(void))
+static void block_check(rblock_t *rb, int mip, void (*sio)(rblock_t *),
+                        void (*cfn)(rblock_t *))
 {
   struct check_s *k = &g_check[fpcq_sio_cpu()];
   const int size = 16 >> mip;
-  const int rows = r_numvblocks * size;
-  unsigned *lp = r_lightptr;
-  int ll = lightleft;
-  int lr = lightright;
-  int lls = lightleftstep;
-  int lrs = lightrightstep;
-  unsigned *lp2;
-  int ll2, lr2, lls2, lrs2;
+  const int rows = rb->numvblocks * size;
+  rblock_t before = *rb;
+  rblock_t after;
   qboolean bad = false;
   int y;
 
-  sio();
+  sio(rb);
   if (!g_checking)
     {
       return;
@@ -773,66 +760,60 @@ static void block_check(int mip, void (*sio)(void), void (*cfn)(void))
 
   for (y = 0; y < rows; y++)
     {
-      memcpy(k->blk + y * size,
-             (uint8_t *)prowdestbase + y * surfrowbytes, size);
+      memcpy(k->blk + y * size, rb->prowdest + y * rb->surfrowbytes, size);
     }
 
-  lp2 = r_lightptr;
-  ll2 = lightleft;
-  lr2 = lightright;
-  lls2 = lightleftstep;
-  lrs2 = lightrightstep;
-  r_lightptr = lp;
-  lightleft = ll;
-  lightright = lr;
-  lightleftstep = lls;
-  lightrightstep = lrs;
-  cfn();
+  after = *rb;
+  *rb = before;
+  cfn(rb);
   for (y = 0; y < rows; y++)
     {
-      bad |= memcmp(k->blk + y * size,
-                    (uint8_t *)prowdestbase + y * surfrowbytes, size) != 0;
+      bad |= memcmp(k->blk + y * size, rb->prowdest + y * rb->surfrowbytes,
+                    size) != 0;
     }
 
-  bad |= lp2 != r_lightptr || ll2 != lightleft || lr2 != lightright ||
-         lls2 != lightleftstep || lrs2 != lightrightstep;
+  bad |= after.lightptr != rb->lightptr ||
+         after.lightleft != rb->lightleft ||
+         after.lightright != rb->lightright ||
+         after.lightleftstep != rb->lightleftstep ||
+         after.lightrightstep != rb->lightrightstep;
   k->blocks++;
   k->blocksbad += bad;
 }
 
-FPCQ_FAST static void block_mip0(void)
+FPCQ_FAST static void block_mip0(rblock_t *rb)
 {
   if (g_checking)
-    block_check(0, block_sio0, R_DrawSurfaceBlock8_mip0);
+    block_check(rb, 0, block_sio0, R_DrawSurfaceBlock8_mip0);
   else
-    block_sio0();
+    block_sio0(rb);
 }
 
-FPCQ_FAST static void block_mip1(void)
+FPCQ_FAST static void block_mip1(rblock_t *rb)
 {
   if (g_checking)
-    block_check(1, block_sio1, R_DrawSurfaceBlock8_mip1);
+    block_check(rb, 1, block_sio1, R_DrawSurfaceBlock8_mip1);
   else
-    block_sio1();
+    block_sio1(rb);
 }
 
-FPCQ_FAST static void block_mip2(void)
+FPCQ_FAST static void block_mip2(rblock_t *rb)
 {
   if (g_checking)
-    block_check(2, block_sio2, R_DrawSurfaceBlock8_mip2);
+    block_check(rb, 2, block_sio2, R_DrawSurfaceBlock8_mip2);
   else
-    block_sio2();
+    block_sio2(rb);
 }
 
-FPCQ_FAST static void block_mip3(void)
+FPCQ_FAST static void block_mip3(rblock_t *rb)
 {
   if (g_checking)
-    block_check(3, block_sio3, R_DrawSurfaceBlock8_mip3);
+    block_check(rb, 3, block_sio3, R_DrawSurfaceBlock8_mip3);
   else
-    block_sio3();
+    block_sio3(rb);
 }
 
-void (*const fpcq_sio_blocks[4])(void) =
+void (*const fpcq_sio_blocks[4])(rblock_t *rb) =
 {
   block_mip0, block_mip1, block_mip2, block_mip3
 };

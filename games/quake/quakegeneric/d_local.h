@@ -103,6 +103,10 @@ qboolean fpcq_dq_zspans (espan_t *spans);
 void fpcq_dq_wait (void);
 void fpcq_dq_batch_end (void);
 void fpcq_dq_guard (const void *p, int n);
+qboolean fpcq_dq_room (void);
+void fpcq_dq_begin (void);
+qboolean fpcq_dq_on (void);
+surfcache_t *D_SurfaceCached (msurface_t *surface, int miplevel, texture_t *texture);
 
 // FPC: the world textured by the GPU (fpc_gpu3d.c, fpc_quake.c)
 void fpcq_g3_init (void);
@@ -131,6 +135,7 @@ surfcache_t	*D_CacheSurface (msurface_t *surface, int miplevel);
 surfcache_t	*D_CacheSurfaceTex (msurface_t *surface, int miplevel,
                                 texture_t *texture);	// FPC
 texture_t *R_TextureAnimation (texture_t *base);	// FPC (r_local.h's)
+texture_t *R_TextureAnimationEnt (texture_t *base, entity_t *ent);
 
 extern int D_MipLevelForScale (float scale);
 

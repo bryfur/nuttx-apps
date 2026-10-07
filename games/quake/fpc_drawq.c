@@ -20,6 +20,13 @@
  * Like NXDoom's draw queue (r_draw.c): the ring in the SRAM, spun on by
  * both cores, the drawer asleep between batches.
  *
+ * D_DrawSurfaces queues the surfaces whose cache blocks are built first, so
+ * that the drawer has spans to draw while the game builds the others; and
+ * the drawer, whenever its queue is empty, draws columns of the surface the
+ * game is building (fpcq_cols_draw(): a surface's columns of blocks are
+ * each their own pixels, the light grid and the texture are read only),
+ * on its own interpolators.
+ *
  * With the GPU drawing the world (fpc_gpu3d.c) the other core builds the
  * surfaces' cache blocks, uploads them and gives the GPU their spans
  * (fpcq_g3_queue()), while the game draws the models, particles and the
@@ -88,6 +95,11 @@ static struct
   int nspans;
   bool quit;
   bool tried;
+  const rcols_t *cols;                    /* The surface being built (fpcq_cols_draw()) */
+  uint32_t colword;                       /* ... its number << 16 | the next column (0xffff: none) */
+  uint32_t coldone;                       /* ... columns drawn */
+  uint16_t colgen;                        /* The game's: the next build's number */
+  bool nohelp;                            /* -nohelp */
   pthread_t thread;
   void *stack;                            /* The game's heap: the PSRAM */
   sem_t go;
@@ -104,6 +116,10 @@ struct dqt_s
 
 static struct dqt_s g_dqt;
 
+unsigned int fpcq_tsum[FPCQ_T_N];
+unsigned int fpcq_xmisses;
+unsigned int fpcq_xipcount;
+
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
@@ -118,6 +134,7 @@ FPCQ_FAST static qboolean dq_take(qboolean game)
 {
   uint32_t c = __atomic_load_n(&g_dq.claim, __ATOMIC_ACQUIRE);
   const struct dq_s *e;
+  unsigned int t0;
 
   if (c == __atomic_load_n(&g_dq.head, __ATOMIC_ACQUIRE) ||
       (game && g_dq.ring[c & (g_dq.size - 1)].g3face != NULL) ||   /* (the drawer's only) */
@@ -149,13 +166,47 @@ FPCQ_FAST static qboolean dq_take(qboolean game)
       return true;
     }
 
+  t0 = fpcq_us();
   if (!e->zonly)
     {
       D_DrawSpans8Ctx(&e->c, e->spans);
     }
 
   D_DrawZSpansCtx(&e->c, e->spans);
+  fpcq_tsum[game ? FPCQ_T_SPANS0 : FPCQ_T_SPANS1] += fpcq_us() - t0;
   __atomic_add_fetch(&g_dq.done, 1, __ATOMIC_RELEASE);
+  return true;
+}
+
+/* A column of the surface the game is building, if there is one not taken
+ * (fpcq_cols_draw()): its number and the next column are one word, so a
+ * column of a build that has ended is never taken
+ */
+
+FPCQ_FAST static qboolean dq_column(qboolean game)
+{
+  uint32_t w = __atomic_load_n(&g_dq.colword, __ATOMIC_ACQUIRE);
+  const rcols_t *c;
+  uint32_t t0;
+
+  if ((w & 0xffff) == 0xffff)
+    {
+      return false;
+    }
+
+  c = g_dq.cols;
+  if ((int)(w & 0xffff) >= c->n ||
+      !__atomic_compare_exchange_n(&g_dq.colword, &w, w + 1, false,
+                                   __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+    {
+      return false;
+    }
+
+  t0 = fpcq_us();
+  R_DrawSurfaceColumn(c, w & 0xffff);
+  fpcq_tsum[game ? FPCQ_T_COLS0 : FPCQ_T_COLS1] +=
+    fpcq_us() - t0;
+  __atomic_add_fetch(&g_dq.coldone, 1, __ATOMIC_RELEASE);
   return true;
 }
 
@@ -170,7 +221,7 @@ FPCQ_FAST static void *dq_main(void *arg)
       sem_wait(&g_dq.go);
       for (; ; )
         {
-          if (dq_take(false))
+          if (dq_take(false) || dq_column(false))
             {
               continue;
             }
@@ -197,7 +248,14 @@ FPCQ_FAST static struct dq_s *dq_slot(void)
 {
   uint32_t h = g_dq.head;
 
-  while (h - __atomic_load_n(&g_dq.done, __ATOMIC_ACQUIRE) >= g_dq.size);
+  if (h - __atomic_load_n(&g_dq.done, __ATOMIC_ACQUIRE) >= g_dq.size)
+    {
+      uint32_t t0 = fpcq_us();
+
+      while (h - __atomic_load_n(&g_dq.done, __ATOMIC_ACQUIRE) >= g_dq.size);
+      fpcq_tsum[FPCQ_T_FULL] += fpcq_us() - t0;
+    }
+
   return &g_dq.ring[h & (g_dq.size - 1)];
 }
 
@@ -245,6 +303,8 @@ static qboolean dq_start(void)
   g_dq.claim = 0;
   g_dq.done = 0;
   g_dq.quit = false;
+  g_dq.colword = 0xffff;                  /* (no build) */
+  g_dq.nohelp = COM_CheckParm("-nohelp") != 0;
   sem_init(&g_dq.go, 0, 0);
 
   CPU_ZERO(&cpus);
@@ -289,7 +349,9 @@ static qboolean dq_start(void)
   pthread_attr_destroy(&attr);
   pthread_setname_np(g_dq.thread, "quake draw");
   syslog(LOG_INFO, "quake: the world's spans on the other core, %u "
-         "surfaces queued at most\n", (unsigned)g_dq.size);
+         "surfaces queued at most (SRAM left: %u KB, %u KB at most)\n",
+         (unsigned)g_dq.size, (unsigned)(kmm_mallinfo().fordblks / 1024),
+         (unsigned)(kmm_mallinfo().mxordblk / 1024));
   return true;
 }
 
@@ -440,6 +502,72 @@ FPCQ_FAST qboolean fpcq_g3_queue(espan_t *spans, msurface_t *pface,
   return true;
 }
 
+/* Room in the queue for another surface (D_DrawSurfaces builds one meanwhile
+ * if not)
+ */
+
+qboolean fpcq_dq_room(void)
+{
+  return g_dq.ring == NULL ||
+         g_dq.head - __atomic_load_n(&g_dq.done, __ATOMIC_ACQUIRE) <
+         g_dq.size;
+}
+
+/* R_DrawSurface's columns of blocks: shared with the drawer while it is
+ * awake (a batch), which takes columns when its queue is empty; each
+ * column is its own (its pixels, its part of the light), the light and
+ * the texture are read only.  Done when this returns.
+ */
+
+void fpcq_cols_draw(const rcols_t *c)
+{
+  int u;
+
+  if (!g_dq.batch || g_dq.nohelp || c->n < 2 || fpcq_g3_drawing())
+    {
+      for (u = 0; u < c->n; u++)
+        {
+          R_DrawSurfaceColumn(c, u);
+        }
+
+      return;
+    }
+
+  g_dq.cols = c;
+  g_dq.coldone = 0;
+  __atomic_store_n(&g_dq.colword, (uint32_t)g_dq.colgen << 16,
+                   __ATOMIC_RELEASE);
+  while (dq_column(true));
+  while (__atomic_load_n(&g_dq.coldone, __ATOMIC_ACQUIRE) != (uint32_t)c->n);
+  __atomic_store_n(&g_dq.colword, 0xffff, __ATOMIC_RELEASE);
+  g_dq.colgen = (g_dq.colgen + 1) & 0x7fff;
+}
+
+/* D_DrawSurfaces starting: the drawer woken (a batch), to take columns of
+ * the surfaces built before any is queued; fpcq_dq_on(): it is (else the
+ * order of the surfaces gains nothing)
+ */
+
+FPCQ_FAST qboolean fpcq_dq_on(void)
+{
+  return g_dq.batch;
+}
+
+
+void fpcq_dq_begin(void)
+{
+  if (d_drawspans != D_DrawSpans8 || fpcq_g3_drawing() ||
+      (g_dq.ring == NULL && (g_dq.tried || !dq_start())) || g_dq.batch)
+    {
+      return;
+    }
+
+  g_dq.batch = true;
+  g_dq.cpu = true;                        /* (fpcq_dq_batch_end() waits) */
+  __atomic_store_n(&g_dq.ending, false, __ATOMIC_RELEASE);
+  sem_post(&g_dq.go);
+}
+
 /* The game about to build a surface itself: the other core's done first */
 
 FPCQ_FAST void fpcq_g3_cpu(void)
@@ -532,4 +660,35 @@ void fpcq_dq_shutdown(void)
   g_dq.spans = NULL;
   kmm_free(g_dq.ring);
   g_dq.ring = NULL;
+}
+
+/* Where the timedemo's time went (fpc_quake.h's FPCQ_T_*), us a frame */
+
+void fpcq_times_report(unsigned int frames)
+{
+  static const char *const names[FPCQ_T_N] =
+  {
+    "view", "world", "bmodels", "scan", "surfaces", "models", "particles",
+    "send", "frame", "spans0", "spans1", "full", "cols0", "cols1"
+  };
+
+  int i;
+
+  if (frames == 0)
+    {
+      return;
+    }
+
+  printf("quake: us a frame:");
+  for (i = 0; i < FPCQ_T_N; i++)
+    {
+      printf(" %s %u", names[i], fpcq_tsum[i] / frames);
+    }
+
+  if (fpcq_xipcount)
+    {
+      printf(", XIP misses %u", fpcq_xmisses / frames);
+    }
+
+  printf("\n");
 }

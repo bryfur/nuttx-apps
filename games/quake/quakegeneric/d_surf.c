@@ -347,4 +347,22 @@ FPCQ_FAST surfcache_t *D_CacheSurfaceTex (msurface_t *surface, int miplevel,
 	return surface->cachespots[miplevel];
 }
 
+// FPC: the surface's cache block if it is built (D_CacheSurfaceTex would
+// return it as it is), else NULL (D_DrawSurfaces: the built ones first)
+surfcache_t *D_SurfaceCached (msurface_t *surface, int miplevel,
+                              texture_t *texture)
+{
+	surfcache_t	*cache = surface->cachespots[miplevel];
+
+	if (cache && !cache->dlight && surface->dlightframe != r_framecount
+			&& cache->texture == texture
+			&& cache->lightadj[0] == d_lightstylevalue[surface->styles[0]]
+			&& cache->lightadj[1] == d_lightstylevalue[surface->styles[1]]
+			&& cache->lightadj[2] == d_lightstylevalue[surface->styles[2]]
+			&& cache->lightadj[3] == d_lightstylevalue[surface->styles[3]])
+		return cache;
+
+	return NULL;
+}
+
 

@@ -38,12 +38,12 @@ int				r_lightwidth;
 int				r_numhblocks, r_numvblocks;
 unsigned char	*r_source, *r_sourcemax;
 
-FPCQ_FAST void R_DrawSurfaceBlock8_mip0 (void);
-FPCQ_FAST void R_DrawSurfaceBlock8_mip1 (void);
-FPCQ_FAST void R_DrawSurfaceBlock8_mip2 (void);
-FPCQ_FAST void R_DrawSurfaceBlock8_mip3 (void);
+FPCQ_FAST void R_DrawSurfaceBlock8_mip0 (rblock_t *rb);
+FPCQ_FAST void R_DrawSurfaceBlock8_mip1 (rblock_t *rb);
+FPCQ_FAST void R_DrawSurfaceBlock8_mip2 (rblock_t *rb);
+FPCQ_FAST void R_DrawSurfaceBlock8_mip3 (rblock_t *rb);
 
-static void	(*surfmiptable[4])(void) = {
+static void	(*surfmiptable[4])(rblock_t *rb) = {
 	R_DrawSurfaceBlock8_mip0,
 	R_DrawSurfaceBlock8_mip1,
 	R_DrawSurfaceBlock8_mip2,
@@ -196,10 +196,17 @@ Returns the proper texture for a given time and base texture
 */
 texture_t *R_TextureAnimation (texture_t *base)
 {
+	return R_TextureAnimationEnt (base, currententity);
+}
+
+// FPC: for the given entity (D_DrawSurfaces looks for a surface's cache
+// block before it makes the surface's entity the current one)
+texture_t *R_TextureAnimationEnt (texture_t *base, entity_t *ent)
+{
 	int		reletive;
 	int		count;
 
-	if (currententity->frame)
+	if (ent->frame)
 	{
 		if (base->alternate_anims)
 			base = base->alternate_anims;
@@ -231,13 +238,12 @@ R_DrawSurface
 */
 FPCQ_FAST void R_DrawSurface (void)
 {
+	// FPC: the columns' parts (the other core may draw some, fpc_drawq.c)
+	static rcols_t	cols;
 	unsigned char	*basetptr;
 	int				smax, tmax, twidth;
 	int				u;
 	int				soffset, basetoffset, texwidth;
-	int				horzblockstep;
-	unsigned char	*pcolumndest;
-	void			(*pblockdrawer)(void);
 	texture_t		*mt;
 
 // calculate the lightings
@@ -265,14 +271,6 @@ FPCQ_FAST void R_DrawSurface (void)
 
 //==============================
 
-	pblockdrawer = surfmiptable[r_drawsurf.surfmip];
-#ifdef FPCQ_SIO
-	if (fpcq_sio_here() & FPCQ_SIO_BLOCKS)	// FPC: on this core's interpolators (fpc_sio.c)
-		pblockdrawer = fpcq_sio_blocks[r_drawsurf.surfmip];
-#endif
-	// TODO: only needs to be set when there is a display settings change
-	horzblockstep = blocksize;
-
 	smax = mt->width >> r_drawsurf.surfmip;
 	twidth = texwidth;
 	tmax = mt->height >> r_drawsurf.surfmip;
@@ -289,59 +287,96 @@ FPCQ_FAST void R_DrawSurface (void)
 	basetptr = &r_source[((((basetoffset >> r_drawsurf.surfmip) 
 		+ (tmax << 16)) % tmax) * twidth)];
 
-	pcolumndest = r_drawsurf.surfdat;
+	// FPC: each column of blocks as the loop here made it (fpcq_cols_draw():
+	// on both cores when the other one is free)
+	cols.proto.numvblocks = r_numvblocks;
+	cols.proto.lightwidth = r_lightwidth;
+	cols.proto.sourcetstep = sourcetstep;
+	cols.proto.surfrowbytes = surfrowbytes;
+	cols.proto.stepback = r_stepback;
+	cols.proto.sourcemax = r_sourcemax;
+	cols.mip = r_drawsurf.surfmip;
+	cols.n = r_numhblocks;
+	cols.blocksize = blocksize;
+	cols.dest = r_drawsurf.surfdat;
+	cols.basetptr = basetptr;
+	if (cols.n > RCOLS_MAX)
+		Sys_Error ("R_DrawSurface: %d columns", cols.n);
 
 	for (u=0 ; u<r_numhblocks; u++)
 	{
-		r_lightptr = blocklights + u;
-
-		prowdestbase = pcolumndest;
-
-		pbasesource = basetptr + soffset;
-
-		(*pblockdrawer)();
+		cols.soffset[u] = soffset;
 
 		soffset = soffset + blocksize;
 		if (soffset >= smax)
 			soffset = 0;
-
-		pcolumndest += horzblockstep;
 	}
+
+	fpcq_cols_draw (&cols);
+}
+
+// FPC: one column of a surface's blocks (R_DrawSurface's loop), on this
+// core's interpolators if it has them (fpc_sio.c)
+void R_DrawSurfaceColumn (const rcols_t *c, int u)
+{
+	rblock_t	rb = c->proto;
+	void		(*pblockdrawer)(rblock_t *) = surfmiptable[c->mip];
+
+#ifdef FPCQ_SIO
+	if (fpcq_sio_here() & FPCQ_SIO_BLOCKS)
+		pblockdrawer = fpcq_sio_blocks[c->mip];
+#endif
+	rb.lightptr = blocklights + u;
+	rb.prowdest = c->dest + u * c->blocksize;
+	rb.psource = c->basetptr + c->soffset[u];
+	(*pblockdrawer)(&rb);
 }
 
 //=============================================================================
 
 /*
 ================
-R_DrawSurfaceBlock8_mip0
+R_DrawSurfaceBlock8_mip0..3
+
+FPC: the four as one body (the block's size 16 >> mip), their state in
+rb (the column's, R_DrawSurfaceColumn) rather than in globals, what they
+left in the globals left in it; the same arithmetic
 ================
 */
-FPCQ_FAST void R_DrawSurfaceBlock8_mip0 (void)
+static inline __attribute__((always_inline))
+void R_DrawSurfaceBlock8Body (rblock_t *rb, const int shift)
 {
+	const int		size = 1 << shift;
 	int				v, i, b, lightstep, lighttemp, light;
 	unsigned char	pix, *psource, *prowdest;
+	unsigned		*lightptr = rb->lightptr;
+	int				lightleft, lightright, lightleftstep, lightrightstep;
 
-	psource = pbasesource;
-	prowdest = prowdestbase;
+	psource = rb->psource;
+	prowdest = rb->prowdest;
+	lightleft = rb->lightleft;
+	lightright = rb->lightright;
+	lightleftstep = rb->lightleftstep;
+	lightrightstep = rb->lightrightstep;
 
-	for (v=0 ; v<r_numvblocks ; v++)
+	for (v=0 ; v<rb->numvblocks ; v++)
 	{
 	// FIXME: make these locals?
 	// FIXME: use delta rather than both right and left, like ASM?
-		lightleft = r_lightptr[0];
-		lightright = r_lightptr[1];
-		r_lightptr += r_lightwidth;
-		lightleftstep = (r_lightptr[0] - lightleft) >> 4;
-		lightrightstep = (r_lightptr[1] - lightright) >> 4;
+		lightleft = lightptr[0];
+		lightright = lightptr[1];
+		lightptr += rb->lightwidth;
+		lightleftstep = (lightptr[0] - lightleft) >> shift;
+		lightrightstep = (lightptr[1] - lightright) >> shift;
 
-		for (i=0 ; i<16 ; i++)
+		for (i=0 ; i<size ; i++)
 		{
 			lighttemp = lightleft - lightright;
-			lightstep = lighttemp >> 4;
+			lightstep = lighttemp >> shift;
 
 			light = lightright;
 
-			for (b=15; b>=0; b--)
+			for (b=size-1; b>=0; b--)
 			{
 				pix = psource[b];
 				prowdest[b] = ((unsigned char *)vid.colormap)
@@ -349,165 +384,41 @@ FPCQ_FAST void R_DrawSurfaceBlock8_mip0 (void)
 				light += lightstep;
 			}
 	
-			psource += sourcetstep;
+			psource += rb->sourcetstep;
 			lightright += lightrightstep;
 			lightleft += lightleftstep;
-			prowdest += surfrowbytes;
+			prowdest += rb->surfrowbytes;
 		}
 
-		if (psource >= r_sourcemax)
-			psource -= r_stepback;
+		if (psource >= rb->sourcemax)
+			psource -= rb->stepback;
 	}
+
+	rb->lightptr = lightptr;
+	rb->lightleft = lightleft;
+	rb->lightright = lightright;
+	rb->lightleftstep = lightleftstep;
+	rb->lightrightstep = lightrightstep;
 }
 
-
-/*
-================
-R_DrawSurfaceBlock8_mip1
-================
-*/
-FPCQ_FAST void R_DrawSurfaceBlock8_mip1 (void)
+FPCQ_FAST void R_DrawSurfaceBlock8_mip0 (rblock_t *rb)
 {
-	int				v, i, b, lightstep, lighttemp, light;
-	unsigned char	pix, *psource, *prowdest;
-
-	psource = pbasesource;
-	prowdest = prowdestbase;
-
-	for (v=0 ; v<r_numvblocks ; v++)
-	{
-	// FIXME: make these locals?
-	// FIXME: use delta rather than both right and left, like ASM?
-		lightleft = r_lightptr[0];
-		lightright = r_lightptr[1];
-		r_lightptr += r_lightwidth;
-		lightleftstep = (r_lightptr[0] - lightleft) >> 3;
-		lightrightstep = (r_lightptr[1] - lightright) >> 3;
-
-		for (i=0 ; i<8 ; i++)
-		{
-			lighttemp = lightleft - lightright;
-			lightstep = lighttemp >> 3;
-
-			light = lightright;
-
-			for (b=7; b>=0; b--)
-			{
-				pix = psource[b];
-				prowdest[b] = ((unsigned char *)vid.colormap)
-						[(light & 0xFF00) + pix];
-				light += lightstep;
-			}
-	
-			psource += sourcetstep;
-			lightright += lightrightstep;
-			lightleft += lightleftstep;
-			prowdest += surfrowbytes;
-		}
-
-		if (psource >= r_sourcemax)
-			psource -= r_stepback;
-	}
+	R_DrawSurfaceBlock8Body (rb, 4);
 }
 
-
-/*
-================
-R_DrawSurfaceBlock8_mip2
-================
-*/
-FPCQ_FAST void R_DrawSurfaceBlock8_mip2 (void)
+FPCQ_FAST void R_DrawSurfaceBlock8_mip1 (rblock_t *rb)
 {
-	int				v, i, b, lightstep, lighttemp, light;
-	unsigned char	pix, *psource, *prowdest;
-
-	psource = pbasesource;
-	prowdest = prowdestbase;
-
-	for (v=0 ; v<r_numvblocks ; v++)
-	{
-	// FIXME: make these locals?
-	// FIXME: use delta rather than both right and left, like ASM?
-		lightleft = r_lightptr[0];
-		lightright = r_lightptr[1];
-		r_lightptr += r_lightwidth;
-		lightleftstep = (r_lightptr[0] - lightleft) >> 2;
-		lightrightstep = (r_lightptr[1] - lightright) >> 2;
-
-		for (i=0 ; i<4 ; i++)
-		{
-			lighttemp = lightleft - lightright;
-			lightstep = lighttemp >> 2;
-
-			light = lightright;
-
-			for (b=3; b>=0; b--)
-			{
-				pix = psource[b];
-				prowdest[b] = ((unsigned char *)vid.colormap)
-						[(light & 0xFF00) + pix];
-				light += lightstep;
-			}
-	
-			psource += sourcetstep;
-			lightright += lightrightstep;
-			lightleft += lightleftstep;
-			prowdest += surfrowbytes;
-		}
-
-		if (psource >= r_sourcemax)
-			psource -= r_stepback;
-	}
+	R_DrawSurfaceBlock8Body (rb, 3);
 }
 
-
-/*
-================
-R_DrawSurfaceBlock8_mip3
-================
-*/
-FPCQ_FAST void R_DrawSurfaceBlock8_mip3 (void)
+FPCQ_FAST void R_DrawSurfaceBlock8_mip2 (rblock_t *rb)
 {
-	int				v, i, b, lightstep, lighttemp, light;
-	unsigned char	pix, *psource, *prowdest;
+	R_DrawSurfaceBlock8Body (rb, 2);
+}
 
-	psource = pbasesource;
-	prowdest = prowdestbase;
-
-	for (v=0 ; v<r_numvblocks ; v++)
-	{
-	// FIXME: make these locals?
-	// FIXME: use delta rather than both right and left, like ASM?
-		lightleft = r_lightptr[0];
-		lightright = r_lightptr[1];
-		r_lightptr += r_lightwidth;
-		lightleftstep = (r_lightptr[0] - lightleft) >> 1;
-		lightrightstep = (r_lightptr[1] - lightright) >> 1;
-
-		for (i=0 ; i<2 ; i++)
-		{
-			lighttemp = lightleft - lightright;
-			lightstep = lighttemp >> 1;
-
-			light = lightright;
-
-			for (b=1; b>=0; b--)
-			{
-				pix = psource[b];
-				prowdest[b] = ((unsigned char *)vid.colormap)
-						[(light & 0xFF00) + pix];
-				light += lightstep;
-			}
-	
-			psource += sourcetstep;
-			lightright += lightrightstep;
-			lightleft += lightleftstep;
-			prowdest += surfrowbytes;
-		}
-
-		if (psource >= r_sourcemax)
-			psource -= r_stepback;
-	}
+FPCQ_FAST void R_DrawSurfaceBlock8_mip3 (rblock_t *rb)
+{
+	R_DrawSurfaceBlock8Body (rb, 1);
 }
 
 //============================================================================
