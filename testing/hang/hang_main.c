@@ -10,6 +10,10 @@
  *         too, at its next critical section)
  *   lock  spin with pre-emption off on this CPU (sched_lock)
  *   prio  a thread per CPU spinning at the highest priority (FIFO)
+ *   panic a few syslog lines, then PANIC() from a timer (interrupt level):
+ *         the console must show the lines, then the panic's dump, in that
+ *         order (the console's buffered driver drained by syslog_flush()),
+ *         and the watchdog reset the chip
  *
  * Forever by default (the watchdog must reset the chip, and the next boot
  * say "watchdog" in /proc/chip); with SECONDS it comes back after them (a
@@ -26,8 +30,12 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <assert.h>
+#include <syslog.h>
+
 #include <nuttx/arch.h>
 #include <nuttx/irq.h>
+#include <nuttx/wdog.h>
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -104,14 +112,36 @@ static int hang_prio(void)
   return EXIT_SUCCESS;
 }
 
+static struct wdog_s g_panic_wdog;
+
+static void panic_timer(wdparm_t arg)
+{
+  PANIC();
+}
+
+static void hang_panic(void)
+{
+  int i;
+
+  for (i = 0; i < 4; i++)
+    {
+      syslog(LOG_INFO, "hang: line %d before the panic "
+             "..........................................\n", i);
+    }
+
+  wd_start(&g_panic_wdog, 1, panic_timer, 0);
+  spin();
+}
+
 static void usage(void)
 {
   fprintf(stderr,
-          "usage: hang irq|crit|lock|prio [SECONDS]\n"
+          "usage: hang irq|crit|lock|prio|panic [SECONDS]\n"
           "  irq   spin with this CPU's interrupts off\n"
           "  crit  spin inside a critical section\n"
           "  lock  spin with pre-emption off\n"
           "  prio  a thread per CPU at the highest priority\n"
+          "  panic syslog lines, then PANIC() from a timer\n"
           "forever unless SECONDS: the watchdog should reset the chip\n");
 }
 
@@ -163,6 +193,10 @@ int main(int argc, FAR char *argv[])
       sched_lock();
       spin();
       sched_unlock();
+    }
+  else if (strcmp(mode, "panic") == 0)
+    {
+      hang_panic();
     }
   else if (strcmp(mode, "prio") == 0)
     {
