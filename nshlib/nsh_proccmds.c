@@ -67,6 +67,15 @@
 #  define PS_SHOW_HEAPSIZE
 #endif
 
+/* The CPU time each thread has had (TIME): the critical section monitor's
+ * run time, the last field of /proc/<pid>/critmon
+ */
+
+#if defined(CONFIG_SCHED_CRITMONITOR) && \
+    CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
+#  define PS_SHOW_CPUTIME
+#endif
+
 #ifndef CONFIG_NSH_DISABLE_PSSTACKUSAGE
 #  define PS_SHOW_STACKSIZE
 #  ifdef CONFIG_STACK_COLORATION
@@ -106,6 +115,9 @@ struct nsh_taskstatus_s
   int             td_ppid;         /* Parent task ID */
 #ifdef NSH_HAVE_CPULOAD
   FAR const char *td_cpuload;      /* CPU load */
+#endif
+#ifdef PS_SHOW_CPUTIME
+  unsigned long   td_cputime;      /* CPU time, 10 ms */
 #endif
 #ifdef PS_SHOW_HEAPSIZE
   unsigned long   td_heapsize;     /* Heap size */
@@ -386,6 +398,9 @@ static int ps_record(FAR struct nsh_vtbl_s *vtbl, FAR const char *dirpath,
 #ifdef NSH_HAVE_CPULOAD
   status->td_cpuload = "";
 #endif
+#ifdef PS_SHOW_CPUTIME
+  status->td_cputime = 0;
+#endif
 
   /* Read the task status */
 
@@ -581,6 +596,29 @@ static int ps_record(FAR struct nsh_vtbl_s *vtbl, FAR const char *dirpath,
     }
 #endif
 
+#ifdef PS_SHOW_CPUTIME
+  /* Get the CPU time: "..., run max, run time" (seconds.nanoseconds) */
+
+  ret = ps_readprocfs(vtbl, "critmon", dirpath, entryp, status);
+  if (ret >= 0)
+    {
+      FAR char *last;
+      FAR char *end;
+
+      last = strrchr(status->td_buf + status->td_bufpos, ',');
+      if (last != NULL)
+        {
+          status->td_cputime = strtoul(last + 1, &end, 10) * 100;
+          if (*end == '.' && isdigit(end[1]) && isdigit(end[2]))
+            {
+              status->td_cputime += (end[1] - '0') * 10 + (end[2] - '0');
+            }
+        }
+
+      status->td_bufpos += ret;
+    }
+#endif
+
   /* Read the task/thread command line */
 
   ret = ps_readprocfs(vtbl, "cmdline", dirpath, entryp, status);
@@ -634,6 +672,9 @@ static void ps_title(FAR struct nsh_vtbl_s *vtbl, bool heap)
 #ifdef NSH_HAVE_CPULOAD
               "%6s "
 #endif
+#ifdef PS_SHOW_CPUTIME
+              "%9s "
+#endif
               "%s\n"
               , "TID", "PID", "PPID"
 #ifdef CONFIG_SMP
@@ -654,6 +695,9 @@ static void ps_title(FAR struct nsh_vtbl_s *vtbl, bool heap)
 #endif
 #ifdef NSH_HAVE_CPULOAD
               , "CPU"
+#endif
+#ifdef PS_SHOW_CPUTIME
+              , "TIME"
 #endif
               , "COMMAND");
 }
@@ -701,6 +745,9 @@ static void ps_output(FAR struct nsh_vtbl_s *vtbl, bool heap,
 #ifdef NSH_HAVE_CPULOAD
              "%5s "
 #endif
+#ifdef PS_SHOW_CPUTIME
+             "%3lu:%02lu.%02lu "
+#endif
              "%s\n"
            , status->td_tid, status->td_groupid, status->td_ppid
 #ifdef CONFIG_SMP
@@ -724,6 +771,10 @@ static void ps_output(FAR struct nsh_vtbl_s *vtbl, bool heap,
 #endif
 #ifdef NSH_HAVE_CPULOAD
            , status->td_cpuload
+#endif
+#ifdef PS_SHOW_CPUTIME
+           , status->td_cputime / 6000, status->td_cputime / 100 % 60
+           , status->td_cputime % 100
 #endif
            , status->td_cmdline);
 }

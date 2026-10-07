@@ -14,10 +14,12 @@
  *   /proc/<pid>/loadavg   the thread's share of all CPUs' time
  *   /proc/<pid>/stack     StackSize, StackUsed (CONFIG_STACK_COLORATION)
  *   /proc/<pid>/heap      AllocSize (CONFIG_MM_BACKTRACE >= 0)
+ *   /proc/<pid>/critmon   the CPU time it has had (CONFIG_SCHED_CRITMONITOR)
  *   /proc/meminfo         one line per heap
  *   /proc/cpuload         all CPUs' load, if no IDLE thread is found
  *   /proc/gpu             the GPU's memory, link, frames and (a v6 GPU)
  *                         how busy it and its SDRAM are
+ *   /proc/chip            the chip's temperature (the board's fpc_chip.c)
  *
  * and statfs() of a disk (CONFIG_FPCDESK_SYSMON_DISK).  NuttX counts load
  * against the ticks of all CPUs together, so a thread that keeps one of
@@ -140,6 +142,7 @@ enum
   COL_PRIO,
   COL_CORE,
   COL_LOAD,
+  COL_TIME,
   COL_STACK,
   COL_HEAP,
   NCOLS
@@ -161,7 +164,8 @@ enum
   F_CPU_NOTE = 0,
   F_CPU_BIG,
   F_CPU_VAL,                            /* One per CPU */
-  F_MEM_NOTE = F_CPU_VAL + MON_MAXCPUS,
+  F_CPU_TEMP = F_CPU_VAL + MON_MAXCPUS,
+  F_MEM_NOTE,
   F_MEM_BIG,
   F_MEM_USED,
   F_MEM_TOTAL,
@@ -218,6 +222,7 @@ struct mon_proc_s
   int8_t   cpu;                         /* CPU it runs on, or -1 */
   bool     idle;                        /* A CPU's IDLE thread */
   uint16_t load;                        /* Share of all CPUs, 0.1 % */
+  uint32_t cputime;                     /* CPU time it has had, 10 ms */
   uint32_t stacksize;
   uint32_t stackused;                   /* 0 if unknown */
   int32_t  heap;                        /* Bytes it allocated, -1 unknown */
@@ -276,6 +281,9 @@ struct mon_snap_s
   uint16_t nkthreads;
   uint16_t nrunning;
   bool     haveheap;                    /* /proc/<pid>/heap exists */
+  bool     havetime;                    /* /proc/<pid>/critmon exists */
+  bool     havetemp;                    /* /proc/chip has a temperature */
+  int16_t  temp;                        /* The chip's, 0.1 degree C */
   struct mon_gpu_s gpu;
   int      nprocs;
   struct mon_proc_s procs[MON_MAXPROCS];
@@ -349,6 +357,7 @@ struct mon_s
 
   struct mon_snap_s snap;
   int8_t   haveheap;                    /* -1 not yet known */
+  int8_t   havetime;                    /* -1 not yet known */
   char     buf[512];                    /* A procfs file */
   char     osname[48];
   pid_t    self;
@@ -381,6 +390,7 @@ struct mon_s
   int16_t  lw;
   int16_t  lh;
   bool     laidheap;                    /* Laid out with the Heap column */
+  bool     laidtime;                    /* ... the Time column */
   struct mon_rect_s cpucard;            /* w = 0: not shown */
   struct mon_rect_s memcard;
   struct mon_rect_s syscard;
@@ -470,14 +480,15 @@ static const struct
   bool    largest;
 } g_cols[NCOLS] =
 {
-  { "PID",    34, true,  6, false },
+  { "PID",    34, true,  7, false },
   { "Name",    0, false, 0, false },
-  { "State", 128, false, 4, false },
-  { "Pri",    28, true,  2, true  },
-  { "Core",   32, true,  1, false },
+  { "State", 128, false, 5, false },
+  { "Pri",    28, true,  3, true  },
+  { "Core",   32, true,  2, false },
   { "CPU",    84, true,  0, true  },
-  { "Stack", 108, true,  3, true  },
-  { "Heap",   62, true,  5, true  },
+  { "Time",   62, true,  1, true  },
+  { "Stack", 108, true,  4, true  },
+  { "Heap",   62, true,  6, true  },
 };
 
 /****************************************************************************
@@ -670,6 +681,37 @@ static bool mon_readproc(struct mon_s *m, pid_t pid, struct mon_proc_s *p)
       if ((v = mon_field(m->buf, "StackUsed:")) != NULL)
         {
           p->stackused = (uint32_t)strtoul(v, NULL, 10);
+        }
+    }
+
+  /* The CPU time it has had: the last of /proc/<pid>/critmon's fields
+   * ("..., run max, run time"), seconds and nanoseconds.  Once the file
+   * is missing (no CONFIG_SCHED_CRITMONITOR), stop looking.
+   */
+
+  if (m->havetime != 0)
+    {
+      const char *last;
+
+      if (mon_read(m, pid, "critmon") > 0 &&
+          (last = strrchr(m->buf, ',')) != NULL)
+        {
+          char *end;
+          unsigned long sec = strtoul(last + 1, &end, 10);
+          unsigned long cs = 0;
+
+          if (*end == '.' && isdigit((unsigned char)end[1]) &&
+              isdigit((unsigned char)end[2]))
+            {
+              cs = (end[1] - '0') * 10 + (end[2] - '0');
+            }
+
+          p->cputime  = (uint32_t)(sec * 100 + cs);
+          m->havetime = 1;
+        }
+      else if (m->havetime < 0)
+        {
+          m->havetime = 0;
         }
     }
 
@@ -953,6 +995,37 @@ static void mon_readgpu(struct mon_gpu_s *g)
     }
 }
 
+/* The chip's temperature: "Temperature: 38.4 C" in /proc/chip */
+
+static void mon_readchip(struct mon_s *m)
+{
+  struct mon_snap_s *s = &m->snap;
+  const char *v;
+  char *end;
+  long t;
+
+  s->havetemp = false;
+  if (mon_read(m, -1, "chip") <= 0 ||
+      (v = mon_field(m->buf, "Temperature:")) == NULL)
+    {
+      return;
+    }
+
+  t = strtol(v, &end, 10) * 10;
+  if (end == v)
+    {
+      return;
+    }
+
+  if (*end == '.' && isdigit((unsigned char)end[1]))
+    {
+      t += *v == '-' ? -(end[1] - '0') : end[1] - '0';
+    }
+
+  s->havetemp = true;
+  s->temp     = (int16_t)t;
+}
+
 static void mon_sample(struct mon_s *m)
 {
   struct mon_snap_s *s = &m->snap;
@@ -1004,7 +1077,9 @@ static void mon_sample(struct mon_s *m)
     }
 
   s->haveheap = m->haveheap > 0;
+  s->havetime = m->havetime > 0;
   mon_readloads(m);
+  mon_readchip(m);
   mon_readmem(m);
   mon_readdisk(m);
   mon_readgpu(&s->gpu);
@@ -1051,6 +1126,10 @@ static int mon_compare(struct mon_s *m, const struct mon_proc_s *a,
 
       case COL_LOAD:
         diff = (int)a->load - (int)b->load;
+        break;
+
+      case COL_TIME:
+        diff = (a->cputime > b->cputime) - (a->cputime < b->cputime);
         break;
 
       case COL_STACK:
@@ -1633,6 +1712,7 @@ static void mon_layout(struct desk_win_s *w, struct mon_s *m)
   m->lw = cw;
   m->lh = ch;
   m->laidheap = s->haveheap;
+  m->laidtime = s->havetime;
   memset(&m->cpucard, 0, sizeof(m->cpucard));
   memset(&m->memcard, 0, sizeof(m->memcard));
   memset(&m->syscard, 0, sizeof(m->syscard));
@@ -1778,7 +1858,8 @@ static void mon_layout(struct desk_win_s *w, struct mon_s *m)
   right = m->rows.x + m->rows.w - 6;
   for (i = 0; i < NCOLS; i++)
     {
-      m->colshown[i] = i != COL_HEAP || s->haveheap;
+      m->colshown[i] = (i != COL_HEAP || s->haveheap) &&
+                       (i != COL_TIME || s->havetime);
     }
 
   for (drop = 1; ; drop++)
@@ -1792,7 +1873,7 @@ static void mon_layout(struct desk_win_s *w, struct mon_s *m)
             }
         }
 
-      if (right - left - fixed >= 110 || drop > 6)
+      if (right - left - fixed >= 110 || drop > 7)
         {
           break;
         }
@@ -2100,6 +2181,31 @@ static void draw_cpu(struct mon_s *m)
                  NOLIMIT, buf, C_TEXT, C_CARD);
     }
 
+  /* The chip's temperature in the next column, if it has one free and
+   * the System card (where it goes otherwise) is not shown
+   */
+
+  if (s->havetemp && s->ncpus <= 2 && m->syscard.w == 0)
+    {
+      int cx = m->cpux + 104;
+      int cy = c->y + 38;
+      int t = s->temp < 0 ? -s->temp : s->temp;
+
+      if (cx + 88 <= right)
+        {
+          if (m->force)
+            {
+              d_text(&g_desk_font_ui, cx, cy, "Temp", C_TEXT_DIM);
+            }
+
+          snprintf(buf, sizeof(buf), "%s%d.%d" DESK_CH_DEGREE "C",
+                   s->temp < 0 ? DESK_CH_MINUS : "", t / 10, t % 10);
+          field_text(m, F_CPU_TEMP, &g_desk_font_uib, cx + 88, cy, true,
+                     NOLIMIT, buf, s->temp >= 850 ? C_RED :
+                     s->temp >= 700 ? C_AMBER : C_TEXT, C_CARD);
+        }
+    }
+
   flush();
   graph_draw(m, &m->gcpu, true);
   flush();
@@ -2241,6 +2347,24 @@ static void draw_system(struct mon_s *m)
   snprintf(buf, sizeof(buf), "%d, %d running", s->nprocs, s->nrunning);
   field_text(m, F_THREADS, &g_desk_font_ui, vx, c->y + 92, false, vw, buf,
              C_TEXT, C_CARD);
+
+  /* The chip's temperature (/proc/chip), on the board */
+
+  if (s->havetemp)
+    {
+      int t = s->temp < 0 ? -s->temp : s->temp;
+
+      if (m->force)
+        {
+          d_text(&g_desk_font_ui, x0, c->y + 112, "Temp", C_TEXT_DIM);
+        }
+
+      snprintf(buf, sizeof(buf), "%s%d.%d" DESK_CH_DEGREE "C",
+               s->temp < 0 ? DESK_CH_MINUS : "", t / 10, t % 10);
+      field_text(m, F_CPU_TEMP, &g_desk_font_ui, vx, c->y + 112, false, vw,
+                 buf, s->temp >= 850 ? C_RED : s->temp >= 700 ? C_AMBER :
+                 C_TEXT, C_CARD);
+    }
 
   /* The disk at the bottom: "1.2 GB of 29.7 GB", or its percentage if
    * that does not fit; "not mounted" when statfs() fails
@@ -2784,6 +2908,29 @@ static void cell_of(struct mon_s *m, const struct mon_proc_s *p, int col,
                      selected ? C_SELDIM : C_TEXT_DIM;
         break;
 
+      case COL_TIME:
+
+        /* m:ss.s, h:mm:ss from an hour */
+
+        if (p->cputime >= 360000)
+          {
+            snprintf(cell->text, sizeof(cell->text), "%lu:%02lu:%02lu",
+                     (unsigned long)(p->cputime / 360000),
+                     (unsigned long)(p->cputime / 6000 % 60),
+                     (unsigned long)(p->cputime / 100 % 60));
+          }
+        else
+          {
+            snprintf(cell->text, sizeof(cell->text), "%lu:%02lu.%lu",
+                     (unsigned long)(p->cputime / 6000),
+                     (unsigned long)(p->cputime / 100 % 60),
+                     (unsigned long)(p->cputime / 10 % 10));
+          }
+
+        cell->fg = p->cputime > 0 ? C_TEXT :
+                   selected ? C_SELDIM : C_TEXT_DIM;
+        break;
+
       case COL_STACK:
         if (p->stackused > 0)
           {
@@ -3147,7 +3294,7 @@ static void mon_draw(struct desk_win_s *w)
     }
 
   if (m->lw != w->csize.w || m->lh != w->csize.h ||
-      m->laidheap != m->snap.haveheap)
+      m->laidheap != m->snap.haveheap || m->laidtime != m->snap.havetime)
     {
       mon_layout(w, m);
     }
@@ -3185,7 +3332,7 @@ static void mon_update(struct desk_win_s *w)
 {
   struct mon_s *m = w->priv;
 
-  if (m->laidheap != m->snap.haveheap)
+  if (m->laidheap != m->snap.haveheap || m->laidtime != m->snap.havetime)
     {
       mon_draw(w);
     }
@@ -3556,6 +3703,7 @@ static struct desk_win_s *mon_open(void)
 
   w->priv       = m;
   m->haveheap   = MON_HEAPFILES ? -1 : 0;
+  m->havetime   = -1;
   m->self       = getpid();
   m->sortcol    = COL_LOAD;
   m->sortdown   = true;

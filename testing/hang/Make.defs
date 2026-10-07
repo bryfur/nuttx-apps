@@ -1,0 +1,9 @@
+############################################################################
+# apps/testing/hang/Make.defs
+#
+# SPDX-License-Identifier: Apache-2.0
+############################################################################
+
+ifneq ($(CONFIG_TESTING_HANG),)
+CONFIGURED_APPS += $(APPDIR)/testing/hang
+endif
