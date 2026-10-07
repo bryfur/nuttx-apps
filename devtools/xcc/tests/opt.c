@@ -901,9 +901,35 @@ static void t_unroll(int k)
   for (int i = 1; i <= 7; i += 3)        /* a step over the bound: 3 trips */
     s += g_unr[i];
   out("unroll", crc ^ s);
+
+  /* Of a few blocks: a branch, a continue, a break out of it */
+  uint32_t t = 0;
+  for (int r = 0; r < 3; r++)
+    for (int i = 0; i < 6; i++)
+      {
+        if ((g_unr[i] ^ (uint32_t)r) & 1)
+          t = t * 3 + (uint32_t)i;
+        else
+          t ^= g_unr[i] >> (i & 7);
+        if (((uint32_t)i + t) % 5 == 0)
+          continue;
+        t += 0x9e37u;
+        if ((t & 0xff) == (uint32_t)(k + 0x10))
+          break;
+      }
+  out("unroll2", t);
 }
 
 /* Compound assignments in narrow types: done in int, wrapped to the type */
+
+/* A constant made of a non-constant (x & 0): cast to another sign of
+ * the same width, then divided (signed) */
+
+static uint32_t constcast(uint32_t z)
+{
+  return (uint32_t)((int32_t)((z & 0u) - 65536u) % 15) +
+         (uint32_t)((int16_t)((z & 0u) + 0xfff0u) / 3) * 7u;
+}
 
 static void t_compound(int k)
 {
@@ -922,6 +948,7 @@ static void t_compound(int k)
       s = s * 7 + u + w + (uint32_t)(int32_t)c + (uint32_t)(int32_t)h + (uint32_t)(u % 6);
     }
   out("compound", s);
+  out("constcast", constcast((uint32_t)k));
 }
 
 static void t_bitx(int k)
