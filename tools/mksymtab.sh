@@ -130,19 +130,35 @@ if [ -z "$varlist" ]; then
   fi
 fi
 
-# Sort and unique the varlist
-varlist=`echo "$varlist" | tr ' ' '\n' | sort | uniq | tr '\n' ' '`
+# Sort and unique the varlist (one name a line)
+varlist=`echo "$varlist" | tr ' ' '\n' | grep -v '^$' | sort -u`
 
 for addsym in ${addlist[@]}; do
   if [ -f $addsym ]; then
-    varlist="${varlist}\n$(cat $addsym | grep -v "^,.*")"
+    varlist="${varlist}
+$(cat $addsym | grep -v "^,.*")"
   elif [ -d $addsym ]; then
-    varlist="${varlist}\n$(find $addsym -type f | xargs cat | grep -v "^,.*")"
+    varlist="${varlist}
+$(find $addsym -type f | xargs cat | grep -v "^,.*")"
   else
     usage
   fi
-  varlist=$(echo -e "${varlist}" | sort -u)
 done
+
+# (FPC) One table, unique and in strcmp() order by the exported name (the
+# part after a comma, if any), so that CONFIG_SYMTAB_ORDEREDBYNAME's binary
+# search finds every name.  The added lists used to be appended as lines
+# after the modules' names, which were one line: two sorted runs and
+# duplicates.
+
+varlist=`echo "$varlist" | grep -v '^$' | \
+         awk '{ n = $0; sub(/^.*,/, "", n); print n "\t" $0 }' | \
+         sort -t "$(printf '\t')" -k1,1 -u | cut -f2`
+
+if ! echo "$varlist" | sed -e 's/^.*,//' | LC_ALL=C sort -c 2>/dev/null; then
+  echo "ERROR: $0: the symbol table is not in strcmp() order" >&2
+  exit 1
+fi
 
 # Now output the symbol table as a structure in a C source file.  All
 # undefined symbols are declared as void* types.  If the toolchain does

@@ -1,8 +1,3 @@
-abort
-abs
-access
-acos
-acosf
 __aeabi_d2f
 __aeabi_d2iz
 __aeabi_d2lz
@@ -31,6 +26,13 @@ __aeabi_ui2d
 __aeabi_ul2d
 __aeabi_ul2f
 __aeabi_uldivmod
+__errno
+_exit
+abort
+abs
+access
+acos
+acosf
 aligned_alloc
 asin
 asinf
@@ -63,8 +65,6 @@ div
 dprintf
 dup
 dup2
-__errno
-_exit
 exit
 exp
 expf
@@ -156,8 +156,8 @@ mktime
 modf
 nanosleep
 open
-opendir
 open_memstream
+opendir
 perror
 pipe
 posix_memalign
