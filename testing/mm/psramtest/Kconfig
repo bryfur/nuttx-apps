@@ -1,0 +1,32 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+config TESTING_PSRAMTEST
+	tristate "RP2350 PSRAM test"
+	default n
+	depends on ARCH_CHIP_RP23XX && RP23XX_PSRAM
+	---help---
+		A test of all of the RP2350's QSPI PSRAM: the detected part and
+		size, data and address lines, address-in-address, random
+		patterns, byte/halfword/word and unaligned accesses, bursts
+		across pages and dies, retention, speed.  It overwrites the whole
+		PSRAM: for firmware with RP23XX_PSRAM_HEAP_NONE (what the
+		firmware keeps at the start of the PSRAM is saved and put back).
+
+if TESTING_PSRAMTEST
+
+config TESTING_PSRAMTEST_PROGNAME
+	string "Program name"
+	default "psramtest"
+
+config TESTING_PSRAMTEST_PRIORITY
+	int "Task priority"
+	default 100
+
+config TESTING_PSRAMTEST_STACKSIZE
+	int "Stack size"
+	default 4096
+
+endif
