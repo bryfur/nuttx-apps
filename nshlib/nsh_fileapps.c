@@ -261,6 +261,28 @@ int nsh_fileapp(FAR struct nsh_vtbl_s *vtbl, FAR const char *cmd,
       goto errout_with_actions;
     }
 
+  /* The program is there but did not load: say why, rather than "command
+   * not found" (which only ENOENT means).  ENOEXEC is what the loader says
+   * for a program built for another firmware (it names the symbol on the
+   * console)
+   */
+
+  if (ret == ENOEXEC)
+    {
+      nsh_error(vtbl, "nsh: %s: built for another firmware, or not a "
+                "program (the console says which)\n", cmd);
+      rc = 1;
+      ret = OK;
+      goto errout_with_actions;
+    }
+  else if (ret != OK && ret != ENOENT)
+    {
+      nsh_error(vtbl, "nsh: %s: cannot load: %s\n", cmd, strerror(ret));
+      rc = 1;
+      ret = OK;
+      goto errout_with_actions;
+    }
+
   if (ret == OK)
     {
       /* The application was successfully started with pre-emption disabled.

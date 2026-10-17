@@ -366,8 +366,10 @@ int desk_program_start(int app)
   ret = posix_spawnp(&pid, a->program, NULL, NULL, argv, NULL);
   if (ret != 0)
     {
-      syslog(LOG_WARNING, "desk: %s: cannot start %s: %d\n", a->name,
-             a->program, ret);
+      syslog(LOG_WARNING, "desk: %s: cannot start %s: %s%s\n", a->name,
+             a->program, strerror(ret),
+             ret == ENOEXEC ? " (built for another firmware? the line "
+                              "before says)" : "");
       return -ret;
     }
 
@@ -425,8 +427,10 @@ int desk_program_open(int app, const char *arg)
   ret = posix_spawnp(&pid, a->program, NULL, NULL, argv, NULL);
   if (ret != 0)
     {
-      syslog(LOG_WARNING, "desk: %s: cannot start %s: %d\n", a->name,
-             a->program, ret);
+      syslog(LOG_WARNING, "desk: %s: cannot start %s: %s%s\n", a->name,
+             a->program, strerror(ret),
+             ret == ENOEXEC ? " (built for another firmware? the line "
+                              "before says)" : "");
       return -ret;
     }
 
