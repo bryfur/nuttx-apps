@@ -22,6 +22,18 @@ class ToolError(Exception):
 
 MAX_RESULT = 40000          # Characters of a result the model gets
 READ_LINES = 2000
+
+# Shell commands that an "always" never covers (asked every time): those
+# that run other code (an "always" for python would allow any program) or
+# destroy; and what a first word says nothing of: a redirection or a
+# background job (writes, or keeps running), the agent's own files
+NO_ALWAYS = ('python', 'sh', 'source', '.', 'exec', 'wasm', 'xcc', 'wcc', 'agent',
+             'rm', 'rmdir', 'mw', 'mb', 'mh', 'dd', 'mkfatfs', 'mkrd', 'reboot',
+             'kill', 'pkill', 'umount')
+
+# The agent's files: the API key and the conversations.  read, grep and
+# glob refuse them; a shell command naming them always asks.
+SECRETS = ('.agent.json', '.agent_history')
 LINE_MAX = 2000
 
 
@@ -171,16 +183,34 @@ class Tools:
         d = self.by_name[name]
         if d['kind'] == 'read' or self.cfg.get('auto_approve'):
             return True
-        r = self.rule(name, a)
         allow = list(self.cfg.get('allow') or []) + session_allow
-        if name == 'shell' and (';' in a.get('command', '') or '|' in a.get('command', '')):
-            # Several commands: each must be allowed
-            for part in a.get('command', '').replace('|', ';').split(';'):
+        if name in allow:
+            return True                  # The whole tool ("shell": any command)
+        if name == 'shell':
+            # Each command (; and |) by its first word, and nothing a first
+            # word does not say
+            cmd = a.get('command', '')
+            if not self.can_always(name, a):
+                return False
+            for part in cmd.replace('|', ';').split(';'):
                 w = part.strip().split()
-                if w and ('shell:' + w[0]) not in allow and 'shell' not in allow:
+                if w and ('shell:' + w[0]) not in allow:
                     return False
             return True
-        return r in allow or name in allow
+        return self.rule(name, a) in allow
+
+    def can_always(self, name, a):
+        # Whether "always" may be offered (and a rule may allow it)
+        if name != 'shell':
+            return True
+        cmd = a.get('command', '')
+        if '>' in cmd or '&' in cmd or any(s in cmd for s in SECRETS):
+            return False
+        for part in cmd.replace('|', ';').split(';'):
+            w = part.strip().split()
+            if w and w[0] in NO_ALWAYS:
+                return False
+        return True
 
     # --- running
 
@@ -200,8 +230,13 @@ class Tools:
             raise ToolError(key + ' must be a string')
         return util.abspath(p)
 
+    def secret(self, p):
+        if util.basename(p) in SECRETS:
+            raise ToolError('refused: %s holds the API key or the conversations' % p)
+
     def t_read(self, a):
         p = self.path(a)
+        self.secret(p)
         st = util.stat(p)
         if st is None:
             raise ToolError('no such file: ' + p)
@@ -333,7 +368,8 @@ class Tools:
         if not pat:
             raise ToolError('missing pattern')
         root = self.path(a, default='.')
-        found = _agent.glob(pat, root, max=500)
+        found = [f for f in _agent.glob(pat, root, max=500)
+                 if util.basename(f[0]) not in SECRETS]
         if not found:
             return 'No files match', 'no files'
         lines = [f[0] for f in found]
@@ -355,6 +391,8 @@ class Tools:
             raise ToolError('%s (MicroPython re syntax; or use fixed)' % e)
         except OSError as e:
             raise ToolError(str(e.args[-1]) if e.args else str(e))
+        res = [r for r in res
+               if util.basename(r if a.get('files_only') else r[0]) not in SECRETS]
         if not res:
             return 'No matches (%s searched)' % util.plural(nfiles, 'file'), 'no matches'
         if a.get('files_only'):
@@ -413,6 +451,7 @@ class Tools:
         return text, summary
 
     spinner = None
+    permit = None                        # The session's: asks for a redirect's host
 
     def t_fetch(self, a):
         url = a.get('url')
@@ -439,6 +478,15 @@ class Tools:
                 if loc.startswith('/'):
                     loc = ('https://' if tls else 'http://') + host + \
                         ('' if port in (80, 443) else ':%d' % port) + loc
+                try:
+                    ntls, nhost = llm.parse_url(loc)[:2]
+                except ValueError as e:
+                    raise ToolError('redirect to %s: %s' % (loc, e))
+                if tls and not ntls:
+                    raise ToolError('refused: a redirect from https to http (%s)' % loc)
+                if nhost != host and self.permit is not None and \
+                        not self.permit('web_fetch', {'url': loc}):
+                    raise ToolError('refused: the redirect to %s' % loc)
                 url = loc
                 continue
             break

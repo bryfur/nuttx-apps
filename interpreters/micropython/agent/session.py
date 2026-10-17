@@ -49,6 +49,7 @@ class Session:
         self.tools = tools.Tools(cfg, self.pool)
         self.spinner = ui.Spinner()
         self.tools.spinner = self.spinner
+        self.tools.permit = self.permit_hop
         self.allow = []                  # "always" this session
         self.seen = (None, 0)            # The tool input last previewed
         self.clear()
@@ -328,15 +329,35 @@ class Session:
                 ui.out('    ' + ui.green(ln) + '\n')
             if len(lines) > 8:
                 ui.note('    ... %d more lines' % (len(lines) - 8))
+        elif name == 'shell':
+            c = a.get('command', '')
+            if len(c) > 70 or '\n' in c:
+                for ln in c.split('\n'):
+                    ui.out('    ' + ln + '\n')
         rule = self.tools.rule(name, a)
         what = {'shell': "'%s' commands" % rule[6:], 'web_fetch': rule[10:] or 'web_fetch'} \
             .get(name, NAMES.get(name, name).lower() + 's')
-        k = ui.ask_key('  ' + ui.bold('Allow?') + ' ' + ui.accent('[y]') + 'es  ' +
-                       ui.accent('[n]') + 'o  ' + ui.accent('[a]') + 'lways for ' + what + ' ',
-                       'yna')
+        if self.tools.can_always(name, a):
+            k = ui.ask_key('  ' + ui.bold('Allow?') + ' ' + ui.accent('[y]') + 'es  ' +
+                           ui.accent('[n]') + 'o  ' + ui.accent('[a]') + 'lways for ' + what +
+                           ' ', 'yna')
+        else:
+            k = ui.ask_key('  ' + ui.bold('Allow?') + ' ' + ui.accent('[y]') + 'es  ' +
+                           ui.accent('[n]') + 'o ', 'yn')
         if k == 'a':
             self.allow.append(rule)
         return k in 'ya'
+
+    def permit_hop(self, name, a):
+        # A web_fetch redirected to another host: that host's permission
+        self.spinner.stop()
+        ui.tool_line(NAMES.get(name, name), 'redirected to ' + a.get('url', ''))
+        try:
+            ok = self.permit(name, a)
+        except KeyboardInterrupt:
+            ok = False
+        self.spinner.start('Running')
+        return ok
 
     # --- compaction
 
