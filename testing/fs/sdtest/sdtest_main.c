@@ -36,6 +36,11 @@
  *       in random pieces from unaligned buffers, overwritten in places
  *       (garbage first, then the right data), read back in random pieces
  *       at random offsets and checked byte for byte; removed afterwards
+ *   sdtest fatfault                       (the simulator) the FAT and file
+ *       caches after a sector read that fails: a RAM disk of its own whose
+ *       chosen read scribbles over the buffer and returns -EIO, as a DMA
+ *       into the cache whose CRC fails afterwards does; what the caches
+ *       then hold must not be taken for the old sector (fs_fat32util.c)
  *
  * Every byte of a stress file is a function of the seed, the file and the
  * offset, so nothing has to be kept to check it.
@@ -59,6 +64,13 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+
+#if defined(CONFIG_ARCH_SIM) && defined(CONFIG_FSUTILS_MKFATFS)
+#  include <sys/mount.h>
+#  include <nuttx/fs/fs.h>
+#  include <nuttx/fs/ioctl.h>
+#  include "fsutils/mkfatfs.h"
+#endif
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -1070,6 +1082,332 @@ static int cmd_stress(int argc, char **argv)
 }
 
 /****************************************************************************
+ * The caches after a failed read (sdtest fatfault, the simulator)
+ ****************************************************************************/
+
+#if defined(CONFIG_ARCH_SIM) && defined(CONFIG_FSUTILS_MKFATFS)
+
+#define FF_SECTORS  8192                  /* 4 MB: FAT16, a sector a cluster */
+#define FF_DEV      "/dev/fatfault"
+#define FF_MNT      "/mnt/fatfault"
+
+static FAR uint8_t *g_ffdisk;
+static volatile int64_t g_fffault = -1;   /* The sector whose read fails */
+static volatile int g_ffhits;
+
+static int ff_open(FAR struct inode *inode)
+{
+  return OK;
+}
+
+static int ff_close(FAR struct inode *inode)
+{
+  return OK;
+}
+
+static ssize_t ff_read(FAR struct inode *inode, FAR unsigned char *buffer,
+                       blkcnt_t start, unsigned int n)
+{
+  if (start + n > FF_SECTORS)
+    {
+      return -EIO;
+    }
+
+  if (g_fffault >= start && g_fffault < start + (int64_t)n)
+    {
+      /* What a DMA straight into the buffer leaves before its CRC is
+       * found wrong: other bytes, and an error
+       */
+
+      memset(buffer, 0xa5, n * 512);
+      g_fffault = -1;
+      g_ffhits++;
+      return -EIO;
+    }
+
+  memcpy(buffer, g_ffdisk + start * 512, n * 512);
+  return n;
+}
+
+static ssize_t ff_write(FAR struct inode *inode,
+                        FAR const unsigned char *buffer, blkcnt_t start,
+                        unsigned int n)
+{
+  if (start + n > FF_SECTORS)
+    {
+      return -EIO;
+    }
+
+  memcpy(g_ffdisk + start * 512, buffer, n * 512);
+  return n;
+}
+
+static int ff_geometry(FAR struct inode *inode, FAR struct geometry *geo)
+{
+  memset(geo, 0, sizeof(*geo));
+  geo->geo_available    = true;
+  geo->geo_writeenabled = true;
+  geo->geo_nsectors     = FF_SECTORS;
+  geo->geo_sectorsize   = 512;
+  return OK;
+}
+
+static int ff_ioctl(FAR struct inode *inode, int cmd, unsigned long arg)
+{
+  return -ENOTTY;
+}
+
+static const struct block_operations g_ffops =
+{
+  ff_open, ff_close, ff_read, ff_write, ff_geometry, ff_ioctl
+#ifndef CONFIG_DISABLE_PSEUDOFS_OPERATIONS
+  , NULL
+#endif
+};
+
+static uint8_t ff_byte(int id, uint32_t off)
+{
+  return (uint8_t)(id * 131 + off * 7 + (off >> 9));
+}
+
+/* Write n bytes of file id's pattern, from offset off */
+
+static int ff_put(FAR const char *path, int flags, int id, uint32_t off,
+                  uint32_t n)
+{
+  uint8_t buf[512];
+  int fd = open(path, flags, 0666);
+  uint32_t i;
+
+  if (fd < 0)
+    {
+      return -1;
+    }
+
+  while (n > 0)
+    {
+      uint32_t k = n < sizeof(buf) ? n : sizeof(buf);
+
+      for (i = 0; i < k; i++)
+        {
+          buf[i] = ff_byte(id, off + i);
+        }
+
+      if (write(fd, buf, k) != (ssize_t)k)
+        {
+          close(fd);
+          return -1;
+        }
+
+      off += k;
+      n   -= k;
+    }
+
+  return close(fd);
+}
+
+/* Bytes of the file that are not file id's pattern (its first `head`
+ * bytes: file hid's); -1 if it cannot be read whole
+ */
+
+static long ff_check(FAR const char *path, int id, uint32_t size,
+                     int hid, uint32_t head)
+{
+  uint8_t buf[512];
+  uint32_t off = 0;
+  long bad = 0;
+  int fd = open(path, O_RDONLY);
+  ssize_t n;
+
+  if (fd < 0)
+    {
+      return -1;
+    }
+
+  while ((n = read(fd, buf, sizeof(buf))) > 0)
+    {
+      ssize_t i;
+
+      for (i = 0; i < n; i++, off++)
+        {
+          if (buf[i] != (off < head ? ff_byte(hid, off) : ff_byte(id, off)))
+            {
+              bad++;
+            }
+        }
+    }
+
+  close(fd);
+  return n < 0 || off != size ? -1 : bad;
+}
+
+static int ff_remount(void)
+{
+  umount(FF_MNT);
+  return mount(FF_DEV, FF_MNT, "vfat", 0, NULL);
+}
+
+static int ff_format(void)
+{
+  struct fat_format_s fmt = FAT_FORMAT_INITIALIZER;
+
+  memset(g_ffdisk, 0, FF_SECTORS * 512);
+  fmt.ff_fattype    = 16;
+  fmt.ff_clustshift = 0;
+  if (mkfatfs(FF_DEV, &fmt) < 0)
+    {
+      return -1;
+    }
+
+  return mount(FF_DEV, FF_MNT, "vfat", 0, NULL);
+}
+
+static int cmd_fatfault(int argc, FAR char **argv)
+{
+  uint32_t rsvd;
+  uint32_t nfats;
+  uint32_t rootsec;
+  uint32_t fatsz;
+  uint32_t data0;
+  uint8_t buf[100];
+  ssize_t got;
+  long bada;
+  long badb;
+  long badc;
+  bool fatok;
+  bool fileok;
+  int fd;
+
+  g_ffdisk = malloc(FF_SECTORS * 512);
+  if (g_ffdisk == NULL ||
+      register_blockdriver(FF_DEV, &g_ffops, 0666, NULL) < 0)
+    {
+      printf("fatfault: no RAM disk\n");
+      free(g_ffdisk);
+      return 1;
+    }
+
+  /* 1. The FAT's cache.  A (clusters 2-201), then B (202-401): B's chain
+   * goes on from the FAT's first sector into its second.  B read whole
+   * fails at the second, with the first in the cache before.  Then A,
+   * opened before (no lookup, which would read a directory sector into
+   * the cache first), is read whole: its chain, all in the FAT's first
+   * sector, comes from the cache, rightly only if the cache really holds
+   * that sector.  A must read back right, then and after a remount.
+   */
+
+  if (ff_format() < 0)
+    {
+      printf("fatfault: mkfatfs or mount failed\n");
+      goto errout;
+    }
+
+  rsvd    = g_ffdisk[14] | g_ffdisk[15] << 8;
+  nfats   = g_ffdisk[16];
+  rootsec = ((g_ffdisk[17] | g_ffdisk[18] << 8) * 32 + 511) / 512;
+  fatsz   = g_ffdisk[22] | g_ffdisk[23] << 8;
+  data0   = rsvd + nfats * fatsz + rootsec;
+
+  ff_put(FF_MNT "/a", O_WRONLY | O_CREAT | O_TRUNC, 1, 0, 200 * 512);
+  ff_put(FF_MNT "/b", O_WRONLY | O_CREAT | O_TRUNC, 2, 0, 200 * 512);
+  ff_remount();
+
+  g_ffhits = 0;
+  bada = -1;
+  fd = open(FF_MNT "/a", O_RDONLY);
+  if (fd >= 0)
+    {
+      uint8_t sec[512];
+      uint32_t off = 0;
+      ssize_t n;
+
+      g_fffault = rsvd + 1;               /* The FAT's second sector */
+      ff_check(FF_MNT "/b", 2, 200 * 512, 0, 0);
+      g_fffault = -1;
+      bada = 0;
+      while ((n = read(fd, sec, sizeof(sec))) > 0)
+        {
+          ssize_t i;
+
+          for (i = 0; i < n; i++, off++)
+            {
+              bada += sec[i] != ff_byte(1, off);
+            }
+        }
+
+      if (n < 0 || off != 200 * 512)
+        {
+          bada = -1;
+        }
+
+      close(fd);
+    }
+
+  ff_remount();
+  badb  = ff_check(FF_MNT "/a", 1, 200 * 512, 0, 0);
+  fatok = g_ffhits == 1 && bada == 0 && badb == 0;
+  printf("fatfault: FAT cache: %d read(s) failed; A read then: %ld, after a "
+         "remount: %ld wrong bytes (-1: unreadable): %s\n", g_ffhits, bada,
+         badb, fatok ? "PASS" : "FAIL");
+
+  /* 2. A file's cache.  C (8 sectors from cluster 2): 100 bytes read at 0
+   * leave its first sector in the cache; 100 at 600 fail on its second;
+   * then 10 bytes written at 0 must go into the real first sector.
+   */
+
+  umount(FF_MNT);
+  if (ff_format() < 0)
+    {
+      printf("fatfault: mkfatfs or mount failed\n");
+      goto errout;
+    }
+
+  ff_put(FF_MNT "/c", O_WRONLY | O_CREAT | O_TRUNC, 3, 0, 8 * 512);
+  ff_remount();
+  got = 0;
+  g_ffhits = 0;
+  fd = open(FF_MNT "/c", O_RDWR);
+  if (fd >= 0)
+    {
+      uint32_t i;
+
+      read(fd, buf, 100);
+      g_fffault = data0 + 1;              /* C's second sector */
+      lseek(fd, 600, SEEK_SET);
+      got = read(fd, buf, 100);
+      g_fffault = -1;
+      for (i = 0; i < 10; i++)
+        {
+          buf[i] = ff_byte(9, i);
+        }
+
+      lseek(fd, 0, SEEK_SET);
+      write(fd, buf, 10);
+      close(fd);
+    }
+
+  ff_remount();
+  badc   = ff_check(FF_MNT "/c", 3, 8 * 512, 9, 10);
+  fileok = g_ffhits == 1 && got < 0 && badc == 0;
+  printf("fatfault: file cache: %d read(s) failed; afterwards C: %ld wrong "
+         "bytes (-1: unreadable): %s\n", g_ffhits, badc,
+         fileok ? "PASS" : "FAIL");
+
+  umount(FF_MNT);
+  unregister_blockdriver(FF_DEV);
+  free(g_ffdisk);
+  printf("fatfault: %s\n", fatok && fileok ? "PASS" : "FAIL");
+  return fatok && fileok ? 0 : 1;
+
+errout:
+  umount(FF_MNT);
+  unregister_blockdriver(FF_DEV);
+  free(g_ffdisk);
+  return 1;
+}
+#endif
+
+/****************************************************************************
  * Public Functions
  ****************************************************************************/
 
@@ -1101,12 +1439,19 @@ int main(int argc, FAR char *argv[])
     {
       return cmd_stress(argc, argv);
     }
+#if defined(CONFIG_ARCH_SIM) && defined(CONFIG_FSUTILS_MKFATFS)
+  else if (argc >= 2 && strcmp(argv[1], "fatfault") == 0)
+    {
+      return cmd_fatfault(argc, argv);
+    }
+#endif
 
   printf("sdtest crc FILE...\n"
          "sdtest read FILE [KB [sram|psram [MB]]]\n"
          "sdtest write FILE MB [KB [sram|psram]]\n"
          "sdtest seek FILE [BYTES [N [sram|psram [SEED]]]]\n"
          "sdtest fat DIR [OPS [SEED]]\n"
-         "sdtest stress DIR MB [SEED [keep|v|keepv]]\n");
+         "sdtest stress DIR MB [SEED [keep|v|keepv]]\n"
+         "sdtest fatfault\n");
   return 2;
 }
