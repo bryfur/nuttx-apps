@@ -1481,8 +1481,13 @@ static struct desk_win_s *music_open(void)
   music_dir(m);
   music_scan(m);
 
+  /* libmad's layer III decoder keeps 7 KB of arrays on the stack
+   * (III_decode), 8.5 KB in all with the thread below it: 4 KB overflowed
+   * into the stack limit at the first MP3 frame (2026-10-16)
+   */
+
   pthread_attr_init(&attr);
-  pthread_attr_setstacksize(&attr, 4096);
+  pthread_attr_setstacksize(&attr, 12288);
   m->running = pthread_create(&m->thread, &attr, player_thread, m) == 0;
   if (m->running)
     {
