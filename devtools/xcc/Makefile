@@ -7,8 +7,9 @@
 
 include $(APPDIR)/Make.defs
 
-# xcc (xcc/: tyfkda's compiler, upstream 9eea241c, its changes marked FPC)
-# as NuttX programs:
+# xcc (tyfkda's compiler: the FPC's fork, the superproject's submodule
+# third_party/xcc, reached through the link xcc/ (FPC_LINK, apps/Make.defs);
+# its changes are marked FPC) as NuttX programs:
 #
 #   wcc    C to WebAssembly (WASI): preprocessor, compiler and linker in one
 #   xcc    C to native NuttX modules (Thumb-2, the ARM32 backend): its
@@ -32,6 +33,15 @@ include $(APPDIR)/Make.defs
 
 X = xcc/src
 L = xcc/libsrc
+
+# The source: the link to the submodule (made again if it is not one)
+
+.PHONY: xcc_link
+
+xcc_link:
+	$(call FPC_LINK,xcc,xcc)
+
+context:: xcc_link
 
 PROGNAME  = wcc
 PRIORITY  = $(CONFIG_DEVTOOLS_XCC_PRIORITY)
@@ -203,7 +213,7 @@ $(SYSROOT)/lib/wcrt0.a: $(WCRT0_OBJS)
 
 FPC_WASM_H = $(wildcard $(APPDIR)/graphics/fpcwasm/sdk/fpc_wasm.h)
 
-$(SYSROOT)/.include: $(shell find xcc/include -type f) $(FPC_WASM_H) Makefile
+$(SYSROOT)/.include: $(shell find xcc/include/ -type f 2>/dev/null) $(FPC_WASM_H) Makefile
 	$(Q) rm -rf $(SYSROOT)/include
 	$(Q) mkdir -p $(SYSROOT)
 	$(Q) cp -r xcc/include $(SYSROOT)/include
@@ -264,6 +274,9 @@ all:: sysroot
 
 clean::
 	$(Q) rm -f *.blob$(OBJEXT) xcc_marks.c.*$(OBJEXT) xcc_nuttx.m$(OBJEXT)
-	$(Q) find xcc -name '*$(OBJEXT)' -delete
+	$(Q) if [ -d xcc/ ]; then find xcc/ -name '*$(OBJEXT)' -delete; fi
 	$(call DELDIR, $(HOSTDIR))
 	$(call DELDIR, $(SYSROOT))
+
+distclean:: clean
+	$(call DELDIR, xcc)

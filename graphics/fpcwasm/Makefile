@@ -42,12 +42,12 @@ endif
 
 include $(APPDIR)/Application.mk
 
-# The module links the runtime from libapps: built there, the JIT and
-# WAMR's patches change it without a source of its own changing
+# The module links the runtime from libapps: built there, the JIT changes
+# it without a source of its own changing (a change of WAMR's source, the
+# submodule, changes libapps: below)
 #
 ifeq ($(CONFIG_GRAPHICS_FPCWASM),m)
-$(PROGLIST): $(wildcard jit/*.c jit/*.h) \
-             $(wildcard $(APPDIR)/interpreters/wamr/*.patch)
+$(PROGLIST): $(wildcard jit/*.c jit/*.h)
 
 # ... from libapps less the desktop's objects (fpcdesk): the windows'
 # deskwin client (desk_client.c) must be the firmware's, the desktop's own

@@ -11,10 +11,10 @@ menuconfig INTERPRETERS_MICROPYTHON
 		microcontrollers, as a NuttX program: a REPL with line editing
 		and history on the terminal it is started from (the serial
 		console, a pseudo-terminal: the desktop's Terminal), scripts
-		(python FILE.py) and -c.  The version the Makefile pins is
-		downloaded, patched (patches/) and built at build time.  The
-		files are those of NuttX (open(), os), and with the FPC desktop
-		the fpc module opens windows on it.
+		(python FILE.py) and -c.  Its source is the FPC's fork of
+		MicroPython 1.29.0, the superproject's submodule
+		third_party/micropython.  The files are those of NuttX (open(),
+		os), and with the FPC desktop the fpc module opens windows on it.
 
 if INTERPRETERS_MICROPYTHON
 

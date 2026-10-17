@@ -5,9 +5,9 @@
 #
 # The JIT's test harness: WAMR (the board's configuration: fast
 # interpreter, AOT, WASI, the thread manager, bulk memory, reference
-# types; the same patches) and the JIT built as a Linux ARM program, run
-# under qemu-arm (-cpu max: the Cortex-M33's Thumb-2 and FPv5 are a subset
-# of it).  The simulator is x86-64: the JIT cannot run there.
+# types; the same source, the FPC's fork) and the JIT built as a Linux ARM
+# program, run under qemu-arm (-cpu max: the Cortex-M33's Thumb-2 and FPv5
+# are a subset of it).  The simulator is x86-64: the JIT cannot run there.
 #
 #   make                       build $(OUT)/jitrun
 #   make spec                  the WebAssembly spec tests, JIT against the
@@ -24,20 +24,22 @@
 #
 # Tools (on the build host): an arm-none-linux-gnueabihf GCC (ARM's
 # toolchain), qemu-arm, wabt's wast2json, wasm-tools, WebAssembly's spec
-# tests.  WAMR: its zip, unpacked and patched like the board's.
+# tests.  WAMR: the superproject's submodule third_party/wasm-micro-runtime
+# (objects in $(OUT); the submodule stays clean).
 ############################################################################
 
 TOOLS   ?= $(HOME)/fpcwork/jit/tools
 OUT     ?= $(HOME)/fpcwork/jit/hbuild
 CROSS   ?= $(TOOLS)/arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-linux-gnueabihf/bin/arm-none-linux-gnueabihf-
 QEMU    ?= $(HOME)/tools/qemu/usr/bin/qemu-arm -cpu max
-WAMRZIP ?= $(HOME)/tools/wasm/wamr-2.4.5.zip
-PATCHES  = $(sort $(wildcard $(CURDIR)/../../../../interpreters/wamr/*.patch))
+# WAMR: the FPC's fork, the superproject's submodule (2.4.5 and the FPC's
+# changes as commits)
+WAMR    ?= $(abspath $(CURDIR)/../../../../../third_party/wasm-micro-runtime)
 WAST2JSON ?= $(TOOLS)/wabt-1.0.42/bin/wast2json
 WASMTOOLS ?= $(TOOLS)/wasm-tools-1.261.0-x86_64-linux/wasm-tools
 TESTSUITE ?= $(TOOLS)/spec/test/core
 
-W  = $(OUT)/wamr
+W  = $(WAMR)
 C  = $(W)/core
 I  = $(C)/iwasm
 S  = $(C)/shared
@@ -113,25 +115,20 @@ JOBJS = $(patsubst $(CURDIR)/../%.c,$(OUT)/jobj/%.o,$(JSRCS))
 
 all: $(OUT)/jitrun
 
-$(W)/.patched: $(WAMRZIP) $(PATCHES)
-	rm -rf $(W) $(OUT)/wasm-micro-runtime-WAMR-2.4.5
-	mkdir -p $(OUT)
-	cd $(OUT) && unzip -q $(WAMRZIP)
-	for p in $(PATCHES); do patch -s -d $(OUT)/wasm-micro-runtime-WAMR-2.4.5 -p1 < $$p || exit 1; done
-	mv $(OUT)/wasm-micro-runtime-WAMR-2.4.5 $(W)
-	touch $@
+$(W)/core:
+	@echo "$(W) is missing: git submodule update --init third_party/wasm-micro-runtime"; exit 1
 
-$(WSRCS) $(WASRCS): $(W)/.patched
+$(WSRCS) $(WASRCS): | $(W)/core
 
-$(OUT)/obj/%.o: $(W)/%.c $(W)/.patched
+$(OUT)/obj/%.o: $(W)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(OUT)/obj/%.o: $(W)/%.s $(W)/.patched
+$(OUT)/obj/%.o: $(W)/%.s
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(OUT)/jobj/%.o: $(CURDIR)/../%.c $(JIT)/*.h $(W)/.patched
+$(OUT)/jobj/%.o: $(CURDIR)/../%.c $(JIT)/*.h | $(W)/core
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -Wall -Wno-unused-function -DWASM_JIT_FORCE -c -o $@ $<
 

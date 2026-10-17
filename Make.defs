@@ -23,6 +23,25 @@
 TOPDIR ?= $(APPDIR)/import
 -include $(TOPDIR)/Make.defs
 
+# The FPC (https://github.com/bryfur/fpc): the third-party projects some of
+# its applications build from (WAMR, MicroPython, xcc, quakegeneric) are
+# submodules of the superproject, in third_party/ beside this tree, each a
+# fork with the FPC's changes as commits.  FPC_LINK (in a recipe) makes
+# $(1) a link to third_party/$(2), or stops with how to fetch it; the
+# application's sources are then reached through the link, so its build
+# files keep their paths.
+
+FPC_THIRD_PARTY ?= $(abspath $(APPDIR)/../third_party)
+
+define FPC_LINK
+	$(Q) t=$(FPC_THIRD_PARTY)/$(2); \
+	if [ -z "$$(ls -A $$t 2>/dev/null)" ]; then \
+	  echo "$$t is missing: git submodule update --init third_party/$(firstword $(subst /, ,$(2)))"; \
+	  exit 1; \
+	fi; \
+	if [ "$$(readlink $(1))" != "$$t" ]; then rm -rf $(1); ln -s $$t $(1); fi
+endef
+
 # Application Directories
 
 # BUILDIRS is the list of top-level directories containing Make.defs files

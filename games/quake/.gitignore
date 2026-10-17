@@ -1,2 +1,4 @@
 *.o
 *.o.d
+# the link to the submodule third_party/quakegeneric (FPC_LINK)
+/quakegeneric

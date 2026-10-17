@@ -16,8 +16,8 @@
  * Standard input that is not a terminal is run as a script.
  *
  * Each python task is an interpreter of its own, with its own state and
- * heap (patches/0002, mphalport.c): several run at once (up to four), a
- * REPL in a terminal and programs with windows, say.  A builtin's data are
+ * heap (the fork's "several interpreters", mphalport.c): several run at
+ * once (up to four), a REPL in a terminal and programs with windows, say.  A builtin's data are
  * shared by its runs, so nothing is kept in static variables.
  *
  * Its heap (Kconfig, -X heapsize) comes from the C heap: the PSRAM on the

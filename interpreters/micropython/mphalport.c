@@ -14,9 +14,9 @@
  * sys.stdin), in order.  The terminal is raw all along (main.c) so that
  * bytes come as they are typed.
  *
- * Each python task is an interpreter of its own (patches/0002): its state
- * (MicroPython's and this port's) is found by the stack it runs on, else
- * by its pid.
+ * Each python task is an interpreter of its own (the fork's "several
+ * interpreters"): its state (MicroPython's and this port's) is found by
+ * the stack it runs on, else by its pid.
  ****************************************************************************/
 
 #include <nuttx/config.h>

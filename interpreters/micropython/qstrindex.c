@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * The firmware's qstrs found by their hash (patches/0005): MicroPython
+ * The firmware's qstrs found by their hash (fork: qstr find): MicroPython
  * looks for a qstr whenever it makes a str (to share the qstr's text) and
  * whenever it interns a name.  Its own search of the firmware's pools, a
  * binary search on the strings and a linear one on the static pool, reads
@@ -129,7 +129,7 @@ static qstr search(const qstr_pool_t *pool, const char *str, size_t len,
  ****************************************************************************/
 
 /* The qstr with this text in the firmware's pools (top and those before
- * it), or MP_QSTRnull (MICROPY_PORT_QSTR_FIND_CONST, patches/0005)
+ * it), or MP_QSTRnull (MICROPY_PORT_QSTR_FIND_CONST, fork: qstr find)
  */
 
 qstr mp_nuttx_qstr_find_const(const qstr_pool_t *top, const char *str,

@@ -16,7 +16,23 @@ PROGNAME  = quake
 
 QG = quakegeneric
 
+# quakegeneric (id Software's WinQuake, GPL-2.0): the FPC's fork, the
+# superproject's submodule third_party/quakegeneric, its source/ reached
+# through the link quakegeneric/ (FPC_LINK, apps/Make.defs)
+
+.PHONY: qg_link
+
+qg_link:
+	$(call FPC_LINK,$(QG),quakegeneric/source)
+
+context:: qg_link
+
+distclean::
+	$(call DELDIR, $(QG))
+
 CFLAGS += ${INCDIR_PREFIX}$(QG)
+# (the port's directory: fpc_sio.h, which the fork's sources include)
+CFLAGS += ${INCDIR_PREFIX}$(CURDIR)
 CFLAGS += ${INCDIR_PREFIX}$(TOPDIR)/../drivers/gpu
 
 # The game (quakegeneric: WinQuake with a small platform layer), its null

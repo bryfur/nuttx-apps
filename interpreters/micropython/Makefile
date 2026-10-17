@@ -3,9 +3,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# MicroPython for NuttX.  The release pinned here is downloaded (its
-# checksum checked), the needed parts unpacked into micropython/ and
-# patched (patches/*.patch, in order).  MicroPython's generated headers
+# MicroPython for NuttX.  The source is the FPC's fork (1.29.0 and the
+# FPC's changes as commits), the superproject's submodule
+# third_party/micropython, reached through the link micropython/
+# (FPC_LINK, apps/Make.defs).  MicroPython's generated headers
 # (the qstrs, the module and root pointer tables, the version) are made
 # by its own rules (mpy.mk) with this build's compiler and flags, then
 # its sources are compiled as this program's.
@@ -19,18 +20,11 @@ PRIORITY  = $(CONFIG_INTERPRETERS_MICROPYTHON_PRIORITY)
 STACKSIZE = $(CONFIG_INTERPRETERS_MICROPYTHON_STACKSIZE)
 MODULE    = $(CONFIG_INTERPRETERS_MICROPYTHON)
 
-# The release
+# The release the fork is based on (the version MicroPython reports)
 
 MPY_VERSION = 1.29.0
-MPY_SHA256  = 8072f6ad42c0e3bbfca88ed09bf8f1106ce207a39129af920f70081b8f2fe286
-MPY_TARBALL = micropython-$(MPY_VERSION).tar.gz
-MPY_URL     = https://github.com/micropython/micropython/archive/refs/tags/v$(MPY_VERSION).tar.gz
 MPY         = micropython
-MPY_PARTS   = py extmod shared lib/re1.5 lib/oofatfs tests/basics LICENSE
-MPY_PARTS  += mpy-cross tools/makemanifest.py tools/manifestfile.py
-MPY_PARTS  += tools/mpy-tool.py
 MPY_BUILD   = build
-MPY_PATCHED = $(MPY)/.patched
 MPY_GENHDR  = $(MPY_BUILD)/genhdr/qstrdefs.generated.h
 
 # The sources: the core, the modules of extmod this port has, the shared
@@ -103,25 +97,12 @@ CFLAGS     += -Wno-unused-but-set-variable -Wno-missing-field-initializers
 CFLAGS     += -Wno-sign-compare -Wno-implicit-fallthrough
 CFLAGS     += -Wno-strict-prototypes -Wno-array-bounds -Wno-format
 
-# Download, check, unpack, patch
+# The source: the link to the submodule (made again if it is not one)
 
-$(MPY_TARBALL):
-	$(Q) echo "Downloading MicroPython $(MPY_VERSION)"
-	$(Q) curl -f -s -S -L -o $@.part $(MPY_URL)
-	$(Q) echo "$(MPY_SHA256)  $@.part" | sha256sum -c --quiet
-	$(Q) mv $@.part $@
+.PHONY: mpy_link
 
-$(MPY_PATCHED): $(MPY_TARBALL) $(sort $(wildcard patches/*.patch)) Makefile
-	$(Q) echo "Unpacking MicroPython $(MPY_VERSION) to $(MPY)"
-	$(Q) rm -rf $(MPY) $(MPY_BUILD)
-	$(Q) mkdir -p $(MPY)
-	$(Q) tar -xzf $(MPY_TARBALL) -C $(MPY) --strip-components=1 \
-		$(addprefix micropython-$(MPY_VERSION)/,$(MPY_PARTS))
-	$(Q) for p in $(sort $(wildcard patches/*.patch)); do \
-		echo "Patching: $$p"; \
-		patch -s -d $(MPY) -p1 < $$p || exit 1; \
-	done
-	$(Q) touch $@
+mpy_link:
+	$(call FPC_LINK,$(MPY),micropython)
 
 # The generated headers, by MicroPython's rules (mpy.mk), with this build's
 # preprocessor and flags.  Run at every build: it only does what the
@@ -129,7 +110,7 @@ $(MPY_PATCHED): $(MPY_TARBALL) $(sort $(wildcard patches/*.patch)) Makefile
 
 .PHONY: mpy_genhdr
 
-mpy_genhdr: $(MPY_PATCHED)
+mpy_genhdr: mpy_link
 	$(shell mkdir -p $(MPY_BUILD))$(file >$(MPY_BUILD)/cflags.new,$(CFLAGS))
 	$(Q) cmp -s $(MPY_BUILD)/cflags.new $(MPY_BUILD)/cflags || \
 		mv $(MPY_BUILD)/cflags.new $(MPY_BUILD)/cflags
@@ -149,8 +130,6 @@ distclean::
 	$(call DELFILE, frozen_agent.c)
 	$(call DELDIR, $(MPY))
 	$(call DELDIR, $(MPY_BUILD))
-	$(call DELFILE, $(MPY_TARBALL))
-	$(call DELFILE, $(MPY_TARBALL).part)
 
 include $(APPDIR)/Application.mk
 

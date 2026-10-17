@@ -109,7 +109,7 @@
 #define MICROPY_VFS                   (1)
 #define MICROPY_VFS_POSIX             (1)
 #define MICROPY_VFS_POSIX_STDIO       (0)     /* sys.std*: sys_stdio_mphal.c
-                                               * (patches/0001) */
+                                               * (fork: std streams) */
 #define MICROPY_READER_VFS            (1)
 #define MICROPY_READER_POSIX          (1)
 #define MICROPY_HELPER_LEXER_UNIX     (1)
@@ -214,9 +214,9 @@ extern const struct _mp_print_t mp_stderr_print;
 #define MICROPY_DEBUG_PRINTER         (&mp_stderr_print)
 #define MICROPY_ERROR_PRINTER         (&mp_stderr_print)
 
-/* Several interpreters at once (patches/0002): each python task has its
- * own state, found by the stack it runs on, else by its pid (mphalport.c:
- * mp_nuttx_port()).  First what
+/* Several interpreters at once (the fork's "several interpreters"): each
+ * python task has its own state, found by the stack it runs on, else by
+ * its pid (mphalport.c: mp_nuttx_port()).  First what
  * the port keeps for each (and MicroPython's few static variables), then
  * MicroPython's state.  mp_nuttx_port() is const: a function calls it once
  * however many times it uses the state.
@@ -227,7 +227,9 @@ extern const struct _mp_print_t mp_stderr_print;
 
 struct mp_nuttx_port_s
 {
-  /* MicroPython's static variables, one set each (patches/0002) */
+  /* MicroPython's static variables, one set each (the fork's "several
+   * interpreters")
+   */
 
   uint32_t readline[16];               /* shared/readline's readline_t */
   int      pyexec_mode;                /* pyexec_mode_kind */
@@ -292,7 +294,7 @@ void mp_nuttx_heap_free(void *ptr);
 #endif
 
 /* The firmware's qstrs found by an index of their hashes (qstrindex.c,
- * patches/0005) rather than searched for in the flash
+ * fork: qstr find) rather than searched for in the flash
  */
 
 struct _qstr_pool_t;

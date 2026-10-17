@@ -12,6 +12,7 @@ out=$1; shift
 jitrun="$*"
 here=$(cd "$(dirname "$0")" && pwd)
 apps=$(cd "$here/../../../.." && pwd)
+xcc=$apps/../third_party/xcc      # the submodule (apps/devtools/xcc/xcc links to it)
 mkdir -p "$out"
 bad=0
 n=0
@@ -59,13 +60,13 @@ else
 fi
 
 if [ -n "$WCC" ] && [ -x "$WCC" ]; then
-  t=$apps/devtools/xcc/xcc/tests
+  t=$xcc/tests
   $WCC -o "$out/valtest.wasm" "$t/valtest.c" && run wcc-valtest "$out/valtest.wasm"
   $WCC -o "$out/fvaltest.wasm" "$t/fvaltest.c" && run wcc-fvaltest "$out/fvaltest.wasm"
   $WCC -o "$out/xbench.wasm" "$apps/devtools/xcc/bench/bench.c" && \
     run wcc-bench "$out/xbench.wasm"
   for e in fib mandelbrot hello; do
-    $WCC -o "$out/x$e.wasm" "$apps/devtools/xcc/xcc/examples/$e.c" && \
+    $WCC -o "$out/x$e.wasm" "$xcc/examples/$e.c" && \
       run wcc-$e "$out/x$e.wasm"
   done
   $WCC -o "$out/wkernels.wasm" "$here/progs/kernels.c" && \

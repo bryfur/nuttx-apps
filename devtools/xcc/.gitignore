@@ -1,5 +1,4 @@
 /host
 /sysroot
-# What xcc s tests leave
-/xcc/tests/tmp_*
-/xcc/tests/*.ppm
+# the link to the submodule third_party/xcc (FPC_LINK)
+/xcc
