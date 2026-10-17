@@ -42,6 +42,17 @@ define FPC_LINK
 	if [ "$$(readlink $(1))" != "$$t" ]; then rm -rf $(1); ln -s $$t $(1); fi
 endef
 
+# The FPC's own applications are in the superproject's apps-fpc/, which
+# the build reaches as apps/external (NuttX's name for out-of-tree
+# applications, in .gitignore): the link is made here, before the
+# directories are listed, wherever this tree sits beside an apps-fpc/.
+
+ifneq ($(wildcard $(APPDIR)/../apps-fpc/Make.defs),)
+  ifeq ($(wildcard $(APPDIR)/external),)
+    $(shell ln -s ../apps-fpc $(APPDIR)/external 2>/dev/null)
+  endif
+endif
+
 # Application Directories
 
 # BUILDIRS is the list of top-level directories containing Make.defs files

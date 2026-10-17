@@ -60,14 +60,15 @@ ifeq ($(CONFIG_RP23XX_PSRAM),y)
 CFLAGS += -DBH_ATOMIC_RMW_CSECTION -DWASM_UINT16_IS_ATOMIC=0
 endif
 
-# The WebAssembly JIT (apps/graphics/fpcwasm/jit): part of the runtime,
-# built with its configuration (it uses the runtime's structures); a stub
-# where it has no code generator (CONFIG_FPCWASM_JIT off, the simulator)
+# The WebAssembly JIT (the FPC's apps-fpc/graphics/fpcwasm/jit, reached as
+# apps/external): part of the runtime, built with its configuration (it
+# uses the runtime's structures); a stub where it has no code generator
+# (CONFIG_FPCWASM_JIT off, the simulator)
 
 ifneq ($(CONFIG_GRAPHICS_FPCWASM),)
 CSRCS += wasm_jit.c wasm_jit_rt.c
-VPATH += $(APPDIR)/graphics/fpcwasm/jit
-DEPPATH += --dep-path $(APPDIR)/graphics/fpcwasm/jit
+VPATH += $(FPC_APPS)/graphics/fpcwasm/jit
+DEPPATH += --dep-path $(FPC_APPS)/graphics/fpcwasm/jit
 endif
 
 # What WAMR's POSIX layer needs that this NuttX may leave out

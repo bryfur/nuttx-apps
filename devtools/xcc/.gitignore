@@ -1,4 +1,0 @@
-/host
-/sysroot
-# the link to the submodule third_party/xcc (FPC_LINK)
-/xcc
