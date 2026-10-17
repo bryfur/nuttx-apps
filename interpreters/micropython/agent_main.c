@@ -5,8 +5,11 @@
  *
  * agent: the AI agent (docs/agent.md) as a command.  MicroPython runs the
  * agent package (agent/, frozen into the firmware as bytecode:
- * manifest.py) with a heap of CONFIG_INTERPRETERS_MICROPYTHON_AGENT_HEAPSIZE
- * KB (AGENT_HEAP=N in the environment: N KB).  AGENT_PATH=DIR in the
+ * manifest.py) with a heap that starts at
+ * CONFIG_INTERPRETERS_MICROPYTHON_AGENT_HEAPSIZE KB (AGENT_HEAP=N in the
+ * environment: N KB) and grows as python's does, up to
+ * CONFIG_INTERPRETERS_MICROPYTHON_HEAP_MAX (AGENT_HEAP_MAX=N: N KB; by
+ * default half of the memory free when it starts).  AGENT_PATH=DIR in the
  * environment puts DIR first in sys.path, so a copy of the package there
  * (on the microSD, say) is run instead of the frozen one: the Python half
  * can be changed without a new firmware.
@@ -49,9 +52,11 @@ static const char g_boot[] =
 
 int main(int argc, FAR char *argv[])
 {
-  char *args[MAXARGS + 6];
+  char *args[MAXARGS + 8];
   char heap[32];
+  char heapmax[32];
   const char *env = getenv("AGENT_HEAP");
+  const char *envmax = getenv("AGENT_HEAP_MAX");
   long kb = env != NULL ? strtol(env, NULL, 0) :
             CONFIG_INTERPRETERS_MICROPYTHON_AGENT_HEAPSIZE;
   int n = 0;
@@ -66,6 +71,13 @@ int main(int argc, FAR char *argv[])
   args[n++] = "agent";
   args[n++] = "-X";
   args[n++] = heap;
+  if (envmax != NULL && strtol(envmax, NULL, 0) > 0)
+    {
+      snprintf(heapmax, sizeof(heapmax), "heapmax=%ldK",
+               strtol(envmax, NULL, 0) < kb ? kb : strtol(envmax, NULL, 0));
+      args[n++] = "-X";
+      args[n++] = heapmax;
+    }
   args[n++] = "-c";
   args[n++] = (char *)g_boot;
   for (i = 1; i < argc && i <= MAXARGS; i++)

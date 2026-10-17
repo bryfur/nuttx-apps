@@ -285,7 +285,7 @@ def guarded(f, *args):
     except MemoryError:
         import gc
         gc.collect()
-        ui.error('out of memory (/compact or /clear, or a bigger AGENT_HEAP)')
+        ui.error('out of memory (/compact or /clear, or a bigger AGENT_HEAP_MAX)')
     except Exception as e:
         ui.error('internal error: %s: %s' % (type(e).__name__, e))
         sys.print_exception(e)

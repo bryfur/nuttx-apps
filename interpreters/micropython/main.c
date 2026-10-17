@@ -10,7 +10,8 @@
  *   python FILE [ARGS...]      run a script
  *   python -c CODE [ARGS...]   run a string
  *   python -m MODULE [ARGS...] run a module
- *   options: -i (the REPL after), -X heapsize=N[K|M], -v, -h, --version
+ *   options: -i (the REPL after), -X heapsize=N[K|M] (the heap at the
+ *   start), -X heapmax=N[K|M] (the most it grows to), -v, -h, --version
  *
  * Standard input that is not a terminal is run as a script.
  *
@@ -20,14 +21,18 @@
  * shared by its runs, so nothing is kept in static variables.
  *
  * Its heap (Kconfig, -X heapsize) comes from the C heap: the PSRAM on the
- * FPC board.  Its stack is the task's (in the SRAM there), or with
- * CONFIG_INTERPRETERS_MICROPYTHON_PSRAM_STACK a thread's with a stack from
- * the heap.
+ * FPC board.  It grows by more areas from there when a collection leaves
+ * too little (MICROPY_GC_SPLIT_HEAP_AUTO, mphalport.c), up to -X heapmax
+ * (Kconfig: by default half of the C heap free when it starts), and they
+ * go back when emptied.  Its stack is the task's (in the SRAM there), or
+ * with CONFIG_INTERPRETERS_MICROPYTHON_PSRAM_STACK a thread's with a stack
+ * from the heap.
  ****************************************************************************/
 
 #include <nuttx/config.h>
 
 #include <errno.h>
+#include <malloc.h>
 #include <pthread.h>
 #include <sched.h>
 #include <signal.h>
@@ -81,6 +86,7 @@ struct run_s
   int argc;
   char **argv;
   size_t heapsize;
+  size_t heapmax;
   int ret;
 };
 
@@ -313,18 +319,41 @@ static void set_argv(char **argv, int argc, int start)
 static int usage(const char *prog, int ret)
 {
   fprintf(ret ? stderr : stdout,
-          "usage: %s [-i] [-v] [-X heapsize=N[K|M]] "
+          "usage: %s [-i] [-v] [-X heapsize=N[K|M]] [-X heapmax=N[K|M]] "
           "[-c CODE | -m MODULE | FILE] [ARGS...]\n", prog);
   return ret;
 }
 
+/* N, NK or NM: bytes (0 if that is not what it is) */
+
+static size_t parse_size(const char *s)
+{
+  char *end;
+  long n = strtol(s, &end, 0);
+
+  if ((*end | 0x20) == 'k')
+    {
+      n *= 1024;
+      end++;
+    }
+  else if ((*end | 0x20) == 'm')
+    {
+      n *= 1024 * 1024;
+      end++;
+    }
+
+  return *end == '\0' && n > 0 ? (size_t)n : 0;
+}
+
 /* The options that come before the interpreter starts */
 
-static int preoptions(int argc, char **argv, size_t *heapsize)
+static int preoptions(int argc, char **argv, size_t *heapsize,
+                      size_t *heapmax)
 {
   int a;
 
   *heapsize = (size_t)CONFIG_INTERPRETERS_MICROPYTHON_HEAPSIZE * 1024;
+  *heapmax  = (size_t)CONFIG_INTERPRETERS_MICROPYTHON_HEAP_MAX * 1024;
   for (a = 1; a < argc && argv[a][0] == '-'; a++)
     {
       if (strcmp(argv[a], "-c") == 0 || strcmp(argv[a], "-m") == 0)
@@ -346,28 +375,18 @@ static int preoptions(int argc, char **argv, size_t *heapsize)
         {
           const char *o = argv[++a];
 
-          if (strncmp(o, "heapsize=", 9) == 0)
+          if (strncmp(o, "heapsize=", 9) == 0 ||
+              strncmp(o, "heapmax=", 8) == 0)
             {
-              char *end;
-              long n = strtol(o + 9, &end, 0);
+              bool max = o[4] == 'm';
+              size_t n = parse_size(o + (max ? 8 : 9));
 
-              if ((*end | 0x20) == 'k')
-                {
-                  n *= 1024;
-                  end++;
-                }
-              else if ((*end | 0x20) == 'm')
-                {
-                  n *= 1024 * 1024;
-                  end++;
-                }
-
-              if (*end != '\0' || n < 16 * 1024)
+              if (n < 16 * 1024)
                 {
                   return usage(argv[0], 2);
                 }
 
-              *heapsize = n;
+              *(max ? heapmax : heapsize) = n;
             }
           else
             {
@@ -385,13 +404,22 @@ static int preoptions(int argc, char **argv, size_t *heapsize)
 
 /* The interpreter, from start to end, on whichever stack it has */
 
-static int interpreter(int argc, char **argv, size_t heapsize)
+static int interpreter(int argc, char **argv, size_t heapsize,
+                       size_t heapmax)
 {
+  struct mp_nuttx_port_s *p = mp_nuttx_port();
   bool inspect = false;
   bool ran = false;
   char *heap;
   int ret = 0;
   int a;
+
+  /* The most the heap grows to: by default half of what is free now */
+
+  if (heapmax == 0)
+    {
+      heapmax = mallinfo().fordblks / 2;
+    }
 
   heap = malloc(heapsize);
   if (heap == NULL)
@@ -401,6 +429,8 @@ static int interpreter(int argc, char **argv, size_t heapsize)
       return 1;
     }
 
+  p->heap_total = heapsize;
+  p->heap_max   = heapmax > heapsize ? heapmax : heapsize;
   gc_init(heap, heap + heapsize);
   mp_init();
 
@@ -537,7 +567,20 @@ static int interpreter(int argc, char **argv, size_t heapsize)
     }
 #endif
 
+  /* The objects' finalisers run, the areas added since go back (the
+   * sweep frees those it empties, which by now is all of them), then the
+   * first
+   */
+
   gc_sweep_all();
+  while (MP_STATE_MEM(area).next != NULL)
+    {
+      mp_state_mem_area_t *area = MP_STATE_MEM(area).next;
+
+      MP_STATE_MEM(area).next = area->next;
+      mp_nuttx_heap_free(area);
+    }
+
   mp_deinit();
   free(heap);
   return ret;
@@ -548,7 +591,8 @@ static int interpreter(int argc, char **argv, size_t heapsize)
  */
 
 static MP_NOINLINE int interpreter_here(int argc, char **argv,
-                                        size_t heapsize, size_t stack_size)
+                                        size_t heapsize, size_t heapmax,
+                                        size_t stack_size)
 {
   volatile char here;
   struct stackinfo_s si;
@@ -576,7 +620,7 @@ static MP_NOINLINE int interpreter_here(int argc, char **argv,
 
   avail = avail > STACK_SPARE + 4096 ? avail - STACK_SPARE : 4096;
   mp_cstack_init_with_sp_here(avail);
-  ret = interpreter(argc, argv, heapsize);
+  ret = interpreter(argc, argv, heapsize, heapmax);
   mp_nuttx_stack(NULL, 0);
   return ret;
 }
@@ -586,7 +630,7 @@ static void *interpreter_thread(void *arg)
 {
   struct run_s *r = arg;
 
-  r->ret = interpreter_here(r->argc, r->argv, r->heapsize,
+  r->ret = interpreter_here(r->argc, r->argv, r->heapsize, r->heapmax,
                             CONFIG_INTERPRETERS_MICROPYTHON_PSRAM_STACK);
   return NULL;
 }
@@ -620,7 +664,7 @@ int main(int argc, FAR char *argv[])
   r.argc = argc;
   r.argv = argv;
   r.ret  = 1;
-  ret = preoptions(argc, argv, &r.heapsize);
+  ret = preoptions(argc, argv, &r.heapsize, &r.heapmax);
   if (ret != 0)
     {
       return ret < 0 ? 0 : ret;
@@ -662,7 +706,7 @@ int main(int argc, FAR char *argv[])
     free(stack);
   }
 #else
-  r.ret = interpreter_here(argc, argv, r.heapsize,
+  r.ret = interpreter_here(argc, argv, r.heapsize, r.heapmax,
                            CONFIG_INTERPRETERS_MICROPYTHON_STACKSIZE);
 #endif
 

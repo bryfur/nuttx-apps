@@ -37,6 +37,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "py/gc.h"
 #include "py/mphal.h"
 #include "py/objstr.h"
 #include "py/runtime.h"
@@ -1226,6 +1227,19 @@ static mp_obj_t agent_flush_input(void)
 
 static MP_DEFINE_CONST_FUN_OBJ_0(agent_flush_input_obj, agent_flush_input);
 
+/* The most the heap can reach now: what it has, and what it may grow by
+ * (the interpreter's most, what the C heap has: mphalport.c).  gc's
+ * mem_free() counts only the areas it has.
+ */
+
+static mp_obj_t agent_heap_limit(void)
+{
+  return mp_obj_new_int_from_uint(mp_nuttx_port()->heap_total +
+                                  gc_get_max_new_split());
+}
+
+static MP_DEFINE_CONST_FUN_OBJ_0(agent_heap_limit_obj, agent_heap_limit);
+
 /****************************************************************************
  * Private Functions: JSON closed
  *
@@ -1867,6 +1881,7 @@ static const mp_rom_map_elem_t agent_globals[] =
     MP_ROM_PTR(&agent_interrupt_keys_obj) },
   { MP_ROM_QSTR(MP_QSTR_home),           MP_ROM_PTR(&agent_home_obj) },
   { MP_ROM_QSTR(MP_QSTR_flush_input),    MP_ROM_PTR(&agent_flush_input_obj) },
+  { MP_ROM_QSTR(MP_QSTR_heap_limit),     MP_ROM_PTR(&agent_heap_limit_obj) },
   { MP_ROM_QSTR(MP_QSTR_json_repair),    MP_ROM_PTR(&agent_json_repair_obj) },
   { MP_ROM_QSTR(MP_QSTR_html2text),      MP_ROM_PTR(&agent_html2text_obj) },
 };

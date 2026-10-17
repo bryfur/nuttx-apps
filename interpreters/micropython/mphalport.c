@@ -23,6 +23,7 @@
 
 #include <nuttx/kmalloc.h>
 #include <fcntl.h>
+#include <malloc.h>
 #include <pthread.h>
 #include <signal.h>
 #include <poll.h>
@@ -31,6 +32,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "py/gc.h"
 #include "py/mphal.h"
 #include "py/runtime.h"
 #include "py/stream.h"
@@ -45,6 +47,10 @@
 #define VM_COUNT         256              /* Loop hooks between clock reads */
 #define MAX_INTERPRETERS 4
 #define SRAM_RESERVE     (32 * 1024)      /* Left to the system */
+#define HEAP_HDR         16               /* An area's size, before it (a
+                                           * GC block: the area aligned) */
+#define HEAP_RESERVE     (256 * 1024)     /* Left in the C heap's largest
+                                           * free block by a new area */
 
 /* In the SRAM: what the VM looks at all the time (not the PSRAM, through
  * the XIP cache that the code in the flash uses too)
@@ -425,6 +431,56 @@ void mp_nuttx_wfe(int ms)
   struct mp_nuttx_port_s *p = mp_nuttx_port();
   p->lastpoll = mp_hal_ticks_ms();
   input_take(ms < 0 || ms > POLL_MS ? POLL_MS : ms);
+}
+
+/****************************************************************************
+ * Public Functions: the heap
+ ****************************************************************************/
+
+/* The GC heap's areas (MICROPY_GC_SPLIT_HEAP_AUTO): from the C heap, each
+ * with its size before it, counted in the interpreter's heap_total (main.c
+ * counts the first area, which it allocates and frees itself)
+ */
+
+void *mp_nuttx_heap_alloc(size_t size)
+{
+  struct mp_nuttx_port_s *p = mp_nuttx_port();
+  size_t *h = malloc(size + HEAP_HDR);
+
+  if (h == NULL)
+    {
+      return NULL;
+    }
+
+  h[0] = size + HEAP_HDR;
+  p->heap_total += size + HEAP_HDR;
+  return (char *)h + HEAP_HDR;
+}
+
+void mp_nuttx_heap_free(void *ptr)
+{
+  struct mp_nuttx_port_s *p = mp_nuttx_port();
+  size_t *h = (size_t *)((char *)ptr - HEAP_HDR);
+
+  p->heap_total -= h[0];
+  free(h);
+}
+
+/* The largest new area the heap may have: what the interpreter's most
+ * leaves, and what the C heap has in one piece (less HEAP_RESERVE, for
+ * the rest of the system)
+ */
+
+size_t gc_get_max_new_split(void)
+{
+  struct mp_nuttx_port_s *p = mp_nuttx_port();
+  struct mallinfo mi = mallinfo();
+  size_t room = p->heap_max > p->heap_total + HEAP_HDR ?
+                p->heap_max - p->heap_total - HEAP_HDR : 0;
+  size_t piece = (size_t)mi.mxordblk > HEAP_RESERVE + HEAP_HDR ?
+                 (size_t)mi.mxordblk - HEAP_RESERVE - HEAP_HDR : 0;
+
+  return room < piece ? room : piece;
 }
 
 /****************************************************************************

@@ -51,13 +51,28 @@ config INTERPRETERS_MICROPYTHON_PSRAM_STACK
 		The PSRAM is behind the XIP cache, so a stack there is slower.
 
 config INTERPRETERS_MICROPYTHON_HEAPSIZE
-	int "Heap size (KB)"
+	int "Heap size at the start (KB)"
 	default 1024
 	---help---
 		The garbage-collected heap for Python's objects, allocated from
 		the heap when the interpreter starts (the PSRAM on the FPC
-		board) and freed when it ends.  python -X heapsize=N[K|M]
-		changes it for a run.
+		board) and freed when it ends.  When a collection leaves too
+		little, the heap grows by another area from the C heap, up to
+		INTERPRETERS_MICROPYTHON_HEAP_MAX; an area a collection empties
+		goes back.  python -X heapsize=N[K|M] changes the start for a
+		run.
+
+config INTERPRETERS_MICROPYTHON_HEAP_MAX
+	int "Most the heap may grow to (KB, 0: half of what is free)"
+	default 0
+	---help---
+		The most an interpreter's heap may grow to, all of its areas
+		together.  0: half of the C heap that is free when the
+		interpreter starts (the PSRAM on the FPC board), and at least
+		the heap it starts with: a runaway program then cannot take
+		the memory the desktop and other programs need.  python -X
+		heapmax=N[K|M] changes it for a run (heapmax=heapsize: a heap
+		that does not grow).
 
 config INTERPRETERS_MICROPYTHON_PATH
 	string "sys.path"
@@ -118,8 +133,10 @@ config INTERPRETERS_MICROPYTHON_AGENT_HEAPSIZE
 	default 2048
 	depends on INTERPRETERS_MICROPYTHON_AGENT
 	---help---
-		The MicroPython heap the agent runs with: the conversation,
-		the files read, the requests and responses.  AGENT_HEAP=N in
-		the environment changes it for a run.
+		The MicroPython heap the agent starts with: the conversation,
+		the files read, the requests and responses.  It grows as
+		python's does, up to INTERPRETERS_MICROPYTHON_HEAP_MAX.
+		AGENT_HEAP=N in the environment (KB) changes the start for a
+		run, AGENT_HEAP_MAX=N the most.
 
 endif

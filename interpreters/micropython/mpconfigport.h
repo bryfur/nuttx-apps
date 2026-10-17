@@ -22,9 +22,18 @@
 
 #define MICROPY_CONFIG_ROM_LEVEL      (MICROPY_CONFIG_ROM_LEVEL_FULL_FEATURES)
 
-/* The heap: garbage collected, from the C heap (the PSRAM on the board) */
+/* The heap: garbage collected, from the C heap (the PSRAM on the board).
+ * It grows: when a collection leaves too little, another area from the C
+ * heap, up to the interpreter's most (mphalport.c: gc_get_max_new_split(),
+ * the areas counted by mp_nuttx_heap_alloc() and _free()); an area that a
+ * collection empties goes back.
+ */
 
 #define MICROPY_ENABLE_GC             (1)
+#define MICROPY_GC_SPLIT_HEAP         (1)
+#define MICROPY_GC_SPLIT_HEAP_AUTO    (1)
+#define MP_PLAT_ALLOC_HEAP(size)      mp_nuttx_heap_alloc(size)
+#define MP_PLAT_FREE_HEAP(ptr)        mp_nuttx_heap_free(ptr)
 #define MICROPY_ENABLE_FINALISER      (1)
 #define MICROPY_ENABLE_EMERGENCY_EXCEPTION_BUF (1)
 #define MICROPY_EMERGENCY_EXCEPTION_BUF_SIZE (256)
@@ -247,12 +256,19 @@ struct mp_nuttx_port_s
   /* The fpc module's windows (modfpc.c) */
 
   void    *fpc;
+
+  /* The heap (mphalport.c): bytes in its areas, the most there may be */
+
+  size_t   heap_total;
+  size_t   heap_max;
 };
 
 #define MP_NUTTX_PORT_SIZE \
   ((sizeof(struct mp_nuttx_port_s) + 15) & ~(size_t)15)
 
 struct mp_nuttx_port_s *mp_nuttx_port(void) __attribute__((const));
+void *mp_nuttx_heap_alloc(size_t size);
+void mp_nuttx_heap_free(void *ptr);
 
 #define MICROPY_PORT_STATE_CTX \
   (*(struct _mp_state_ctx_t *)((char *)mp_nuttx_port() + MP_NUTTX_PORT_SIZE))

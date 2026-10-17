@@ -345,7 +345,7 @@ class Session:
             return
         gc.collect()
         used = gc.mem_alloc()
-        heap_low = used > (used + gc.mem_free()) * 6 // 10
+        heap_low = used > _agent.heap_limit() * 6 // 10
         if heap_low or self.last_input > self.cfg.get('compact_tokens', 100000) or \
                 self.provider.last_body > self.cfg.get('max_history_kb', 384) * 1024:
             ui.note('(The conversation is long: compacting it.)')
@@ -405,8 +405,10 @@ class Session:
                     (self.last_input, self.cfg.get('compact_tokens', 100000),
                      util.size(self.provider.last_body)))
         gc.collect()
-        rows.append('Memory: %s used of the heap, %s free' %
-                    (util.size(gc.mem_alloc()), util.size(gc.mem_free())))
+        used = gc.mem_alloc()
+        rows.append('Memory: %s used of the heap, %s now, up to %s' %
+                    (util.size(used), util.size(used + gc.mem_free()),
+                     util.size(_agent.heap_limit())))
         return '\n'.join(rows)
 
 
