@@ -34,7 +34,6 @@ endif
 
 ifeq ($(CONFIG_GAMES_NXDOOM_FULLSCREEN),y)
 COMMONSRCS += i_fpcscreen.c # Full screen on the FPC's GPU
-CFLAGS += ${INCDIR_PREFIX}$(TOPDIR)/../drivers/gpu
 endif
 
 DEHACKEDSRCS = deh_io.c deh_main.c deh_mapping.c deh_text.c

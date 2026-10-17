@@ -62,7 +62,7 @@
  * room)...
  */
 
-#include <fpc_place.h>
+#include <fpc/native/mem.h>
 
 #ifdef CONFIG_GAMES_NXDOOM_FASTCODE
 #  define NXDOOM_FAST FPC_SRAM_CODE("nxdoom")

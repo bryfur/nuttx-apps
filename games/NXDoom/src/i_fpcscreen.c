@@ -28,7 +28,7 @@
 
 #include <nuttx/nx/nxkeys.h>
 
-#include "fpc_gpu.h"
+#include <fpc/native/gpu.h>
 #include "i_fpcscreen.h"
 #include "d_loop.h"
 #include "m_argv.h"

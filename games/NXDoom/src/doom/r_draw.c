@@ -30,15 +30,11 @@
 #include <nuttx/config.h>
 
 #ifdef CONFIG_GAMES_NXDOOM_DRAWQ
-#  include <nuttx/kmalloc.h>
-#  include <pthread.h>
-#  include <sched.h>
-#  include <semaphore.h>
 #  include <syslog.h>
+#  include <fpc/native/core1.h>           /* The queue, the interpolators */
 #endif
 
-#if defined(CONFIG_GAMES_NXDOOM_DRAWQ) && defined(CONFIG_ARCH_CHIP_RP23XX)
-#  include <arch/chip/interp.h>
+#if defined(CONFIG_GAMES_NXDOOM_DRAWQ) && defined(FPC_HAVE_INTERP)
 #  include "m_argv.h"
 #  define NXDOOM_SIO 1                    /* The drawer on the interpolators */
 #endif
@@ -172,20 +168,20 @@ static pixel_t *background_buffer = NULL;
  * drawing and waits for the last of it, before the status bar, the menus
  * and the frame's trip to the screen.  Whatever is drawn outside a frame is
  * drawn at once; a block of the zone is purged only once the queue is empty
- * (z_purge_hook: a queued column may be reading it).
+ * (z_purge_hook: a queued column may be reading it).  The queue is the FPC
+ * native tier's (fpc/native/core1.h, Quake's too): only the drawer takes
+ * entries, in order.
  ****************************************************************************/
 
 #define DQ_MOST     512                   /* Entries, a power of two */
 #define DQ_LEAST    64
-#define DQ_STACK    2048                  /* The drawer's */
 
 enum
 {
   DQ_COLUMN,
   DQ_TRANS,
   DQ_FUZZ,
-  DQ_SPAN,
-  DQ_END
+  DQ_SPAN
 };
 
 struct dq_s                               /* 32 bytes */
@@ -202,23 +198,16 @@ struct dq_s                               /* 32 bytes */
 
 static struct
 {
-  struct dq_s *ring;                      /* kmm_malloc(): the SRAM */
-  uint32_t size;                          /* Entries, a power of two */
-  uint32_t head;                          /* The game's: entries noted */
-  uint32_t tail;                          /* The drawer's: entries done */
+  struct fpc_core1_s *q;                  /* The queue (its block: the SRAM) */
   bool frame;                             /* Between begin and end */
-  bool quit;
   bool tried;
-  pthread_t thread;
-  void *stack;                            /* The game's heap: the PSRAM */
-  sem_t go;
   int fuzzpos;                            /* The drawer's */
   bool sio;                               /* The drawer has its core's
                                            * interpolators */
   bool siocheck;                          /* -siocheck */
   uint32_t checked;                       /* ... entries compared */
   uint32_t checkbad;                      /* ... that differed */
-} g_dq NXDOOM_SRAM;                       /* (Spun on by both cores) */
+} g_dq NXDOOM_SRAM;                       /* (Read by both cores) */
 
 #ifdef NXDOOM_SIO
 /* The drawer's columns and spans on its core's SIO interpolators
@@ -409,7 +398,7 @@ static void dq_sio_release(void)
   if (g_dq.sio)
     {
       g_dq.sio = false;
-      rp23xx_interp_release();
+      fpc_interp_release();
       if (g_dq.siocheck)
         {
           syslog(LOG_INFO, "nxdoom: -siocheck: %u columns and spans "
@@ -420,17 +409,15 @@ static void dq_sio_release(void)
 #endif
 }
 
-/* The drawer: sleeps between frames, spins within one */
+/* The drawer's start: pinned to its core, its interpolators, unless -nosio */
 
-NXDOOM_FAST static void *dq_main(void *arg)
+static void dq_thread_start(void *arg)
 {
   (void)arg;
 #ifdef NXDOOM_SIO
-  /* Pinned to its core (dq_start()): its interpolators, unless -nosio */
-
   if (m_check_parm("-nosio") <= 0)
     {
-      int cpu = rp23xx_interp_claim();
+      int cpu = fpc_interp_claim();
 
       g_dq.sio = cpu >= 0;
       g_dq.siocheck = g_dq.sio && m_check_parm("-siocheck") > 0;
@@ -438,62 +425,43 @@ NXDOOM_FAST static void *dq_main(void *arg)
              "on its core's interpolators" : "in plain C (no interpolators)");
     }
 #endif
+}
 
-  for (; ; )
-    {
-      sem_wait(&g_dq.go);
-      for (; ; )
-        {
-          uint32_t t = g_dq.tail;
-          const struct dq_s *e;
+static void dq_thread_end(void *arg)
+{
+  (void)arg;
+  dq_sio_release();
+}
 
-          while (__atomic_load_n(&g_dq.head, __ATOMIC_ACQUIRE) == t)
-            {
-              if (__atomic_load_n(&g_dq.quit, __ATOMIC_RELAXED))
-                {
-                  dq_sio_release();
-                  return NULL;
-                }
-            }
+/* An entry drawn by the drawer, in the order they were noted */
 
-          e = &g_dq.ring[t & (g_dq.size - 1)];
-          if (e->kind == DQ_END)
-            {
-              __atomic_store_n(&g_dq.tail, t + 1, __ATOMIC_RELEASE);
-              break;
-            }
+NXDOOM_FAST static void dq_run(void *arg, void *entry, bool game)
+{
+  const struct dq_s *e = entry;
 
+  (void)arg;
+  (void)game;
 #ifdef NXDOOM_SIO
-          if (g_dq.sio && e->kind == DQ_COLUMN)
-            {
-              dq_sio_column(e);
-              if (g_dq.siocheck)
-                {
-                  dq_sio_check(e);
-                }
-            }
-          else if (g_dq.sio && e->kind == DQ_SPAN)
-            {
-              dq_sio_span(e);
-              if (g_dq.siocheck)
-                {
-                  dq_sio_check(e);
-                }
-            }
-          else
-#endif
-            {
-              dq_draw(e);
-            }
-
-          __atomic_store_n(&g_dq.tail, t + 1, __ATOMIC_RELEASE);
-        }
-
-      if (__atomic_load_n(&g_dq.quit, __ATOMIC_RELAXED))
+  if (g_dq.sio && e->kind == DQ_COLUMN)
+    {
+      dq_sio_column(e);
+      if (g_dq.siocheck)
         {
-          dq_sio_release();
-          return NULL;
+          dq_sio_check(e);
         }
+    }
+  else if (g_dq.sio && e->kind == DQ_SPAN)
+    {
+      dq_sio_span(e);
+      if (g_dq.siocheck)
+        {
+          dq_sio_check(e);
+        }
+    }
+  else
+#endif
+    {
+      dq_draw(e);
     }
 }
 
@@ -501,10 +469,7 @@ NXDOOM_FAST static void *dq_main(void *arg)
 
 NXDOOM_FAST static struct dq_s *dq_slot(void)
 {
-  uint32_t h = g_dq.head;
-
-  while (h - __atomic_load_n(&g_dq.tail, __ATOMIC_ACQUIRE) >= g_dq.size);
-  return &g_dq.ring[h & (g_dq.size - 1)];
+  return fpc_core1_slot(g_dq.q);
 }
 
 /* An entry filled: to the drawer within a frame, else drawn here */
@@ -513,7 +478,7 @@ NXDOOM_FAST static void dq_push(struct dq_s *e)
 {
   if (g_dq.frame)
     {
-      __atomic_store_n(&g_dq.head, g_dq.head + 1, __ATOMIC_RELEASE);
+      fpc_core1_push(g_dq.q);
     }
   else
     {
@@ -521,16 +486,16 @@ NXDOOM_FAST static void dq_push(struct dq_s *e)
     }
 }
 
-/* Everything noted drawn (the zone's purge hook and the frame's end) */
+/* Everything noted drawn (the zone's purge hook) */
 
-NXDOOM_FAST static void dq_wait(void)
+static void dq_wait(void)
 {
-  while (__atomic_load_n(&g_dq.tail, __ATOMIC_ACQUIRE) != g_dq.head);
+  fpc_core1_drain(g_dq.q);
 }
 
 static void dq_shutdown(void)
 {
-  if (g_dq.ring == NULL)
+  if (g_dq.q == NULL)
     {
       return;
     }
@@ -546,93 +511,51 @@ static void dq_shutdown(void)
       spanfunc = r_draw_span;
     }
 
-  __atomic_store_n(&g_dq.quit, true, __ATOMIC_RELEASE);
-  sem_post(&g_dq.go);
-  pthread_join(g_dq.thread, NULL);
-  sem_destroy(&g_dq.go);
-  free(g_dq.stack);
-  g_dq.stack = NULL;
-  kmm_free(g_dq.ring);
-  g_dq.ring = NULL;
+  if (g_dq.frame)
+    {
+      fpc_core1_wait(g_dq.q, false);
+    }
+
+  fpc_core1_stop(g_dq.q);                 /* (the drawer's interpolators) */
+  g_dq.q = NULL;
   g_dq.frame = false;
 }
 
-/* The ring and the drawer, the first frame (the game on one core, the
+/* The queue and the drawer, the first frame (the game on one core, the
  * drawer on the other, a step below the game so that the rest of the
  * system still gets that core when it wants it).  The game leaves the
- * SRAM all but full: the ring gets what there is, and the drawer's stack,
- * which it hardly touches, comes from the game's heap.
+ * SRAM all but full: the ring gets what there is.
  */
 
 static bool dq_start(void)
 {
-  struct sched_param param;
-  pthread_attr_t attr;
-  cpu_set_t cpus;
-  int policy;
+  struct fpc_core1_config_s cfg =
+  {
+    .name  = "doom draw",
+    .entry = sizeof(struct dq_s),
+    .most  = DQ_MOST,
+    .least = DQ_LEAST,
+    .run   = dq_run,
+    .start = dq_thread_start,
+    .end   = dq_thread_end,
+  };
 
   g_dq.tried = true;
-  for (g_dq.size = DQ_MOST; g_dq.size >= DQ_LEAST; g_dq.size /= 2)
-    {
-      g_dq.ring = kmm_malloc(g_dq.size * sizeof(struct dq_s));
-      if (g_dq.ring != NULL)
-        {
-          break;
-        }
-    }
-
-  if (g_dq.ring == NULL)
-    {
-      syslog(LOG_WARNING, "nxdoom: no SRAM for the draw queue\n");
-      return false;
-    }
-
-  g_dq.head = 0;
-  g_dq.tail = 0;
-  g_dq.quit = false;
   g_dq.fuzzpos = 0;
   g_dq.sio = false;
-  sem_init(&g_dq.go, 0, 0);
-
-  CPU_ZERO(&cpus);
-  CPU_SET(0, &cpus);
-  sched_setaffinity(0, sizeof(cpus), &cpus);
-
-  pthread_getschedparam(pthread_self(), &policy, &param);
-  param.sched_priority--;
-  g_dq.stack = malloc(DQ_STACK);
-  pthread_attr_init(&attr);
-  if (g_dq.stack != NULL)
+  g_dq.q = fpc_core1_start(&cfg);
+  if (g_dq.q == NULL)
     {
-      pthread_attr_setstack(&attr, g_dq.stack, DQ_STACK);
-    }
-
-  pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED);
-  pthread_attr_setschedpolicy(&attr, policy);
-  pthread_attr_setschedparam(&attr, &param);
-  CPU_ZERO(&cpus);
-  CPU_SET(1, &cpus);
-  pthread_attr_setaffinity_np(&attr, sizeof(cpus), &cpus);
-  if (pthread_create(&g_dq.thread, &attr, dq_main, NULL) != 0)
-    {
-      pthread_attr_destroy(&attr);
-      sem_destroy(&g_dq.go);
-      free(g_dq.stack);
-      g_dq.stack = NULL;
-      kmm_free(g_dq.ring);
-      g_dq.ring = NULL;
-      syslog(LOG_WARNING, "nxdoom: no drawer thread\n");
+      syslog(LOG_WARNING, "nxdoom: no draw queue (SRAM, thread)\n");
       return false;
     }
 
-  pthread_attr_destroy(&attr);
-  pthread_setname_np(g_dq.thread, "doom draw");
 #ifdef CONFIG_GAMES_NXDOOM_ZONE
   z_purge_hook = dq_wait;
 #endif
   i_at_exit(dq_shutdown, true);           /* (before the screen goes) */
   syslog(LOG_INFO, "nxdoom: drawing on the other core, %u entries queued "
-         "at most\n", (unsigned)g_dq.size);
+         "at most\n", (unsigned)(g_dq.q->mask + 1));
   return true;
 }
 
@@ -757,7 +680,7 @@ NXDOOM_FAST void r_drawq_span(void)
 
 bool r_drawq_begin(void)
 {
-  if (detailshift || (g_dq.ring == NULL && (g_dq.tried || !dq_start())))
+  if (detailshift || (g_dq.q == NULL && (g_dq.tried || !dq_start())))
     {
       return false;                       /* (Low detail: as before) */
     }
@@ -767,7 +690,7 @@ bool r_drawq_begin(void)
   transcolfunc = r_drawq_translated_column;
   spanfunc = r_drawq_span;
   g_dq.frame = true;
-  sem_post(&g_dq.go);
+  fpc_core1_begin(g_dq.q);
   return true;
 }
 
@@ -775,18 +698,13 @@ bool r_drawq_begin(void)
 
 void r_drawq_end(void)
 {
-  struct dq_s *e;
-
   if (!g_dq.frame)
     {
       return;
     }
 
-  e = dq_slot();
-  e->kind = DQ_END;
-  dq_push(e);
   g_dq.frame = false;
-  dq_wait();
+  fpc_core1_wait(g_dq.q, false);
 }
 #endif /* CONFIG_GAMES_NXDOOM_DRAWQ */
 
