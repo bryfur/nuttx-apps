@@ -47,6 +47,7 @@
 #include <semaphore.h>
 #include <syslog.h>
 
+#include <nuttx/atomic.h>
 #include <nuttx/kmalloc.h>
 
 #include "fpc_gpu.h"
@@ -104,10 +105,16 @@ static struct
   void *stack;                            /* The game's heap: the PSRAM */
   sem_t go;
 } g_dq __attribute__((section(".sram.quake")));   /* In the SRAM: spun on
-                                                   * by both cores, and
-                                                   * exclusive access (the
-                                                   * claim) does not work
-                                                   * through the XIP cache */
+                                                   * by both cores */
+
+/* g_dq's read-modify-writes (the claim, the counts, the column word) are
+ * <nuttx/atomic.h>'s, which look at the address: LDREX/STREX in the SRAM,
+ * SIO spinlock 31 elsewhere.  The loader puts .sram.quake in the PSRAM
+ * when the SRAM is short (fpc_modheap.c), and there an exclusive store
+ * always fails: the compiler's __atomic read-modify-writes spun forever.
+ * Loads stay __atomic_load_n (plain loads, anywhere); the column word's
+ * stores race its compare-exchange, so they take the same way.
+ */
 
 struct dqt_s
 {
@@ -138,8 +145,7 @@ FPCQ_FAST static qboolean dq_take(qboolean game)
 
   if (c == __atomic_load_n(&g_dq.head, __ATOMIC_ACQUIRE) ||
       (game && g_dq.ring[c & (g_dq.size - 1)].g3face != NULL) ||   /* (the drawer's only) */
-      !__atomic_compare_exchange_n(&g_dq.claim, &c, c + 1, false,
-                                   __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+      !atomic_cmpxchg(&g_dq.claim, &c, c + 1))
     {
       return false;
     }
@@ -162,7 +168,7 @@ FPCQ_FAST static qboolean dq_take(qboolean game)
       g_dqt.upload += t2 - t1;
       g_dqt.spans += fpc_gpu_game_us() - t2;
 
-      __atomic_add_fetch(&g_dq.done, 1, __ATOMIC_RELEASE);
+      atomic_add(&g_dq.done, 1);
       return true;
     }
 
@@ -174,7 +180,7 @@ FPCQ_FAST static qboolean dq_take(qboolean game)
 
   D_DrawZSpansCtx(&e->c, e->spans);
   fpcq_tsum[game ? FPCQ_T_SPANS0 : FPCQ_T_SPANS1] += fpcq_us() - t0;
-  __atomic_add_fetch(&g_dq.done, 1, __ATOMIC_RELEASE);
+  atomic_add(&g_dq.done, 1);
   return true;
 }
 
@@ -196,8 +202,7 @@ FPCQ_FAST static qboolean dq_column(qboolean game)
 
   c = g_dq.cols;
   if ((int)(w & 0xffff) >= c->n ||
-      !__atomic_compare_exchange_n(&g_dq.colword, &w, w + 1, false,
-                                   __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+      !atomic_cmpxchg(&g_dq.colword, &w, w + 1))
     {
       return false;
     }
@@ -206,7 +211,7 @@ FPCQ_FAST static qboolean dq_column(qboolean game)
   R_DrawSurfaceColumn(c, w & 0xffff);
   fpcq_tsum[game ? FPCQ_T_COLS0 : FPCQ_T_COLS1] +=
     fpcq_us() - t0;
-  __atomic_add_fetch(&g_dq.coldone, 1, __ATOMIC_RELEASE);
+  atomic_add(&g_dq.coldone, 1);
   return true;
 }
 
@@ -535,11 +540,10 @@ void fpcq_cols_draw(const rcols_t *c)
 
   g_dq.cols = c;
   g_dq.coldone = 0;
-  __atomic_store_n(&g_dq.colword, (uint32_t)g_dq.colgen << 16,
-                   __ATOMIC_RELEASE);
+  atomic_set(&g_dq.colword, (uint32_t)g_dq.colgen << 16);
   while (dq_column(true));
   while (__atomic_load_n(&g_dq.coldone, __ATOMIC_ACQUIRE) != (uint32_t)c->n);
-  __atomic_store_n(&g_dq.colword, 0xffff, __ATOMIC_RELEASE);
+  atomic_set(&g_dq.colword, 0xffff);
   g_dq.colgen = (g_dq.colgen + 1) & 0x7fff;
 }
 
