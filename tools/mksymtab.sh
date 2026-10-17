@@ -27,7 +27,7 @@ usage() {
   if [ $# -ne 0 ]; then
     echo "ERROR: $@"
   fi
-  echo -e "\nUsage: $0 <imagedirpath1> [imagedirpath2 ... ] [symtabprefix] [-a additionalsymbolspath]"
+  echo -e "\nUsage: $0 <imagedirpath1> [imagedirpath2 ... ] [symtabprefix] [-a additionalsymbolspath] [-w weaksymbolspath]"
   exit 1
 }
 
@@ -64,10 +64,13 @@ if [ $arg_count -eq 0 ]; then
 fi
 
 # Parse remaining arguments for options
-while getopts a: opt; do
+while getopts a:w: opt; do
   case $opt in
     a)
       addlist="${addlist[@]} $OPTARG"
+      ;;
+    w)
+      weaklist="${weaklist[@]} $OPTARG"
       ;;
     \?)
       usage
@@ -151,6 +154,29 @@ done
 # after the modules' names, which were one line: two sorted runs and
 # duplicates.
 
+# (FPC) -w lists: names the table also exports (apps-fpc/system/libfpc:
+# the functions the exported headers declare), referenced weakly, so that
+# one the firmware does not define leaves its entry 0 (the ELF loader takes
+# that for "not exported") instead of failing the link; the final link
+# takes each from the libraries (fpc_exports.ld, EXTERN).  A name the
+# modules import, or an -a list names, stays a strong reference.
+
+strong=`echo "$varlist" | grep -v '^$' | sed -e 's/^.*,//' | sort -u`
+weak=""
+for w in ${weaklist[@]}; do
+  if [ -f $w ]; then
+    weak="${weak}
+$(grep -v '^$' $w)"
+  else
+    usage "no weak list $w"
+  fi
+done
+weak=`echo "$weak" | grep -v '^$' | sort -u | comm -23 - <(echo "$strong")`
+if [ -n "$weak" ]; then
+  varlist="${varlist}
+${weak}"
+fi
+
 varlist=`echo "$varlist" | grep -v '^$' | \
          awk '{ n = $0; sub(/^.*,/, "", n); print n "\t" $0 }' | \
          sort -t "$(printf '\t')" -k1,1 -u | cut -f2`
@@ -169,9 +195,14 @@ echo "#include <nuttx/compiler.h>"
 echo "#include <nuttx/symtab.h>"
 echo ""
 
+weakset=" $(echo $weak) "
 for string in $varlist; do
   var=`echo $string | sed -e "s/\"//g"`
-  echo "extern void *${var/,*/};"
+  if [[ "$weakset" == *" ${var/,*/} "* ]]; then
+    echo "extern void *${var/,*/} weak_data;"
+  else
+    echo "extern void *${var/,*/};"
+  fi
 done
 
 echo ""
