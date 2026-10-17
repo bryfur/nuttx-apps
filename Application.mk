@@ -20,6 +20,21 @@
 #
 ############################################################################
 
+# (FPC) A library (no MAINSRC) is archived in libapps, which loadable
+# modules link too, and a module runs from the PSRAM, more than a Thumb
+# branch's 16 MB from the firmware in the flash: its calls must be long
+# ones, and none a tail call (GCC can make a tail call to an external
+# function a short B.W even with -mlong-calls).  Programs get the modules'
+# flags below (and the board's no tail calls).
+# tools/regress/modcheck.py checks the modules.
+
+ifeq ($(MAINSRC),)
+  ifeq ($(CONFIG_MODULES)$(CONFIG_ARCH_ARM),yy)
+    CFLAGS += -mlong-calls -fno-optimize-sibling-calls
+    CXXFLAGS += -mlong-calls -fno-optimize-sibling-calls
+  endif
+endif
+
 # If this is an executable program (with MAINSRC), we must build it as a
 # loadable module for the KERNEL build (always) or if the tristate module
 # has the value "m"
