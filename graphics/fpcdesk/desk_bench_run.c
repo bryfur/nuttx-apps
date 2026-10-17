@@ -39,6 +39,7 @@
 #include <nuttx/nx/nxbe.h>
 
 #include "desk_bench.h"
+#include "fpc_gpu_proto.h"
 
 #ifdef CONFIG_FPCDESK_BENCH
 
@@ -62,20 +63,10 @@
 #define COMPOSE_N        8              /* Whole display: even (restores) */
 #define FRAME_WAIT_US    500000
 
-/* The STATS block's words (docs/gpu.md) */
+/* The driver's totals are by op (FPC_GPU_*, fpc_gpu_proto.h), BLEND from
+ * an image in the slot of op 0x0f (FPC_GPU_STAT_BLENDIMG)
+ */
 
-#define ST_WORDS         41
-#define ST_CLK_KHZ       1
-#define ST_CYCLES        2
-#define ST_BLIT_BUSY     29
-
-/* The driver's ops (FPC_GPU_*) in its totals */
-
-#define OP_FILL          0x01
-#define OP_PUT           0x02
-#define OP_COPY          0x03
-#define OP_EXPAND        0x07
-#define OP_BLEND         0x09
 #define OP_BLENDIMG      15
 
 /****************************************************************************
@@ -102,7 +93,7 @@ struct fpc_gpu_totals_s
 };
 
 int  fpc_gpu_version(void);
-int  fpc_gpu_hwstats(uint32_t st[ST_WORDS]);
+int  fpc_gpu_hwstats(uint32_t st[FPC_GPU_STATS_WORDS]);
 int  fpc_link_wire_mbps(void);
 void fpc_gpu_copy(int sx, int sy, int dx, int dy, int w, int h);
 void fpc_gpu_flush(void);
@@ -115,7 +106,7 @@ struct meas_s
 {
   uint32_t t0;
   bool     hw;
-  uint32_t st[ST_WORDS];
+  uint32_t st[FPC_GPU_STATS_WORDS];
 };
 
 /****************************************************************************
@@ -155,11 +146,11 @@ static const struct
   uint32_t pspx;
 } g_costs[] =
 {
-  { OP_FILL,     9714 },
-  { OP_COPY,     19086 },
-  { OP_BLEND,    20000 },
+  { FPC_GPU_FILL,     9714 },
+  { FPC_GPU_COPY,     19086 },
+  { FPC_GPU_BLEND,    20000 },
   { OP_BLENDIMG, 27143 },
-  { OP_EXPAND,   5000 },
+  { FPC_GPU_EXPAND,   5000 },
 };
 
 /****************************************************************************
@@ -201,17 +192,17 @@ static void meas_begin(struct bench_s *b, struct meas_s *m)
 static void meas_end(struct bench_s *b, struct meas_s *m, uint32_t *wall,
                      uint32_t *busy)
 {
-  uint32_t st[ST_WORDS];
+  uint32_t st[FPC_GPU_STATS_WORDS];
 
   sync_gpu(b);
   *wall = now_us() - m->t0;
   *wall = *wall > 0 ? *wall : 1;
   *busy = 0;
-  if (m->hw && fpc_gpu_hwstats(st) >= 0 && st[ST_CLK_KHZ] != 0)
+  if (m->hw && fpc_gpu_hwstats(st) >= 0 && st[FPC_GPU_ST_CLK_KHZ] != 0)
     {
-      uint32_t cyc = st[ST_BLIT_BUSY] - m->st[ST_BLIT_BUSY];
+      uint32_t cyc = st[FPC_GPU_ST_BLIT_BUSY] - m->st[FPC_GPU_ST_BLIT_BUSY];
 
-      *busy = (uint32_t)((uint64_t)cyc * 1000 / st[ST_CLK_KHZ]);
+      *busy = (uint32_t)((uint64_t)cyc * 1000 / st[FPC_GPU_ST_CLK_KHZ]);
     }
 }
 
@@ -839,8 +830,8 @@ static void sig3(char *buf, int size, float v)
 
 void bench_caps(struct bench_caps_s *c)
 {
-  uint32_t a[ST_WORDS];
-  uint32_t z[ST_WORDS];
+  uint32_t a[FPC_GPU_STATS_WORDS];
+  uint32_t z[FPC_GPU_STATS_WORDS];
 
   memset(c, 0, sizeof(*c));
   c->version = fpc_gpu_version();
@@ -849,9 +840,10 @@ void bench_caps(struct bench_caps_s *c)
   if (c->version >= 6 && fpc_gpu_hwstats(a) >= 0)
     {
       c->stats = true;
-      c->khz   = a[ST_CLK_KHZ];
+      c->khz   = a[FPC_GPU_ST_CLK_KHZ];
       usleep(2000);
-      c->clock = fpc_gpu_hwstats(z) >= 0 && z[ST_CYCLES] != a[ST_CYCLES] &&
+      c->clock = fpc_gpu_hwstats(z) >= 0 &&
+                 z[FPC_GPU_ST_CYCLES] != a[FPC_GPU_ST_CYCLES] &&
                  c->khz != 0;
     }
 }
@@ -1026,7 +1018,7 @@ void bench_totals(uint64_t px[16])
   memcpy(px, t.pixels, sizeof(t.pixels));
 }
 
-bool bench_hwstats(uint32_t st[ST_WORDS])
+bool bench_hwstats(uint32_t st[FPC_GPU_STATS_WORDS])
 {
   return fpc_gpu_version() >= 6 && fpc_gpu_hwstats(st) >= 0;
 }

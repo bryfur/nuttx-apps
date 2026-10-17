@@ -27,62 +27,18 @@ static float fg_sinf(int angle)
   return (float)fpc_gpu_cos(angle - 1024) / 32768.0f;
 }
 
-/* The inverse map of a quadrilateral, the screen to the image's (u, v) in
- * [0, 1]: u = (A x + B y + C) / (G x + H y + I), v = (D x + E y + F) / (...)
- * (Heckbert's square to quadrilateral, as fpc_quad.c)
+/* The inverse map of a quadrilateral, the screen to the image's (u, v):
+ * fpc_gpu_quad_map() (fpc_quad.c), as fpc_gpu_quad() draws them
  */
-
-struct quad_map_s
-{
-  float a, b, c, d, e, f, g, h, i;
-};
-
-static bool quad_map(FAR const struct fpc_gpu_quad_s *q,
-                     FAR struct quad_map_s *m)
-{
-  float x0 = q->x[0] / 16.0f, y0 = q->y[0] / 16.0f;
-  float x1 = q->x[1] / 16.0f, y1 = q->y[1] / 16.0f;
-  float x2 = q->x[2] / 16.0f, y2 = q->y[2] / 16.0f;
-  float x3 = q->x[3] / 16.0f, y3 = q->y[3] / 16.0f;
-  float dx1 = x1 - x2, dx2 = x3 - x2, dx3 = x0 - x1 + x2 - x3;
-  float dy1 = y1 - y2, dy2 = y3 - y2, dy3 = y0 - y1 + y2 - y3;
-  float den = dx1 * dy2 - dx2 * dy1;
-  float a, b, c, d, e, f, g, h;
-
-  if (den > -1e-6f && den < 1e-6f)
-    {
-      return false;                       /* Three corners in a line */
-    }
-
-  g = (dx3 * dy2 - dx2 * dy3) / den;
-  h = (dx1 * dy3 - dx3 * dy1) / den;
-  a = x1 - x0 + g * x1;
-  b = x3 - x0 + h * x3;
-  c = x0;
-  d = y1 - y0 + g * y1;
-  e = y3 - y0 + h * y3;
-  f = y0;
-
-  m->a = e - f * h;
-  m->b = c * h - b;
-  m->c = b * f - c * e;
-  m->d = f * g - d;
-  m->e = a - c * g;
-  m->f = c * d - a * f;
-  m->g = d * h - e * g;
-  m->h = b * g - a * h;
-  m->i = a * e - b * d;
-  return true;
-}
 
 /* The texel (12.4) at pixel centre (x, y), kept within 0..umax, 0..vmax,
  * or false past the horizon
  */
 
 static bool quad_uv(FAR const struct fpc_gpu_quad_s *q,
-                    FAR const struct quad_map_s *m, float wsign, float x,
-                    float y, int32_t umax, int32_t vmax, FAR int32_t *pu,
-                    FAR int32_t *pv)
+                    FAR const struct fpc_gpu_quad_map_s *m, float wsign,
+                    float x, float y, int32_t umax, int32_t vmax,
+                    FAR int32_t *pu, FAR int32_t *pv)
 {
   float wn = m->g * x + m->h * y + m->i;
   float r;
@@ -123,8 +79,8 @@ static uint32_t quad_pt(int32_t u, int32_t v, int32_t pu, int32_t pv)
  */
 
 static void quad_span(FAR const struct fpc_gpu_quad_s *q,
-                      FAR const struct quad_map_s *m, float wsign, int x,
-                      int y, int n, int32_t umax, int32_t vmax)
+                      FAR const struct fpc_gpu_quad_map_s *m, float wsign,
+                      int x, int y, int n, int32_t umax, int32_t vmax)
 {
   float yc = (float)y + 0.5f;
   int np = (n + 15) / 16 + 1;
@@ -181,7 +137,7 @@ static void quad_span(FAR const struct fpc_gpu_quad_s *q,
 
 static int quad_rows(FAR const struct fpc_gpu_quad_s *q)
 {
-  struct quad_map_s m;
+  struct fpc_gpu_quad_map_s m;
   float ymin;
   float ymax;
   float wsign;
@@ -195,7 +151,7 @@ static int quad_rows(FAR const struct fpc_gpu_quad_s *q)
 
   if (q->sw <= 0 || q->sh <= 0 || q->sx < 0 || q->sy < 0 ||
       q->sx + q->sw > FPC_GPU_SPACE_W || q->sy + q->sh > FPC_GPU_SPACE_H ||
-      !quad_map(q, &m))
+      !fpc_gpu_quad_map(q, &m))
     {
       return -1;
     }

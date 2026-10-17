@@ -23,6 +23,8 @@
 
 #include <nuttx/kmalloc.h>
 
+#include "fpc_gpu_proto.h"
+
 #ifdef CONFIG_FPC_GPU
 
 /****************************************************************************
@@ -75,12 +77,6 @@ int  fpc_gpu_bulk_timing(int n, int half);
 void fpc_gpu_bulk_stats(uint32_t *reads, uint32_t *words, uint32_t *errors,
                         uint32_t *timeouts);
 
-#define LINK_TYPE_TEST   3            /* the GPU counts and drops it */
-#define LINK_MAX_WORDS   512
-#define ST_WORDS         41
-#define ST_LINK_PKTS     7
-#define ST_LINK_CRC      9
-#define ST_LINK_RESYNC   10
 
 /****************************************************************************
  * Private Data
@@ -371,9 +367,9 @@ static void *rb_thread(void *arg)
 
 int desk_linktest(int mb, int setup, int cycles, bool rb)
 {
-  static uint32_t pkt[LINK_MAX_WORDS];
-  static uint32_t st0[ST_WORDS];
-  static uint32_t st1[ST_WORDS];
+  static uint32_t pkt[FPC_LINK_MAX_WORDS];
+  static uint32_t st0[FPC_GPU_STATS_WORDS];
+  static uint32_t st1[FPC_GPU_STATS_WORDS];
   struct timespec t0;
   struct timespec t1;
   pthread_t th;
@@ -415,13 +411,13 @@ int desk_linktest(int mb, int setup, int cycles, bool rb)
   clock_gettime(CLOCK_MONOTONIC, &t0);
   for (i = 0; i < n && ret >= 0; i++)
     {
-      for (k = 0; k < LINK_MAX_WORDS; k++)
+      for (k = 0; k < FPC_LINK_MAX_WORDS; k++)
         {
           pkt[k] = (i & 1) ? rnd() : (((k & 1) ? 0x55aa55aa : 0xaa55aa55) ^
                                       (uint32_t)(i >> 1) * 0x01010101u);
         }
 
-      ret = fpc_link_send(LINK_TYPE_TEST, pkt, LINK_MAX_WORDS);
+      ret = fpc_link_send(FPC_LINK_TYPE_TEST, pkt, FPC_LINK_MAX_WORDS);
     }
 
   fpc_link_flush();
@@ -443,15 +439,16 @@ int desk_linktest(int mb, int setup, int cycles, bool rb)
          ", CRC errors +%" PRIu32 " (%" PRIu32 "), resync +%" PRIu32 "\n",
          i, ms, ms ? (long)((int64_t)i * sizeof(pkt) / ms * 1000 / 1024)
                    : 0,
-         st1[ST_LINK_PKTS] - st0[ST_LINK_PKTS],
-         st1[ST_LINK_CRC] - st0[ST_LINK_CRC], st1[ST_LINK_CRC],
-         st1[ST_LINK_RESYNC] - st0[ST_LINK_RESYNC]);
+         st1[FPC_GPU_ST_LINK_PKTS] - st0[FPC_GPU_ST_LINK_PKTS],
+         st1[FPC_GPU_ST_LINK_CRC] - st0[FPC_GPU_ST_LINK_CRC],
+         st1[FPC_GPU_ST_LINK_CRC],
+         st1[FPC_GPU_ST_LINK_RESYNC] - st0[FPC_GPU_ST_LINK_RESYNC]);
   if (rb)
     {
       printf("link: %d READs beside it, %d wrong\n", g_rbn, g_rbbad);
     }
 
-  return st1[ST_LINK_CRC] != st0[ST_LINK_CRC] || g_rbbad != 0;
+  return st1[FPC_GPU_ST_LINK_CRC] != st0[FPC_GPU_ST_LINK_CRC] || g_rbbad != 0;
 }
 
 /* READ_BULK's soak (protocol v11, the link turned around): a 512 x 32
@@ -503,8 +500,8 @@ static void rl_put_row(int j)
 
 int desk_rlinktest(int mb, int n, int half, bool psram, bool copy)
 {
-  static uint32_t st0[ST_WORDS];
-  static uint32_t st1[ST_WORDS];
+  static uint32_t st0[FPC_GPU_STATS_WORDS];
+  static uint32_t st1[FPC_GPU_STATS_WORDS];
   size_t words = RL_W / 2 * RL_H + 2;
   FAR uint32_t *buf;
   struct timespec t0;
@@ -621,9 +618,10 @@ int desk_rlinktest(int mb, int n, int half, bool psram, bool copy)
          rd_us ? (uint32_t)((uint64_t)reads * (words - 2) * 4 * 1000000 /
                             rd_us / 1024) : 0,
          bad_words, bad_reads, timeouts, r1 - r0, e1 - e0, to1 - to0,
-         st1[ST_LINK_CRC] - st0[ST_LINK_CRC]);
+         st1[FPC_GPU_ST_LINK_CRC] - st0[FPC_GPU_ST_LINK_CRC]);
   psram ? free(buf) : kmm_free(buf);
-  return bad_words != 0 || bad_reads != 0 || st1[ST_LINK_CRC] != st0[ST_LINK_CRC];
+  return bad_words != 0 || bad_reads != 0 ||
+         st1[FPC_GPU_ST_LINK_CRC] != st0[FPC_GPU_ST_LINK_CRC];
 
 fail:
   psram ? free(buf) : kmm_free(buf);
@@ -646,8 +644,8 @@ void fpc_gpu_copy(int sx, int sy, int dx, int dy, int w, int h);
 
 int desk_gpubw(int n)
 {
-  uint32_t a[ST_WORDS];
-  uint32_t z[ST_WORDS];
+  uint32_t a[FPC_GPU_STATS_WORDS];
+  uint32_t z[FPC_GPU_STATS_WORDS];
   uint16_t px[2];
   uint64_t cyc;
   uint64_t pix;
@@ -656,7 +654,7 @@ int desk_gpubw(int n)
 
   n = n > 0 ? n : 100;
   fpc_gpu_read(0, TY, 2, 1, px, sizeof(px));           /* (idle) */
-  if (fpc_gpu_hwstats(a) < 0 || a[1] == 0)
+  if (fpc_gpu_hwstats(a) < 0 || a[FPC_GPU_ST_CLK_KHZ] == 0)
     {
       printf("bw: no STATS (a v6 GPU with a clock needed)\n");
       return 1;
@@ -681,31 +679,39 @@ int desk_gpubw(int n)
       return 1;
     }
 
-  cyc = (uint32_t)(z[2] - a[2]);
+  /* A STATS word's change over the run */
+
+#define D(k) (z[FPC_GPU_ST_##k] - a[FPC_GPU_ST_##k])
+
+  cyc = (uint32_t)D(CYCLES);
   cyc = cyc > 0 ? cyc : 1;
-  us  = (uint32_t)((uint64_t)(z[29] - a[29]) * 1000 / z[1]);   /* busy */
+  us  = (uint32_t)((uint64_t)D(BLIT_BUSY) * 1000 /
+                   z[FPC_GPU_ST_CLK_KHZ]);                  /* busy */
   us  = us > 0 ? us : 1;
   pix = (uint64_t)n * 2048 * 32;
   printf("bw: mode %" PRIu32 ": %d COPYs of 2048 x 32 in %" PRIu32 " us of the blitter's time: "
          "%" PRIu32 ".%" PRIu32 " Mpixel/s copied (%" PRIu32 " MB/s read "
          "and written); blitter busy %" PRIu32 "%% of the %" PRIu32
          " us\n",
-         z[5] & 0xff, n, us, (uint32_t)(pix / us),
+         z[FPC_GPU_ST_MODE] & 0xff, n, us, (uint32_t)(pix / us),
          (uint32_t)(pix * 10 / us % 10), (uint32_t)(pix * 4 / us),
-         (uint32_t)((uint64_t)(z[29] - a[29]) * 100 / cyc),
-         (uint32_t)(cyc * 1000 / z[1]));
+         (uint32_t)((uint64_t)D(BLIT_BUSY) * 100 / cyc),
+         (uint32_t)(cyc * 1000 / z[FPC_GPU_ST_CLK_KHZ]));
   printf("bw: SDRAM: scanout %" PRIu32 "%%, blitter %" PRIu32 "%%, DMA %"
          PRIu32 "%%, CPU %" PRIu32 "%%, idle %" PRIu32 "%%; late line "
          "fetches %" PRIu32 ", frames %" PRIu32 " (%" PRIu32 " Hz)\n",
-         (uint32_t)((uint64_t)(z[36] - a[36]) * 100 / cyc),
-         (uint32_t)((uint64_t)(z[37] - a[37]) * 100 / cyc),
-         (uint32_t)((uint64_t)(z[38] - a[38]) * 100 / cyc),
-         (uint32_t)((uint64_t)(z[39] - a[39]) * 100 / cyc),
-         (uint32_t)(100 - ((uint64_t)(z[36] - a[36]) + (z[37] - a[37]) +
-                           (z[38] - a[38]) + (z[39] - a[39])) * 100 / cyc),
-         z[4] - a[4], z[3] - a[3],
-         (uint32_t)((uint64_t)(z[3] - a[3]) * 1000 * z[1] / cyc));
-  return z[4] != a[4];
+         (uint32_t)((uint64_t)D(SD_SCANOUT) * 100 / cyc),
+         (uint32_t)((uint64_t)D(SD_BLIT) * 100 / cyc),
+         (uint32_t)((uint64_t)D(SD_DMA) * 100 / cyc),
+         (uint32_t)((uint64_t)D(SD_CPU) * 100 / cyc),
+         (uint32_t)(100 - ((uint64_t)D(SD_SCANOUT) + D(SD_BLIT) +
+                           D(SD_DMA) + D(SD_CPU)) * 100 / cyc),
+         D(LATE), D(FRAMES),
+         (uint32_t)((uint64_t)D(FRAMES) * 1000 * z[FPC_GPU_ST_CLK_KHZ] /
+                    cyc));
+  return D(LATE) != 0;
+
+#undef D
 }
 
 #endif
