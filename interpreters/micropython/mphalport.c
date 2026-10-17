@@ -33,6 +33,9 @@
 #include <unistd.h>
 
 #include "py/gc.h"
+#include <fpc_place.h>
+#include <fpc_sram.h>
+
 #include "py/mphal.h"
 #include "py/runtime.h"
 #include "py/stream.h"
@@ -46,7 +49,6 @@
 #define POLL_MS          20               /* Looking for Ctrl-C */
 #define VM_COUNT         256              /* Loop hooks between clock reads */
 #define MAX_INTERPRETERS 4
-#define SRAM_RESERVE     (32 * 1024)      /* Left to the system */
 #define HEAP_HDR         16               /* An area's size, before it (a
                                            * GC block: the area aligned) */
 #define HEAP_RESERVE     (256 * 1024)     /* Left in the C heap's largest
@@ -56,12 +58,11 @@
  * the XIP cache that the code in the flash uses too)
  */
 
+#define SRAM_BSS         FPC_SRAM_BSS("mpy")
+
 #ifdef __arm__
-#  define SRAM_BSS       \
-     __attribute__((section(".sram_bss.mpy,\"aw\",%nobits@")))
 #  define GET_SP(sp)     __asm__ ("mov %0, sp" : "=r" (sp))
 #else
-#  define SRAM_BSS
 #  define GET_SP(sp)     ((sp) = (uintptr_t)__builtin_frame_address(0))
 #endif
 
@@ -104,28 +105,16 @@ static pthread_mutex_t g_interplock = PTHREAD_MUTEX_INITIALIZER;
  ****************************************************************************/
 
 /* An interpreter's state (the port's and MicroPython's, 1.4 KB): in the
- * SRAM while the kernel's heap has room for it and SRAM_RESERVE more (a
- * flat build: the kernel's heap is the SRAM on the board), else in the
- * PSRAM.  The VM uses it all the time: from the PSRAM, through the XIP
- * cache, a method call was 40 % slower.
+ * SRAM if fpc_sram_zalloc() gives it room (the system's reserve kept),
+ * else in the PSRAM.  The VM uses it all the time: from the PSRAM, through
+ * the XIP cache, a method call was 40 % slower.
  */
 
 static void *state_alloc(size_t size)
 {
-#if defined(CONFIG_MM_KERNEL_HEAP) && !defined(CONFIG_BUILD_KERNEL) && \
-    !defined(CONFIG_BUILD_PROTECTED)
-  if (kmm_mallinfo().mxordblk >= size + SRAM_RESERVE)
-    {
-      void *p = kmm_zalloc(size);
+  void *p = fpc_sram_zalloc(size, "python");
 
-      if (p != NULL)
-        {
-          return p;
-        }
-    }
-#endif
-
-  return calloc(1, size);
+  return p != NULL ? p : calloc(1, size);
 }
 
 static void state_free(struct mp_nuttx_port_s *p)
@@ -136,16 +125,10 @@ static void state_free(struct mp_nuttx_port_s *p)
     }
 
   free(p->fpc);
-#if defined(CONFIG_MM_KERNEL_HEAP) && !defined(CONFIG_BUILD_KERNEL) && \
-    !defined(CONFIG_BUILD_PROTECTED)
-  if (kmm_heapmember(p))
+  if (!fpc_sram_free(p))
     {
-      kmm_free(p);
-      return;
+      free(p);
     }
-#endif
-
-  free(p);
 }
 
 /* What the input has now (without waiting) into the ring; Ctrl-C, while

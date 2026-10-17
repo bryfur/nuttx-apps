@@ -42,6 +42,7 @@
 #  include <nuttx/config.h>
 #  include <nuttx/kmalloc.h>
 #  include <malloc.h>
+#  include <fpc_sram.h>
 #endif
 
 #include "jit_internal.h"
@@ -8822,11 +8823,9 @@ bool wasm_jit_stats(wasm_module_inst_t module_inst,
 bool wasm_jit_sram_fits(uint32_t size)
 {
 #if defined(__NuttX__) && defined(CONFIG_ARCH_USE_TEXT_HEAP) && \
-    defined(CONFIG_MM_KERNEL_HEAP)
-  struct mallinfo mi = kmm_mallinfo();     /* (the kernel heap: the SRAM) */
-
+    defined(HAVE_FPC_SRAM)
   return size <= WASM_SRAM_CODE_MAX &&
-         (uint32_t)mi.mxordblk >= size + WASM_SRAM_FLOOR;
+         fpc_sram_avail() >= size + WASM_SRAM_HEADROOM;
 #else
   (void)size;
   return false;

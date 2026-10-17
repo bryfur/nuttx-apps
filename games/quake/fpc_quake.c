@@ -34,6 +34,8 @@
 #include <nuttx/input/kbd_codec.h>
 #include <nuttx/nx/nxkeys.h>
 
+#include <fpc_sram.h>
+
 #include "fpc_gpu.h"
 #include "fpcgl.h"
 
@@ -76,7 +78,6 @@ void fpcq_dq_wait(void);                  /* fpc_drawq.c */
 #define HEAP_SPARE    (128 * 1024)        /* PSRAM left to the system (-res) */
 
 #define SRAM_MAX      8                   /* Arrays in the SRAM at most */
-#define SRAM_RESERVE  (32 * 1024)         /* Left to the system */
 #define KEYQ          16                  /* Key events waiting */
 
 /****************************************************************************
@@ -88,7 +89,7 @@ static void *g_heapmem;
 static size_t g_heapsize;
 static void *g_hunk;                      /* fpcq_hunk(), apart from it */
 
-static void *g_sram[SRAM_MAX];            /* fpcq_fast_alloc()'s, kmm */
+static void *g_sram[SRAM_MAX];            /* fpcq_fast_alloc()'s, fpc_sram */
 static int g_nsram;
 static size_t g_sram_bytes;
 
@@ -210,7 +211,7 @@ static void heap_destroy(void)
 
   for (i = 0; i < g_nsram; i++)
     {
-      kmm_free(g_sram[i]);
+      fpc_sram_free(g_sram[i]);
     }
 
   g_nsram = 0;
@@ -253,15 +254,15 @@ static void res_memory(size_t *hunk)
   int k;
 
 #ifdef CONFIG_GAMES_QUAKE_SRAM
-  size_t sram = (size_t)kmm_mallinfo().mxordblk;
+  size_t sram = fpc_sram_avail();         /* (the system's reserve kept) */
 
-  if (sram >= px + SRAM_RESERVE)          /* The frame */
+  if (sram >= px)                         /* The frame */
     {
       inheap -= px;
       sram -= px;
     }
 
-  if (sram >= 2 * px + SRAM_RESERVE)      /* The depth buffer */
+  if (sram >= 2 * px)                     /* The depth buffer */
     {
       inheap -= 2 * px;
     }
@@ -526,15 +527,15 @@ void *fpcq_fast_alloc(size_t size, const char *what)
   void *p;
 
 #ifdef CONFIG_GAMES_QUAKE_SRAM
-  if (g_nsram < SRAM_MAX && kmm_mallinfo().mxordblk >= size + SRAM_RESERVE)
+  if (g_nsram < SRAM_MAX)
     {
-      p = kmm_zalloc(size);
+      p = fpc_sram_zalloc(size, what);
       if (p != NULL)
         {
           g_sram[g_nsram++] = p;
           g_sram_bytes += size;
-          printf("quake: %s in the SRAM (%zu bytes; %zu KB left in one "
-                 "piece)\n", what, size, kmm_mallinfo().mxordblk / 1024);
+          printf("quake: %s in the SRAM (%zu bytes; %zu KB more to give)\n",
+                 what, size, fpc_sram_avail() / 1024);
           return p;
         }
     }

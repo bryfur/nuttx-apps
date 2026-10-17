@@ -31,12 +31,13 @@
                                   * SRAM when wasm_jit_sram_fits()) */
 
 /* Code (JIT or AOT) goes to the internal SRAM by default when it is at
- * most WASM_SRAM_CODE_MAX bytes and the SRAM keeps a free block of
- * WASM_SRAM_FLOOR bytes beside it
+ * most WASM_SRAM_CODE_MAX bytes and fpc_sram (fpc_sram.h) could give
+ * WASM_SRAM_HEADROOM bytes more beside it: a free block of 96 KB stays,
+ * with the system's reserve (FPC_SRAM_RESERVE, 32 KB)
  */
 
 #define WASM_SRAM_CODE_MAX  (160 * 1024)
-#define WASM_SRAM_FLOOR     (96 * 1024)
+#define WASM_SRAM_HEADROOM  (64 * 1024)
 
 struct wasm_jit_stats_s
 {
