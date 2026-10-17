@@ -390,3 +390,54 @@
 (assert_trap (invoke "pmerge" (i32.const 65534) (i32.const 0)) "out of bounds memory access")
 (assert_return (invoke "pmerge2" (i32.const 65520) (i32.const 0)) (i32.const 0))
 (assert_trap (invoke "pmerge2" (i32.const 65524) (i32.const 1)) "out of bounds memory access")
+
+;; br_table after an i32.and whose result a local.set took (the hint): the
+;; masked value is gone, and the index br_table pops was never masked, so
+;; its range check must stay (2026-10-17: it was skipped, a tbh with an
+;; index the module chose: a sandbox escape)
+
+(module
+  (func (export "brmask") (param $x i32) (result i32)
+    (local $m i32)
+    (block $d
+      (block $b1
+        (block $b0
+          (i32.add (local.get $x) (i32.const 0))
+          (local.set $m (i32.and (local.get $x) (i32.const 1)))
+          (br_table $b0 $b1 $d))
+        (return (i32.const 10)))
+      (return (i32.const 11)))
+    (i32.add (i32.const 99) (local.get $m)))
+  (func (export "brmask2") (param $x i32) (result i32)
+    (local $m i32)
+    (block $d
+      (block $b1
+        (block $b0
+          (i32.add (local.get $x) (local.get $x))
+          (local.set $m (i32.and (local.get $x) (i32.const 1)))
+          (br_table $b0 $b1 $d))
+        (return (i32.const 20)))
+      (return (i32.const 21)))
+    (i32.add (i32.const 199) (local.get $m)))
+  (func (export "brmask3") (param $x i32) (result i32)
+    (block $d
+      (block $b1
+        (block $b0
+          (br_table $b0 $b1 $d (i32.and (local.get $x) (i32.const 1))))
+        (return (i32.const 30)))
+      (return (i32.const 31)))
+    (i32.const 32))
+)
+(assert_return (invoke "brmask" (i32.const 0)) (i32.const 10))
+(assert_return (invoke "brmask" (i32.const 1)) (i32.const 11))
+(assert_return (invoke "brmask" (i32.const 2)) (i32.const 99))
+(assert_return (invoke "brmask" (i32.const 0x100000)) (i32.const 99))
+(assert_return (invoke "brmask" (i32.const 0x100001)) (i32.const 100))
+(assert_return (invoke "brmask" (i32.const -1)) (i32.const 100))
+(assert_return (invoke "brmask2" (i32.const 0)) (i32.const 20))
+(assert_return (invoke "brmask2" (i32.const 1)) (i32.const 200))
+(assert_return (invoke "brmask2" (i32.const 0x80000)) (i32.const 199))
+(assert_return (invoke "brmask2" (i32.const 0x40000001)) (i32.const 200))
+(assert_return (invoke "brmask3" (i32.const 0)) (i32.const 30))
+(assert_return (invoke "brmask3" (i32.const 1)) (i32.const 31))
+(assert_return (invoke "brmask3" (i32.const 0x100001)) (i32.const 31))

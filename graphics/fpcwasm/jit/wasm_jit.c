@@ -309,7 +309,8 @@ typedef struct jc_s
   uint32_t opno;                  /* Instructions compiled (numbering) */
   uint32_t bound_at;              /* Where the last label was bound */
   uint32_t mask_op;               /* The last i32.and of a constant: its */
-  uint32_t mask_k;                /* number and its constant */
+  uint32_t mask_k;                /* number, its constant and the register */
+  int mask_reg;                   /* its result is in (left on the stack) */
   uint32_t nloop;                 /* Loops so far (numbering them) */
   uint8_t loc_max;                /* Core registers for locals at most */
   int hint;                       /* local.set/tee follows: its local, or -1 */
@@ -1719,6 +1720,8 @@ static const uint8_t *finish_hint(jc_t *c, const uint8_t *p)
       uint8_t op = *p++;
       uint32_t l = rd_u32(&p);
       val_t v = pop(c);
+
+      c->mask_op = UINT32_MAX - 1;      /* The value is gone: no mask */
 
       if (v.kind != V_REG || v.r != c->lreg[l] ||
           (IS64(c->ltype[l]) && v.r2 != c->lreg2[l]))
@@ -3633,10 +3636,18 @@ static void op_i32_bin(jc_t *c, uint8_t op)
                   rd = alloc_dest(c);
                   t_dp_imm(&c->fb, dp, 0, rd, ra, enc);
                   push_reg(c, T_I32, rd, -1);
-                  if (op == WASM_OP_I32_AND)
+
+                  /* Only a masked value left on the stack: one stored by
+                   * the local.set right after (the hint) is popped in the
+                   * same step, without a number of its own, and a
+                   * br_table next would take another value as masked
+                   */
+
+                  if (op == WASM_OP_I32_AND && !c->hint_used)
                     {
-                      c->mask_op = c->opno;
-                      c->mask_k  = k;
+                      c->mask_op  = c->opno;
+                      c->mask_k   = k;
+                      c->mask_reg = rd;
                     }
 
                   return;
@@ -6795,7 +6806,8 @@ static void op_br_table(jc_t *c, const uint8_t **pp)
 
   dflt = frag[n] < 0 ? -1 - frag[n] : frag[n];
   if (!(vi.kind == V_LOCAL && c->lkmax[vi.local] < n) &&
-      !(vi.kind == V_REG && c->mask_op + 1 == c->opno && c->mask_k < n))
+      !(vi.kind == V_REG && vi.r == c->mask_reg &&
+        c->mask_op + 1 == c->opno && c->mask_k < n))
     {
       cmp_imm(c, ri, n);
       bcc_to(c, CC_HS, dflt);
