@@ -237,7 +237,7 @@ GAMELD     = nxdoom.ld
 endif
 endif
 
-# A loadable module (CONFIG_GAMES_NXDOOM=m, /mnt/sd0/bin/nxdoom): the
+# A loadable module (CONFIG_GAMES_NXDOOM=m, /system/bin/nxdoom): the
 # loader gives the game fresh variables every run, and its code and
 # variables are in memory only while it runs (the renderer's NXDOOM_FAST
 # code and NXDOOM_SRAM variables in the SRAM, the board's fpc_modheap.c).
