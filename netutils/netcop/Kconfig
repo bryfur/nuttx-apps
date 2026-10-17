@@ -25,7 +25,7 @@ config NETCOP_DEVPATH
 
 config NETCOP_BAUD
 	int "Speed asked for once the link is up (0: stay at the first)"
-	default 20000000 if FPC_NETCOP_SPI
+	default 25000000 if FPC_NETCOP_SPI
 	default 3000000
 	---help---
 		UART: the baud rate (the link starts at 115200).  SPI
