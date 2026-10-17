@@ -281,11 +281,13 @@ void mp_nuttx_heap_free(void *ptr);
 
 /* The VM's loop and what it calls most, in the SRAM (copied there at
  * boot with .data) rather than run from the flash through the XIP cache
+ * (fpc_place.h; a section each)
  */
 
-#ifdef __arm__
-#  define MP_NUTTX_FAST(f) \
-     __attribute__((section(".time_critical.mpy." #f))) f
+#include <fpc_place.h>
+
+#ifdef CONFIG_ARCH_CHIP_RP23XX
+#  define MP_NUTTX_FAST(f) FPC_SRAM_CODE("mpy." #f) f
 #  define MICROPY_WRAP_MP_EXECUTE_BYTECODE(f) MP_NUTTX_FAST(f)
 #  define MICROPY_WRAP_MP_MAP_LOOKUP(f)       MP_NUTTX_FAST(f)
 #  define MICROPY_WRAP_MP_LOAD_GLOBAL(f)      MP_NUTTX_FAST(f)

@@ -29,6 +29,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <fpc_place.h>
 #include "tri_isa.h"
 #include "tri_pad.h"
 #include "tri_assets.h"
@@ -105,13 +106,8 @@ typedef struct {
 // tri_psram_flush() first. tri_psram_size() is 0 on a board without the chip,
 // in which case TRI_PSRAM arrays must not be touched and alloc returns NULL.
 // ============================================================================
-#ifdef CONFIG_ARCH_SIM
-#define TRI_PSRAM __attribute__((aligned(4)))
-#else
-// (A .bss name, so it is bss: no zeros in a module's file; the board's
-// linker script puts .bss.psram* in the PSRAM)
-#define TRI_PSRAM __attribute__((section(".bss.psram"), aligned(4)))
-#endif
+// (fpc_place.h: no zeros in a module's file)
+#define TRI_PSRAM FPC_PSRAM_BSS("tri") __attribute__((aligned(4)))
 size_t tri_psram_size(void);                // bytes present (8 MB), 0 if absent
 size_t tri_psram_free(void);                // bytes still available to tri_psram_alloc()
 void  *tri_psram_alloc(size_t bytes);       // 16-byte aligned, zeroed; NULL when it does not fit

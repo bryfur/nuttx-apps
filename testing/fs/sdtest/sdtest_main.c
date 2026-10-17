@@ -62,6 +62,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <fpc_place.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -86,8 +88,8 @@
 
 /* In the SRAM while the module runs (fpc_modheap.c), if there is room */
 
-static uint8_t g_sram[SRAM_BYTES] __attribute__((section(".sram.sdtest"),
-                                                 aligned(16)));
+static uint8_t g_sram[SRAM_BYTES] FPC_SRAM_BSS("sdtest")
+                                  __attribute__((aligned(16)));
 static uint32_t g_crctab[256];
 static uint32_t g_rand;
 static uint32_t g_sizes[512];

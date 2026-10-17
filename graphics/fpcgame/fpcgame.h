@@ -42,6 +42,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <fpc_place.h>
+
 #ifdef __cplusplus
 extern "C"
 {
@@ -92,15 +94,7 @@ void fg_script(FAR const char *script);
  * program's statics share for good in this flat build: FG_PSRAM
  */
 
-#ifdef CONFIG_ARCH_SIM
-#  define FG_PSRAM __attribute__((aligned(4)))
-#else
-/* (A .bss name, so the compiler makes it bss: no zeros in a module's file;
- * the board's linker script puts .bss.psram* in the PSRAM)
- */
-
-#  define FG_PSRAM __attribute__((section(".bss.psram"), aligned(4)))
-#endif
+#define FG_PSRAM FPC_PSRAM_BSS("fg") __attribute__((aligned(4)))
 
 int fg_width(void);                       /* The canvas */
 int fg_height(void);

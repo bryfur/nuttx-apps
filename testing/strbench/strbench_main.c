@@ -41,19 +41,19 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <fpc_place.h>
+
 #include "strcheck.h"
 #include "strbench.h"
 
 #define DWT_CTRL  (*(volatile uint32_t *)0xe0001000)
 #define DWT_CYC   (*(volatile uint32_t *)0xe0001004)
 
-#define FAST      __attribute__((section(".time_critical.strb"), noinline))
+#define FAST      FPC_SRAM_CODE("strb") __attribute__((noinline))
 
-/* The SRAM buffers (the module loader puts .sram* sections there): no
- * bits in the file
- */
+/* The SRAM buffers (the module loader puts them there: fpc_place.h) */
 
-#define SRAM      __attribute__((section(".sram_bss.strb,\"aw\",%nobits@")))
+#define SRAM      FPC_SRAM_BSS("strb")
 
 #define BUFSZ     (4096 + 64)
 #define REPS      32

@@ -69,7 +69,7 @@
  * bytes on (gnu-elf.ld): _start calls a constructor at address 0.
  */
 
-volatile uint8_t fpcq_sio_on[4] __attribute__((section(".sram.quake")));
+volatile uint8_t fpcq_sio_on[4] FPC_SRAM_DATA("quake");
 
 /****************************************************************************
  * Private Data

@@ -15,6 +15,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <fpc_place.h>
+
 void *fpcq_malloc(size_t size);
 void *fpcq_calloc(size_t n, size_t size);
 void *fpcq_realloc(void *ptr, size_t size);
@@ -60,11 +62,12 @@ void fpcq_palette_parts(const unsigned char *base, int r, int g, int b,
                         int alpha);               /* view.c: the base palette and the tint */
 
 /* A function the renderer spends its time in: run from the SRAM rather
- * than from the flash through the XIP cache the game's data in the PSRAM
- * thrashes (.time_critical, copied to the SRAM at boot)
+ * than from the PSRAM through the XIP cache the game's data thrashes (the
+ * module loader puts it in the SRAM while the game runs, if there is room:
+ * fpc_place.h).  The name is the port's: quakegeneric's files use it too.
  */
 
-#define FPCQ_FAST __attribute__((section(".time_critical.quake")))
+#define FPCQ_FAST FPC_SRAM_CODE("quake")
 
 /* Where a frame's time goes (us, summed over a timedemo; fpc_drawq.c prints
  * it at the end): the game's core's parts, the world's spans by the core

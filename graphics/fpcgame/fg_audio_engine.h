@@ -15,21 +15,17 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include <fpc_place.h>
+
 /* TRI's "in RAM": the engine's render loops (__not_in_flash_func) and the
  * tables and voices they read every frame (FG_AUDIO_SRAM) in the internal
- * SRAM while the game runs (the board's module loader puts .time_critical*
- * and .sram* sections there), not in the PSRAM behind the XIP cache the
+ * SRAM while the game runs (fpc_place.h: the module loader puts them
+ * there if there is room), not in the PSRAM behind the XIP cache the
  * game's own code and data thrash.  The simulator: where they are.
  */
 
-#if defined(__arm__)
-#  define __not_in_flash_func(f) \
-     __attribute__((section(".time_critical.fgaudio"))) f
-#  define FG_AUDIO_SRAM __attribute__((section(".sram.fgaudio")))
-#else
-#  define __not_in_flash_func(f) f
-#  define FG_AUDIO_SRAM
-#endif
+#define __not_in_flash_func(f) FPC_SRAM_CODE("fgaudio") f
+#define FG_AUDIO_SRAM FPC_SRAM_BSS("fgaudio")
 
 uint32_t time_us_32(void);
 

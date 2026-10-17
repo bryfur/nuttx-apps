@@ -104,7 +104,7 @@ static struct
   pthread_t thread;
   void *stack;                            /* The game's heap: the PSRAM */
   sem_t go;
-} g_dq __attribute__((section(".sram.quake")));   /* In the SRAM: spun on
+} g_dq FPC_SRAM_DATA("quake");                    /* In the SRAM: spun on
                                                    * by both cores */
 
 /* g_dq's read-modify-writes (the claim, the counts, the column word) are

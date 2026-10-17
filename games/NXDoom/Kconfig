@@ -211,10 +211,10 @@ config GAMES_NXDOOM_FASTCODE
 	---help---
 		The column and span drawers, the wall loop, the plane mapper,
 		the BSP walk and the fixed-point helpers (about 6 KB) in
-		.time_critical, which the board's linker script places in the
-		SRAM with .data, and the variables they use all the time (the
-		clip and plane arrays, the light tables, the wall loop's
-		state: about 25 KB) in .sram_bss.nxdoom: out of the 16 KB XIP
+		.time_critical.nxdoom, and the variables they use all the time
+		(the clip and plane arrays, the light tables, the wall loop's
+		state: about 29 KB) in .sram_bss.nxdoom: in the SRAM while the
+		game runs, if there is room (fpc_place.h): out of the 16 KB XIP
 		cache that the code from the flash and the game's data in the
 		PSRAM share, where every texture and flat read evicts them.
 		The timedemo, 300 MHz: 29.2 frames a second without, 33.9 with
