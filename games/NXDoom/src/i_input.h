@@ -67,9 +67,9 @@ void i_stop_text_input(void);
 
 void i_handle_keyboard_event(struct keyboard_event_s *kevent);
 
-#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
-struct nx_key_s;
-void i_handle_nx_key(const struct nx_key_s *key);
+#ifdef CONFIG_GAMES_NXDOOM_GAME
+struct fpc_event_s;
+void i_handle_fpc_key(const struct fpc_event_s *e);
 void i_release_keys(void);
 void i_handle_desk_mouse(int buttons, int dx, int dy);
 #endif

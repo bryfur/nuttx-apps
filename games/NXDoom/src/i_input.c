@@ -32,8 +32,8 @@
 
 #include <nuttx/input/kbd_codec.h>
 
-#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
-#include <nuttx/nx/nxkeys.h>
+#ifdef CONFIG_GAMES_NXDOOM_GAME
+#include <fpc/game.h>
 #endif
 
 #include "d_event.h"
@@ -483,54 +483,59 @@ void i_handle_keyboard_event(struct keyboard_event_s *kevent)
   d_post_event(&event);
 }
 
-#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
+#ifdef CONFIG_GAMES_NXDOOM_GAME
 
 /* The keys held down (Doom's codes), to let go of when the window is left */
 
 static uint8_t g_keysdown[256 / 8];
 
 /****************************************************************************
- * Name: i_handle_nx_key
+ * Name: i_handle_fpc_key
  *
  * Description:
- *   A key event from the desktop (nuttx/nx/nxkeys.h): which key, pressed
- *   (or repeated) or released, what it types.
+ *   A key event of the game library's (fpc/game.h: FPC_EV_KEY_DOWN, _UP):
+ *   which key (FPC_KEY_*, or the character), what it types.
  *
  ****************************************************************************/
 
-void i_handle_nx_key(const struct nx_key_s *key)
+void i_handle_fpc_key(const struct fpc_event_s *e)
 {
   event_t event;
   int doomkey;
 
-  if (NX_KEY_ISSPECIAL(key->code))
+  switch (e->code)
     {
-      doomkey = translate_speckey(NX_KEY_KEYCODE(key->code));
-    }
-  else
-    {
-      switch (key->code)
-        {
-          case NX_KEY_ENTER:
-            doomkey = KEY_ENTER;
-            break;
-
-          case NX_KEY_TAB:
-            doomkey = KEY_TAB;
-            break;
-
-          case NX_KEY_ESCAPE:
-            doomkey = KEY_ESCAPE;
-            break;
-
-          case NX_KEY_BACKSPACE:
-            doomkey = KEY_BACKSPACE;
-            break;
-
-          default:
-            doomkey = key->code >= 0x20 && key->code < 0x7f ? key->code : 0;
-            break;
-        }
+      case FPC_KEY_LEFT:      doomkey = KEY_LEFTARROW;  break;
+      case FPC_KEY_RIGHT:     doomkey = KEY_RIGHTARROW; break;
+      case FPC_KEY_UP:        doomkey = KEY_UPARROW;    break;
+      case FPC_KEY_DOWN:      doomkey = KEY_DOWNARROW;  break;
+      case FPC_KEY_ENTER:     doomkey = KEY_ENTER;      break;
+      case FPC_KEY_TAB:       doomkey = KEY_TAB;        break;
+      case FPC_KEY_ESC:       doomkey = KEY_ESCAPE;     break;
+      case FPC_KEY_BACKSPACE: doomkey = KEY_BACKSPACE;  break;
+      case FPC_KEY_DELETE:    doomkey = KEY_DEL;        break;
+      case FPC_KEY_INSERT:    doomkey = KEY_INS;        break;
+      case FPC_KEY_HOME:      doomkey = KEY_HOME;       break;
+      case FPC_KEY_END:       doomkey = KEY_END;        break;
+      case FPC_KEY_PAGEUP:    doomkey = KEY_PGUP;       break;
+      case FPC_KEY_PAGEDOWN:  doomkey = KEY_PGDN;       break;
+      case FPC_KEY_PAUSE:     doomkey = KEY_PAUSE;      break;
+      case FPC_KEY_CAPSLOCK:  doomkey = KEY_CAPSLOCK;   break;
+      case FPC_KEY_CTRL:      doomkey = KEY_RCTRL;      break;   /* Fire */
+      case FPC_KEY_SHIFT:     doomkey = KEY_RSHIFT;     break;   /* Run */
+      case FPC_KEY_ALT:       doomkey = KEY_RALT;       break;   /* Strafe */
+      default:
+        if (e->code >= FPC_KEY_F1 && e->code < FPC_KEY_F1 + 12)
+          {
+            doomkey = KEY_F1 + (e->code - FPC_KEY_F1);
+            doomkey = e->code == FPC_KEY_F1 + 10 ? KEY_F11 :
+                      e->code == FPC_KEY_F1 + 11 ? KEY_F12 : doomkey;
+          }
+        else
+          {
+            doomkey = e->code >= 0x20 && e->code < 0x7f ? e->code : 0;
+          }
+        break;
     }
 
   if (doomkey <= 0 || doomkey > 0xff)
@@ -540,11 +545,11 @@ void i_handle_nx_key(const struct nx_key_s *key)
 
   memset(&event, 0, sizeof(event));
   event.data1 = doomkey;
-  if ((key->flags & NX_KEY_RELEASE) != 0)
+  if (e->type == FPC_EV_KEY_UP)
     {
       if ((g_keysdown[doomkey / 8] & (1 << (doomkey % 8))) == 0)
         {
-          return;                      /* Pressed before the window was */
+          return;                      /* Pressed before the game had it */
         }
 
       g_keysdown[doomkey / 8] &= ~(1 << (doomkey % 8));
@@ -554,8 +559,8 @@ void i_handle_nx_key(const struct nx_key_s *key)
     {
       g_keysdown[doomkey / 8] |= 1 << (doomkey % 8);
       event.type  = ev_keydown;
-      event.data2 = key->code >= 0x20 && key->code < 0x7f ? key->code : 0;
-      event.data3 = key->ch >= 0x20 && key->ch < 0x7f ? key->ch : 0;
+      event.data2 = e->code >= 0x20 && e->code < 0x7f ? e->code : 0;
+      event.data3 = e->ch >= 0x20 && e->ch < 0x7f ? e->ch : 0;
     }
 
   d_post_event(&event);
@@ -609,7 +614,7 @@ void i_handle_desk_mouse(int buttons, int dx, int dy)
   event.data3 = 0;
   d_post_event(&event);
 }
-#endif /* CONFIG_GAMES_NXDOOM_DESKTOP */
+#endif /* CONFIG_GAMES_NXDOOM_GAME */
 
 void i_start_text_input(int x1, int y1, int x2, int y2)
 {

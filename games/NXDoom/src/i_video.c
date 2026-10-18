@@ -39,11 +39,10 @@
 
 #include <nuttx/kmalloc.h>
 
-#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
-#include <graphics/deskgame.h>
-#endif
-#ifdef CONFIG_GAMES_NXDOOM_FULLSCREEN
-#include "i_fpcscreen.h"
+#ifdef CONFIG_GAMES_NXDOOM_GAME
+#include <fpc/game.h>
+#include "d_loop.h"
+#include "i_timer.h"
 #endif
 
 #include "config.h"
@@ -173,13 +172,22 @@ static bool g_scrnbuf_sram;               /* scrnbuf from kmm_malloc() */
 
 static struct argbcolor_s g_palette[256];
 
-#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
-/* The palette as the desktop takes it: 256 x R, G, B */
+#ifdef CONFIG_GAMES_NXDOOM_GAME
+/* The palette as the game library takes it (RGB565); -framehash: an
+ * FNV-1a of the first frame of every tenth tic and its palette, logged at
+ * the end (a timedemo draws the same frames every time, but for the wipe,
+ * which goes by the clock: a change to the renderer that should not
+ * change a pixel can be checked)
+ */
 
-static uint8_t g_rgbpalette[256 * 3];
+static uint16_t g_lut565[256];
+static bool g_hash;
+static uint32_t g_fnv;
+static int g_hashed;
+static uint32_t g_nhashed;
 #endif
 
-#ifndef CONFIG_GAMES_NXDOOM_DESKTOP
+#ifndef CONFIG_GAMES_NXDOOM_GAME
 /* The same palette, pre-converted to the pixel format of the frame buffer.
  * Doing the conversion once per palette change instead of once per pixel
  * keeps blit_screen() down to a lookup and a store.
@@ -231,7 +239,7 @@ static grabmouse_callback_t grabmouse_callback = NULL;
 
 /* Does the window currently have focus? */
 
-#ifndef CONFIG_GAMES_NXDOOM_DESKTOP
+#ifndef CONFIG_GAMES_NXDOOM_GAME
 static boolean window_focused = true;
 #endif
 
@@ -324,7 +332,7 @@ unsigned int joywait = 0;
  * Private Functions
  ****************************************************************************/
 
-#ifndef CONFIG_GAMES_NXDOOM_DESKTOP
+#ifndef CONFIG_GAMES_NXDOOM_GAME
 /****************************************************************************
  * Name: update_native_palette
  *
@@ -545,69 +553,48 @@ static void set_video_mode(void)
 {
 }
 
-#endif /* !CONFIG_GAMES_NXDOOM_DESKTOP */
+#endif /* !CONFIG_GAMES_NXDOOM_GAME */
 
-#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
+#ifdef CONFIG_GAMES_NXDOOM_GAME
 /****************************************************************************
- * Name: i_get_desk_events
+ * Name: i_get_game_events
  *
  * Description:
- *   Wait while the window is not active, quit if it has been closed, then
- *   take the keys and the mouse.
+ *   The keys and the mouse as they came (fpc/game.h); every key let go of
+ *   when the game's window is left.
  *
  ****************************************************************************/
 
-static void i_get_desk_events(void)
+static void i_get_game_events(void)
 {
-  FAR struct deskgame_s *g = i_deskgame();
-  struct deskgame_input_s in;
-  int waited;
+  struct fpc_event_s e;
 
-#ifdef CONFIG_GAMES_NXDOOM_FULLSCREEN
-  if (fpcscreen_active())
+  while (game_event(&e))
     {
-      struct nx_key_s key;
+      int b = ((e.buttons & FPC_MOUSE_LEFT) ? 1 : 0) |
+              ((e.buttons & FPC_MOUSE_MIDDLE) ? 2 : 0) |
+              ((e.buttons & FPC_MOUSE_RIGHT) ? 4 : 0);
 
-      /* Full screen: the keys are the game's (no pause: the window that
-       * would say is hidden; the mouse stays the desktop's)
-       */
-
-      while (fpcscreen_key(&key))
+      switch (e.type)
         {
-          i_handle_nx_key(&key);
-        }
-
-      return;
-    }
-#endif
-
-  waited = deskgame_wait(g);
-  if (waited < 0)
-    {
-      i_quit();
-    }
-  else if (waited > 0)
-    {
-      i_skip_time(waited);
-    }
-
-  while (deskgame_input(g, &in))
-    {
-      switch (in.type)
-        {
-          case DESKGAME_KEY:
-            i_handle_nx_key(&in.key);
+          case FPC_EV_KEY_DOWN:
+          case FPC_EV_KEY_UP:
+            i_handle_fpc_key(&e);
             break;
 
-          case DESKGAME_MOUSE:
+          case FPC_EV_MOUSE_MOVE:
+          case FPC_EV_MOUSE_DOWN:
+          case FPC_EV_MOUSE_UP:
             if (usemouse && !nomouse &&
                 (grabmouse_callback == NULL || grabmouse_callback()))
               {
-                i_handle_desk_mouse(in.buttons, in.dx, in.dy);
+                i_handle_desk_mouse(b, e.type == FPC_EV_MOUSE_MOVE ?
+                                    e.dx : 0, 0);
               }
             break;
 
-          case DESKGAME_FOCUS:
+          case GAME_EV_FOCUS:
+          case GAME_EV_WINDOW:
             i_release_keys();
             if (usemouse && !nomouse)
               {
@@ -624,8 +611,8 @@ static void i_get_desk_events(void)
 
 static void i_get_event(void)
 {
-#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
-  i_get_desk_events();
+#ifdef CONFIG_GAMES_NXDOOM_GAME
+  i_get_game_events();
 #endif
 #ifdef CONFIG_GAMES_NXDOOM_KEYBOARD
   struct keyboard_event_s kbdevent;
@@ -665,10 +652,15 @@ void i_shutdown_graphics(void)
       return;
     }
 
-#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
-#ifdef CONFIG_GAMES_NXDOOM_FULLSCREEN
-  fpcscreen_close();                       /* The display back to the desktop */
-#endif
+#ifdef CONFIG_GAMES_NXDOOM_GAME
+  if (g_hash)
+    {
+      syslog(LOG_INFO, "nxdoom: frame hash %08x over %u frames, the last "
+             "at tic %d\n", (unsigned)g_fnv, (unsigned)g_nhashed,
+             g_hashed);
+    }
+
+  game_close();                            /* The display back to the desktop */
 #ifdef CONFIG_GAMES_NXDOOM_SRAM
   if (g_scrnbuf_sram)
     {
@@ -710,7 +702,7 @@ void i_start_tic(void)
 
   i_get_event();
 
-#ifndef CONFIG_GAMES_NXDOOM_DESKTOP
+#ifndef CONFIG_GAMES_NXDOOM_GAME
   if (usemouse && !nomouse && window_focused)
     {
       i_read_mouse();
@@ -771,20 +763,53 @@ void i_finish_update(void)
 
   v_draw_disk_icon();
 
-#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
-#ifdef CONFIG_GAMES_NXDOOM_FULLSCREEN
-  if (fpcscreen_active())
+#ifdef CONFIG_GAMES_NXDOOM_GAME
+  if (palette_to_set)
     {
-      fpcscreen_frame(g_graphics_state.scrnbuf,
-                      palette_to_set ? g_rgbpalette : NULL);
+      game_palette(g_lut565, sizeof(g_lut565));
+      palette_to_set = false;
     }
-  else
-#endif
-  /* To the desktop, which scales it to the window */
 
-  deskgame_frame(i_deskgame(), g_graphics_state.scrnbuf,
-                 palette_to_set ? g_rgbpalette : NULL);
-  palette_to_set = false;
+  if (g_hash && gametic > 0 && gametic % 10 == 0 && gametic != g_hashed)
+    {
+      uint32_t h = g_fnv;
+      int k;
+
+      for (k = 0; k < SCREENWIDTH * SCREENHEIGHT; k++)
+        {
+          h = (h ^ g_graphics_state.scrnbuf[k]) * 16777619u;
+        }
+
+      for (k = 0; k < 256; k++)
+        {
+          h = (h ^ g_lut565[k]) * 16777619u;
+        }
+
+      g_fnv = h;
+      g_hashed = gametic;
+      g_nhashed++;
+    }
+
+  /* Shown at once (the game paces itself by its tics); held while its
+   * window is not the active one: that time skipped
+   */
+
+  game_present8(g_graphics_state.scrnbuf, SCREENWIDTH * SCREENHEIGHT);
+  {
+    uint32_t t0 = fpc_time_ms();
+    uint32_t waited;
+
+    if (!game_frame())
+      {
+        i_quit();
+      }
+
+    waited = fpc_time_ms() - t0;
+    if (waited > 100)
+      {
+        i_skip_time((int)waited);
+      }
+  }
 #else
   if (palette_to_set)
     {
@@ -823,10 +848,10 @@ void i_set_palette(byte *doompalette)
       g_palette[i].r = gammatable[usegamma][*doompalette++] & ~3;
       g_palette[i].g = gammatable[usegamma][*doompalette++] & ~3;
       g_palette[i].b = gammatable[usegamma][*doompalette++] & ~3;
-#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
-      g_rgbpalette[3 * i]     = g_palette[i].r;
-      g_rgbpalette[3 * i + 1] = g_palette[i].g;
-      g_rgbpalette[3 * i + 2] = g_palette[i].b;
+#ifdef CONFIG_GAMES_NXDOOM_GAME
+      g_lut565[i] = (uint16_t)((g_palette[i].r >> 3) << 11 |
+                               (g_palette[i].g >> 2) << 5 |
+                               (g_palette[i].b >> 3));
 #endif
     }
 
@@ -1059,24 +1084,34 @@ void i_get_window_position(int *x, int *y, int w, int h)
     }
 }
 
-#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
+#ifdef CONFIG_GAMES_NXDOOM_GAME
 /****************************************************************************
  * Name: i_init_graphics
  *
  * Description:
- *   In a window of the desktop: only the 8-bit screen DOOM draws into.
- *   The desktop scales it, and the frame buffer is not touched.
+ *   On the game library (fpc/game.h): the 8-bit screen DOOM draws into,
+ *   handed over whole each frame (game_present8()), full screen or in a
+ *   window, 200 rows shown as 240.
  *
  ****************************************************************************/
 
 void i_init_graphics(void)
 {
   byte *doompal;
+  int ret;
 
-  if (i_deskgame() == NULL)
+  ret = game_open(SCREENWIDTH, SCREENHEIGHT,
+                  GAME_ANY | GAME_TALL | GAME_KEEP_ESC | GAME_UNPACED |
+                  GAME_FOCUS_HOLD);
+  if (ret < 0)
     {
-      i_error("nxdoom draws in a window of the desktop: start Doom there");
+      i_error("No display for the game: %d", ret);
     }
+
+  g_hash = m_check_parm("-framehash") > 0;
+  g_fnv = 2166136261u;
+  g_hashed = 0;
+  g_nhashed = 0;
 
 #ifdef CONFIG_GAMES_NXDOOM_STATIC_SCRNBUF
   g_graphics_state.scrnbuf = g_scrnbuf;
@@ -1108,15 +1143,10 @@ void i_init_graphics(void)
   i_video_buffer = g_graphics_state.scrnbuf;
   v_restore_buffer();
 
-#ifdef CONFIG_GAMES_NXDOOM_FULLSCREEN
-  /* Full screen unless -window (or the GPU or the desktop will not) */
-
-  if (!m_check_parm("-window") && fpcscreen_open())
+  if (m_check_parm("-window"))
     {
-      deskgame_status(i_deskgame(), "Doom is playing full screen: "
-                      "Quit Game in its menu ends it");
+      game_window(1);
     }
-#endif
 
   g_graphics_state.inited = true;
   i_at_exit(i_shutdown_graphics, true);
@@ -1290,7 +1320,7 @@ void i_init_graphics(void)
 
   i_at_exit(i_shutdown_graphics, true);
 }
-#endif /* CONFIG_GAMES_NXDOOM_DESKTOP */
+#endif /* CONFIG_GAMES_NXDOOM_GAME */
 
 /* Bind all variables controlling video options into the configuration
  * file system.

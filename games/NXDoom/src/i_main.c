@@ -27,8 +27,10 @@
  *     and bss, one block each: nxdoom.ld);
  *   - a heap of its own (CONFIG_GAMES_NXDOOM_HEAPSIZE), given back whole
  *     at the end;
- *   - an exit (i_exit(): quitting, errors) that gives all that back, and
- *     tells the desktop how the game ended (CONFIG_GAMES_NXDOOM_DESKTOP).
+ *   - an exit (i_exit(): quitting, errors) that gives all that back;
+ *   - (CONFIG_GAMES_NXDOOM_GAME) with no -iwad, an IWAD from $HOME, /home
+ *     or /games/doom, its configuration and saves in .doom/ beside it; or,
+ *     with none there, a screen that says where to put one.
  *
  ****************************************************************************/
 
@@ -52,8 +54,10 @@
 #  include <nuttx/mm/mm.h>
 #endif
 
-#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
-#  include <graphics/deskgame.h>
+#ifdef CONFIG_GAMES_NXDOOM_GAME
+#  include <dirent.h>
+#  include <strings.h>
+#  include <fpc/game.h>
 #endif
 
 #include "doomtype.h"
@@ -123,8 +127,15 @@ static unsigned long g_purged;          /* Cache let go of for room */
 
 static char g_exiterror[160];
 
-#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
-static FAR struct deskgame_s *g_deskgame;
+#ifdef CONFIG_GAMES_NXDOOM_GAME
+static const char * const g_iwads[] =
+{
+  "doom.wad", "doom2.wad", "plutonia.wad", "tnt.wad", "doom1.wad",
+  "freedoom1.wad", "freedoom2.wad", "freedm.wad"
+};
+
+static char g_wad[160];                 /* The IWAD found */
+static char g_config[160];              /* ... its .doom/ */
 #endif
 
 /****************************************************************************
@@ -364,13 +375,10 @@ static void nxdoom_end(int code)
   heap_destroy();
 #endif
 
-#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
-  if (g_deskgame != NULL)
+#ifdef CONFIG_GAMES_NXDOOM_GAME
+  if (code != 0 && g_exiterror[0] != '\0')
     {
-      deskgame_detach(g_deskgame, code == 0 ? NULL :
-                      g_exiterror[0] != '\0' ? g_exiterror :
-                      "The game ended with an error");
-      g_deskgame = NULL;
+      fprintf(stderr, "nxdoom: %s\n", g_exiterror);
     }
 #endif
 
@@ -422,18 +430,97 @@ void i_exit_error(const char *msg)
     }
 }
 
-#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
+#ifdef CONFIG_GAMES_NXDOOM_GAME
 /****************************************************************************
- * Name: i_deskgame
+ * Name: find_wad
  *
  * Description:
- *   The desktop's session, if the desktop started the game.
+ *   An IWAD in dir (the first of g_iwads there, whatever the case) into
+ *   g_wad, its folder's .doom/ into g_config.
  *
  ****************************************************************************/
 
-FAR struct deskgame_s *i_deskgame(void)
+static bool find_wad_in(const char *dir)
 {
-  return g_deskgame;
+  char found[sizeof(g_iwads) / sizeof(g_iwads[0])][16];
+  struct dirent *de;
+  bool any = false;
+  size_t i;
+  DIR *d;
+
+  d = opendir(dir);
+  if (d == NULL)
+    {
+      return false;
+    }
+
+  memset(found, 0, sizeof(found));
+  while ((de = readdir(d)) != NULL)
+    {
+      for (i = 0; i < sizeof(g_iwads) / sizeof(g_iwads[0]); i++)
+        {
+          if (strcasecmp(de->d_name, g_iwads[i]) == 0)
+            {
+              strlcpy(found[i], de->d_name, sizeof(found[i]));
+              any = true;
+            }
+        }
+    }
+
+  closedir(d);
+  for (i = 0; any && i < sizeof(g_iwads) / sizeof(g_iwads[0]); i++)
+    {
+      if (found[i][0] != '\0')
+        {
+          snprintf(g_wad, sizeof(g_wad), "%s/%s", dir, found[i]);
+          snprintf(g_config, sizeof(g_config), "%s/.doom/", dir);
+          return true;
+        }
+    }
+
+  return false;
+}
+
+static bool find_wad(void)
+{
+  const char *home = getenv("HOME");
+
+  return (home != NULL && home[0] != '\0' && find_wad_in(home)) ||
+         find_wad_in("/home") || find_wad_in("/games/doom");
+}
+
+/****************************************************************************
+ * Name: no_wad
+ *
+ * Description:
+ *   No IWAD anywhere: a screen that says where to put one, until Escape
+ *   (or the window is closed).
+ *
+ ****************************************************************************/
+
+static void no_wad(void)
+{
+  if (game_open(320, 200, GAME_WINDOW) < 0)
+    {
+      fprintf(stderr, "nxdoom: no IWAD: put one (doom1.wad, "
+              "freedoom1.wad...) in /games/doom\n");
+      return;
+    }
+
+  game_text_color(GAME_RGB(255, 200, 64));
+  game_text_center(9, "DOOM");
+  game_text_color(GAME_RGB(255, 255, 255));
+  game_text_center(12, "The game needs its data: an IWAD");
+  game_text_center(13, "(doom1.wad, freedoom1.wad...)");
+  game_text_center(15, "Put one in /games/doom");
+  game_text_center(19, "Escape: back");
+  while (game_frame())
+    {
+      game_clear(GAME_RGB(60, 8, 4));
+      game_text_draw();
+    }
+
+  game_close();
 }
 #endif
 
@@ -454,17 +541,45 @@ int main(int argc, char **argv)
 
   g_exiterror[0] = '\0';
 
-#ifdef CONFIG_GAMES_NXDOOM_DESKTOP
-  g_deskgame = deskgame_attach(argc, argv, SCREENWIDTH, SCREENHEIGHT);
-  if (g_deskgame == NULL)
-    {
-      fprintf(stderr, "nxdoom: it plays in a window of the desktop: "
-                      "open Doom there\n");
-      g_running = false;
-      return EXIT_FAILURE;
-    }
+#ifdef CONFIG_GAMES_NXDOOM_GAME
+  /* With no -iwad: one found, and its .doom/ (the arguments: -iwad FILE
+   * -configdir DIR, then the rest)
+   */
 
-  deskgame_status(g_deskgame, "Loading the game's data");
+  {
+    static FAR char *args[32];
+    bool given = false;
+    int k;
+
+    for (k = 1; k < argc; k++)
+      {
+        given |= strcmp(argv[k], "-iwad") == 0;
+      }
+
+    if (!given)
+      {
+        if (!find_wad())
+          {
+            no_wad();
+            g_running = false;
+            return EXIT_FAILURE;
+          }
+
+        args[0] = argv[0];
+        args[1] = "-iwad";
+        args[2] = g_wad;
+        args[3] = "-configdir";
+        args[4] = g_config;
+        for (k = 1; k < argc && k + 4 < 31; k++)
+          {
+            args[k + 4] = argv[k];
+          }
+
+        argc = k + 4;
+        args[argc] = NULL;
+        argv = args;
+      }
+  }
 #endif
 
 #ifdef CONFIG_GAMES_NXDOOM_RESTART
