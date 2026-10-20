@@ -50,13 +50,17 @@
 #define HAVE_PREAD 1
 
 /* Define to 1 if you have the `pread64' function. */
-#define HAVE_PREAD64 1
+#ifdef CONFIG_FS_LARGEFILE  /* FPC: pread64() and off64_t are there only then */
+#  define HAVE_PREAD64 1
+#endif
 
 /* Define to 1 if you have the `pwrite' function. */
 #define HAVE_PWRITE 1
 
 /* Define to 1 if you have the `pwrite64' function. */
-#define HAVE_PWRITE64 1
+#ifdef CONFIG_FS_LARGEFILE
+#  define HAVE_PWRITE64 1
+#endif
 
 /* Define to 1 if you have the <stdint.h> header file. */
 #define HAVE_STDINT_H 1
@@ -84,6 +88,9 @@
 
 /* Define to 1 if the system has the type `uint32_t'. */
 #define HAVE_UINT32_T 1
+/* FPC: uint32_t is unsigned long with arm-none-eabi and NuttX's headers;
+ * SQLite's API says unsigned int, and its u32 must be the same type */
+#define UINT32_TYPE unsigned int
 
 /* Define to 1 if the system has the type `uint64_t'. */
 #define HAVE_UINT64_T 1
@@ -119,7 +126,7 @@
 #define PACKAGE_NAME "sqlite"
 
 /* Define to the full name and version of this package. */
-#define PACKAGE_STRING "sqlite 3.45.1"
+#define PACKAGE_STRING "sqlite 3.54.1"
 
 /* Define to the one symbol short name of this package. */
 #define PACKAGE_TARNAME "sqlite"
@@ -128,7 +135,7 @@
 #define PACKAGE_URL ""
 
 /* Define to the version of this package. */
-#define PACKAGE_VERSION "3.45.1"
+#define PACKAGE_VERSION "3.54.1"
 
 /* Define to 1 if you have the ANSI C header files. */
 #define STDC_HEADERS 1

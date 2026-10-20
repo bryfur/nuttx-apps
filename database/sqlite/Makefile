@@ -32,39 +32,58 @@ CFLAGS += ${DEFINE_PREFIX}_HAVE_SQLITE_CONFIG_H
 CFLAGS += ${DEFINE_PREFIX}NDEBUG
 CFLAGS += -Wno-unused-variable -Wno-undef -Wno-unused-function -Wno-shadow
 
+# FPC: no mutexes (a program's data is in the PSRAM, which has no exclusive
+# access: a lock there never returns), no WAL and no mmap (FAT files cannot
+# be mapped), temporary tables in the RAM, no extensions loaded
+CFLAGS += ${DEFINE_PREFIX}SQLITE_THREADSAFE=0
+CFLAGS += ${DEFINE_PREFIX}SQLITE_OMIT_WAL
+CFLAGS += ${DEFINE_PREFIX}SQLITE_MAX_MMAP_SIZE=0
+CFLAGS += ${DEFINE_PREFIX}SQLITE_TEMP_STORE=3
+CFLAGS += ${DEFINE_PREFIX}SQLITE_OMIT_LOAD_EXTENSION
+CFLAGS += ${DEFINE_PREFIX}SQLITE_DEFAULT_MEMSTATUS=0
+
+# The shell: no pipes and no system() (NuttX has no fork())
+CFLAGS += ${DEFINE_PREFIX}SQLITE_OMIT_POPEN
+CFLAGS += ${DEFINE_PREFIX}SQLITE_NOHAVE_SYSTEM
+
 ifneq ($(CONFIG_UTILS_SQLITE),)
 PROGNAME  = sqlite3
 PRIORITY  = 100
 STACKSIZE = ${CONFIG_UTILS_SQLITE_STACKSIZE}
 MODULE = $(CONFIG_UTILS_SQLITE)
-MAINSRC = ${BUILDDIR}/shell.c
+MAINSRC = sqlite3_main.c
 endif
 
+# FPC: SQLite's sources are the superproject's third_party/sqlite (a fork,
+# branch fpc), reached through the link sqlite/ (FPC_LINK, apps/Make.defs);
+# upstream's download named a tag that does not exist ("vesion-").  The
+# amalgamation (sqlite3.c, sqlite3.h, shell.c) is made once in build/ by
+# SQLite's own configure, with the host's compiler (CC is the target's
+# here); the sqlite_cfg.h it writes there is the host's, so it goes, and
+# sqlite3.c finds this directory's (NuttX's).
 
-# Download and unpack tarball if no git repo found
+sqlite:
+	$(call FPC_LINK,sqlite,sqlite)
 
-sqlite.zip:
-ifeq ($(wildcard sqlite/.git),)
-	$(Q) curl -L https://codeload.github.com/sqlite/sqlite/zip/refs/tags/vesion-${CONFIG_LIB_SQLITE_VERSION} -o sqlite.zip
-	$(Q) unzip -q -o sqlite.zip
-	$(Q) mv sqlite-vesion-* sqlite
-	$(call DELFILE, sqlite.zip)
-endif
-
-context:: sqlite.zip
+${BUILDDIR}/sqlite3.c: | sqlite
 	$(Q) mkdir -p ${BUILDDIR} && \
 	cd ${BUILDDIR} && \
 	echo "Generate SQLite amalgamation version" && \
-	${SQLITEDIR}/sqlite/configure 1> /dev/null && \
-	make sqlite3.c -j 1> /dev/null
+	env -u CFLAGS -u LDFLAGS -u CPPFLAGS -u MAKEFLAGS -u MFLAGS CC=cc ${SQLITEDIR}/sqlite/configure 1> /dev/null && \
+	env -u CFLAGS -u LDFLAGS -u CPPFLAGS -u MAKEFLAGS -u MFLAGS $(MAKE) CC=cc sqlite3.c shell.c 1> /dev/null && \
+	rm -f sqlite_cfg.h
+
+${BUILDDIR}/shell.c ${BUILDDIR}/sqlite3.h: ${BUILDDIR}/sqlite3.c
+
+sqlite3_main.c: ${BUILDDIR}/shell.c
+
+context:: ${BUILDDIR}/sqlite3.c
 
 clean::
 	$(call DELFILE, ${BUILDDIR}/*.o)
 
 distclean::
 	$(call DELDIR, ${BUILDDIR})
-ifeq ($(wildcard sqlite/.git),)
-	$(call DELDIR, sqlite)
-endif
+	$(call DELFILE, sqlite)
 
 include $(APPDIR)/Application.mk
