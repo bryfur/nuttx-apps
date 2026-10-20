@@ -103,6 +103,35 @@ static int g_usrwork_errors;
  * Private Functions
  ****************************************************************************/
 
+/* A queue that must be made: tried again for a while if there is no
+ * memory for it yet.  The threads of queues freed just before give their
+ * stacks back only when they have exited, which a fast CPU can outrun
+ * (seen at 400 MHz: the kernel heap's largest block 6 KB, the queue made
+ * 100 ms later).
+ */
+
+static FAR void *wq_create(FAR const char *name, int priority,
+                           FAR void *stack_addr, size_t stack_size,
+                           int nthreads)
+{
+  FAR void *wq;
+  int i;
+
+  for (i = 0; i < 50; i++)
+    {
+      wq = work_queue_create(name, priority, stack_addr, stack_size,
+                             nthreads);
+      if (wq != NULL)
+        {
+          break;
+        }
+
+      usleep(10 * 1000);
+    }
+
+  return wq;
+}
+
 static int wait_sem(FAR sem_t *sem)
 {
   struct timespec abstime;
@@ -723,8 +752,8 @@ static void self_free_test(void)
   printf("wqueue_test: self free\n");
   memset(&work, 0, sizeof(work));
   ASSERT(sem_init(&self_free.done, 0, 0) == OK);
-  self_free.wqueue = work_queue_create("test", CUSTOM_PRIORITY, NULL,
-                                       STACKSIZE, 1);
+  self_free.wqueue = wq_create("test", CUSTOM_PRIORITY, NULL,
+                               STACKSIZE, 1);
   ASSERT(self_free.wqueue != NULL);
   self_free.result = OK;
 
@@ -1004,8 +1033,8 @@ static void multiple_queue_test(void)
       for (q = 0; q < MULTI_QUEUE_COUNT; q++)
         {
           snprintf(name[q], sizeof(name[q]), "ostest-wq%d", q);
-          wqueue[q] = work_queue_create(name[q], CUSTOM_PRIORITY + q,
-                                        NULL, STACKSIZE, q + 1);
+          wqueue[q] = wq_create(name[q], CUSTOM_PRIORITY + q,
+                                NULL, STACKSIZE, q + 1);
           ASSERT(wqueue[q] != NULL);
           ASSERT(work_queue_priority_wq(wqueue[q]) ==
                  CUSTOM_PRIORITY + q);
@@ -1063,8 +1092,8 @@ static void teardown_test(void)
 
   memset(&work, 0, sizeof(work));
   ASSERT(sem_init(&called, 0, 0) == OK);
-  wqueue = work_queue_create("test", CUSTOM_PRIORITY, NULL,
-                             STACKSIZE, 1);
+  wqueue = wq_create("test", CUSTOM_PRIORITY, NULL,
+                     STACKSIZE, 1);
   ASSERT(wqueue != NULL);
   ret = work_queue_wq(wqueue, &work, count_worker, &called,
                       MSEC2TICK(500));
@@ -1082,8 +1111,8 @@ static void teardown_test(void)
   memset(&work, 0, sizeof(work));
   ASSERT(sem_init(&sync.started, 0, 0) == OK);
   ASSERT(sem_init(&sync.finished, 0, 0) == OK);
-  wqueue = work_queue_create("test", CUSTOM_PRIORITY, NULL,
-                             STACKSIZE, 1);
+  wqueue = wq_create("test", CUSTOM_PRIORITY, NULL,
+                     STACKSIZE, 1);
   ASSERT(wqueue != NULL);
   ret = work_queue_wq(wqueue, &work, sync_worker, &sync, 0);
   ASSERT(ret == OK);
@@ -1102,8 +1131,8 @@ static void teardown_test(void)
 
   memset(&work, 0, sizeof(work));
   ASSERT(sem_init(&requeue.started, 0, 0) == OK);
-  wqueue = work_queue_create("test", CUSTOM_PRIORITY, NULL,
-                             STACKSIZE, 1);
+  wqueue = wq_create("test", CUSTOM_PRIORITY, NULL,
+                     STACKSIZE, 1);
   ASSERT(wqueue != NULL);
   requeue.wqueue = wqueue;
   requeue.work = &work;
@@ -1153,8 +1182,8 @@ static FAR void *wqueue_test_entry(FAR void *arg)
   for (i = 1; i < 3; i++)
     {
       printf("wqueue_test: custom queue, threads = %d\n", i);
-      wq = work_queue_create("test", CUSTOM_PRIORITY, NULL,
-                             STACKSIZE, i);
+      wq = wq_create("test", CUSTOM_PRIORITY, NULL,
+                     STACKSIZE, i);
       ASSERT(wq != NULL);
 
       priority = work_queue_priority_wq(wq);
