@@ -40,8 +40,6 @@
 #include <errno.h>
 #include <nuttx/debug.h>
 
-#include <nuttx/arch.h>
-#include <nuttx/board.h>
 
 #ifdef CONFIG_NX_LCDDRIVER
 #  include <nuttx/lcd/lcd.h>

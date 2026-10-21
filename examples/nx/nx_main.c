@@ -40,9 +40,6 @@
 #include <errno.h>
 #include <nuttx/debug.h>
 
-#include <nuttx/arch.h>
-#include <nuttx/board.h>
-
 #include <nuttx/nx/nx.h>
 #include <nuttx/nx/nxtk.h>
 #include <nuttx/nx/nxfonts.h>
