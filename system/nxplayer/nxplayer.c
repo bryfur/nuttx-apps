@@ -51,7 +51,9 @@
 #  include <netdb.h>
 #endif
 
-#include <netutils/netlib.h>
+#ifdef CONFIG_NXPLAYER_HTTP_STREAMING_SUPPORT
+#  include <netutils/netlib.h>
+#endif
 #include <nuttx/audio/audio.h>
 
 #include "system/nxplayer.h"
