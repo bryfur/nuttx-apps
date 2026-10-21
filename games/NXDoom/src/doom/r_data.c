@@ -30,7 +30,7 @@
 #include <string.h>
 #include <syslog.h>
 
-#include <nuttx/kmalloc.h>
+#include <fpc/native/sram.h>
 
 #include "deh_main.h"
 #include "i_swap.h"
@@ -598,7 +598,7 @@ static lighttable_t *g_sram_colormaps;    /* A copy in the internal SRAM */
 
 static void r_free_colourmaps(void)
 {
-  kmm_free(g_sram_colormaps);
+  fpc_sram_free(g_sram_colormaps);
   g_sram_colormaps = NULL;
 }
 #endif
@@ -614,10 +614,10 @@ static void r_init_colourmaps(void)
 
 #ifdef CONFIG_GAMES_NXDOOM_SRAM
   /* Every pixel drawn is looked up in them: a copy in the internal SRAM
-   * (kmm_malloc() is 8-byte aligned; the tables index by byte)
+   * (8-byte aligned, as the heap's; the tables index by byte)
    */
 
-  g_sram_colormaps = kmm_malloc(w_lump_length(lump));
+  g_sram_colormaps = fpc_sram_memalign(0, w_lump_length(lump), "doom");
   if (g_sram_colormaps != NULL)
     {
       memcpy(g_sram_colormaps, colormaps, w_lump_length(lump));

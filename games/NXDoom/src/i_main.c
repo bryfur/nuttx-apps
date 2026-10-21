@@ -51,7 +51,7 @@
 #include <unistd.h>
 
 #if CONFIG_GAMES_NXDOOM_HEAPSIZE > 0
-#  include <nuttx/mm/mm.h>
+#  include <fpc/native/mem.h>
 #endif
 
 #ifdef CONFIG_GAMES_NXDOOM_GAME
@@ -119,7 +119,7 @@ static FAR void *g_data0;               /* The data before the first run */
 #endif
 
 #if CONFIG_GAMES_NXDOOM_HEAPSIZE > 0
-static FAR struct mm_heap_s *g_heap;
+static FAR struct fpc_heap_s *g_heap;
 static FAR void *g_heapmem;
 static size_t g_heapsize;
 static unsigned long g_purged;          /* Cache let go of for room */
@@ -202,7 +202,7 @@ static int heap_create(int argc, FAR char *argv[])
 
   if (g_heap != NULL)
     {
-      mm_uninitialize(g_heap);
+      fpc_heap_delete(g_heap);
       free(g_heapmem);
       g_heap = NULL;
     }
@@ -233,7 +233,7 @@ static int heap_create(int argc, FAR char *argv[])
 
   g_heapsize = size;
   g_purged   = 0;
-  g_heap     = mm_initialize("doom", g_heapmem, size);
+  g_heap     = fpc_heap_new("doom", g_heapmem, size);
   if (g_heap == NULL)
     {
       free(g_heapmem);
@@ -249,14 +249,14 @@ static void heap_destroy(void)
 {
   if (g_heap != NULL)
     {
-      struct mm_heap_s *heap = g_heap;
-      struct mallinfo info = mm_mallinfo(heap);
+      struct fpc_heap_s *heap = g_heap;
+      struct mallinfo info = fpc_heap_info(heap);
 
       printf("nxdoom: heap of %zu KB: %d KB used at most, %lu KB of cache "
              "let go of for room\n", g_heapsize / 1024, info.usmblks / 1024,
              g_purged / 1024);
       g_heap = NULL;
-      mm_uninitialize(heap);
+      fpc_heap_delete(heap);
       free(g_heapmem);
       g_heapmem = NULL;
     }
@@ -288,7 +288,7 @@ void *nxdoom_malloc(size_t size)
 
   /* Full: the zone's cache makes room (the heap fills up with it) */
 
-  while ((p = mm_malloc(g_heap, size)) == NULL &&
+  while ((p = fpc_heap_malloc(g_heap, size)) == NULL &&
          z_purge_cache(size + 64, &g_purged))
     {
     }
@@ -315,9 +315,9 @@ void nxdoom_free(void *ptr)
       return;
     }
 
-  if (g_heap != NULL && mm_heapmember(g_heap, ptr))
+  if (g_heap != NULL && fpc_heap_member(g_heap, ptr))
     {
-      mm_free(g_heap, ptr);
+      fpc_heap_free(g_heap, ptr);
     }
   else
     {
@@ -332,11 +332,11 @@ void *nxdoom_realloc(void *ptr, size_t size)
       return nxdoom_malloc(size);
     }
 
-  if (g_heap != NULL && mm_heapmember(g_heap, ptr))
+  if (g_heap != NULL && fpc_heap_member(g_heap, ptr))
     {
       void *p;
 
-      while ((p = mm_realloc(g_heap, ptr, size)) == NULL && size > 0 &&
+      while ((p = fpc_heap_realloc(g_heap, ptr, size)) == NULL && size > 0 &&
              z_purge_cache(size + 64, &g_purged))
         {
         }

@@ -37,7 +37,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 
-#include <nuttx/kmalloc.h>
+#include <fpc/native/sram.h>
 
 #ifdef CONFIG_GAMES_NXDOOM_GAME
 #include <fpc/game.h>
@@ -165,7 +165,7 @@ static uint32_t g_rowbuf[SCREENWIDTH * BLIT_MAX_STAGED_SCALE];
 
 static const char *g_window_title = "";
 #ifdef CONFIG_GAMES_NXDOOM_SRAM
-static bool g_scrnbuf_sram;               /* scrnbuf from kmm_malloc() */
+static bool g_scrnbuf_sram;               /* scrnbuf from fpc_sram */
 #endif
 
 /* Colour palette map from 8-bit colour to 32-bit */
@@ -664,7 +664,7 @@ void i_shutdown_graphics(void)
 #ifdef CONFIG_GAMES_NXDOOM_SRAM
   if (g_scrnbuf_sram)
     {
-      kmm_free(g_graphics_state.scrnbuf);
+      fpc_sram_free(g_graphics_state.scrnbuf);
     }
   else
 #endif
@@ -1116,12 +1116,13 @@ void i_init_graphics(void)
 #ifdef CONFIG_GAMES_NXDOOM_STATIC_SCRNBUF
   g_graphics_state.scrnbuf = g_scrnbuf;
 #elif defined(CONFIG_GAMES_NXDOOM_SRAM)
-  /* In the internal SRAM (the kernel's heap; the game's own is in the
+  /* In the internal SRAM (fpc_sram; the game's own heap is in the
    * PSRAM): the renderer writes columns, 320 bytes apart, each in another
    * line of the PSRAM's cache
    */
 
-  g_graphics_state.scrnbuf = kmm_malloc(SCREENWIDTH * SCREENHEIGHT);
+  g_graphics_state.scrnbuf = fpc_sram_memalign(0, SCREENWIDTH * SCREENHEIGHT,
+                                               "doom");
   g_scrnbuf_sram = g_graphics_state.scrnbuf != NULL;
   if (!g_scrnbuf_sram)
     {

@@ -34,7 +34,7 @@
 #include <syslog.h>
 
 #ifdef CONFIG_GAMES_NXDOOM_SRAM
-#  include <nuttx/kmalloc.h>
+#  include <fpc/native/sram.h>
 #endif
 
 #include "i_system.h"
@@ -133,7 +133,7 @@ static void r_free_sram_planes(void)
 {
   visplanes = g_visplanes;
   openings = g_openings;
-  kmm_free(g_planes_sram);
+  fpc_sram_free(g_planes_sram);
   g_planes_sram = NULL;
 }
 
@@ -151,7 +151,7 @@ static void r_sram_planes(void)
    */
 
   g_planes_tried = true;
-  g_planes_sram = kmm_zalloc(size);
+  g_planes_sram = fpc_sram_zalloc(size, "doom");
   if (g_planes_sram == NULL)
     {
       syslog(LOG_INFO, "nxdoom: no SRAM for the visplanes (%u bytes)\n",

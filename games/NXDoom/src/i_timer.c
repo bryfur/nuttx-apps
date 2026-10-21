@@ -25,7 +25,7 @@
  * Included Files
  ****************************************************************************/
 
-#include <nuttx/clock.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "doomtype.h"
@@ -84,8 +84,8 @@ int i_get_time_ms(void)
       clock_gettime(CLOCK_MONOTONIC, &basetime);
     }
 
-  return (clock_time2usec(&curtime) - clock_time2usec(&basetime)) / 1000 -
-         skippedms;
+  return (int)((curtime.tv_sec - basetime.tv_sec) * 1000 +
+               (curtime.tv_nsec - basetime.tv_nsec) / 1000000) - skippedms;
 }
 
 /****************************************************************************
