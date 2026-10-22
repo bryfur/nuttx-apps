@@ -73,11 +73,47 @@ add_subdirectory(wireless)
 
 # add examples and external at the end to allow library dependencies
 add_subdirectory(examples)
-if(EXISTS ${CMAKE_CURRENT_LIST_DIR}/external)
+
+# (FPC) The FPC's own applications are in the superproject's apps-fpc/, beside
+# this tree (Make.defs reaches it through an apps/external link; here it is
+# taken where it is, its Kconfig with the others')
+
+get_filename_component(FPC_APPS ${CMAKE_CURRENT_LIST_DIR}/../apps-fpc ABSOLUTE)
+if(EXISTS ${FPC_APPS}/CMakeLists.txt
+   AND NOT EXISTS ${CMAKE_CURRENT_LIST_DIR}/external)
+  add_subdirectory(${FPC_APPS} external)
+  set(FPC_APPS_KCONFIG EXTERNAL_DIRECTORIES ${FPC_APPS})
+elseif(EXISTS ${CMAKE_CURRENT_LIST_DIR}/external)
   add_subdirectory(external)
 endif()
 
 add_subdirectory(tools) # after traversing all subdirectories
 add_subdirectory(builtin) # must be last
 
-nuttx_generate_kconfig()
+# (FPC) The system's symbol table, g_symtab (Makefile's symtab_apps.c): what
+# the loadable modules call, from their undefined symbols (tools/mksymtab.sh,
+# with the arguments applications add to the global NUTTX_SYMTAB_ARGS: the
+# FPC's export list).  Linked into the firmware as a system library, but not
+# an application one: the modules wait for apps_post, which waits for those.
+
+if((CONFIG_MODULES OR CONFIG_EXECFUNCS_SYSTEM_SYMTAB) AND TARGET nuttx)
+  get_property(symtab_args GLOBAL PROPERTY NUTTX_SYMTAB_ARGS)
+  get_property(symtab_deps GLOBAL PROPERTY NUTTX_SYMTAB_DEPENDS)
+  get_property(loadable_apps TARGET nuttx PROPERTY NUTTX_LOADABLE_APPS)
+  add_custom_command(
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/symtab_apps.c
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${NUTTX_BINARY_DIR}/bin
+    COMMAND ${CMAKE_CURRENT_LIST_DIR}/tools/mksymtab.sh ${NUTTX_BINARY_DIR}/bin
+            ${symtab_args} > symtab_apps.c.tmp
+    COMMAND ${CMAKE_COMMAND} -E rename symtab_apps.c.tmp symtab_apps.c
+    DEPENDS ${loadable_apps} ${symtab_deps}
+            ${CMAKE_CURRENT_LIST_DIR}/tools/mksymtab.sh
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    COMMENT "Generating symtab_apps.c")
+  add_library(apps_symtab STATIC ${CMAKE_CURRENT_BINARY_DIR}/symtab_apps.c)
+  nuttx_add_library_internal(apps_symtab)
+  target_compile_options(apps_symtab PRIVATE -fno-lto -fno-builtin)
+  set_property(GLOBAL APPEND PROPERTY NUTTX_SYSTEM_LIBRARIES apps_symtab)
+endif()
+
+nuttx_generate_kconfig(${FPC_APPS_KCONFIG})
